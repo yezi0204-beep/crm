@@ -13,7 +13,8 @@ def load_payments_data(uid: str, is_boss: bool):
     if is_boss:
         sql = """
             SELECT pr.id, pr.contract_id, pr.payment_date, pr.amount, pr.note, pr.created_at,
-                   c.contract_name, c.contract_no, c.party_a, c.owner_id
+                   c.contract_name, c.contract_no, c.party_a, c.owner_id,
+                   c.total_amt, c.paid_amt
             FROM payment_records pr
             JOIN contracts c ON pr.contract_id = c.id
             ORDER BY pr.payment_date DESC
@@ -22,7 +23,8 @@ def load_payments_data(uid: str, is_boss: bool):
     else:
         sql = """
             SELECT pr.id, pr.contract_id, pr.payment_date, pr.amount, pr.note, pr.created_at,
-                   c.contract_name, c.contract_no, c.party_a, c.owner_id
+                   c.contract_name, c.contract_no, c.party_a, c.owner_id,
+                   c.total_amt, c.paid_amt
             FROM payment_records pr
             JOIN contracts c ON pr.contract_id = c.id
             WHERE c.owner_id = ?
@@ -118,6 +120,7 @@ def show_payments(uid: str, is_boss: bool):
     df_pay['payment_date'] = pd.to_datetime(df_pay['payment_date']).dt.date
     df_pay['owner_name'] = df_pay['owner_id'].map(user_map).fillna(df_pay['owner_id'])
     df_pay['amount_wan'] = df_pay['amount'] / 10000
+    df_pay['pending_payment'] = ((df_pay['total_amt'] - df_pay['paid_amt']).clip(lower=0)) / 10000
 
     # 筛选逻辑
     df_filtered = df_pay.copy()
@@ -181,7 +184,7 @@ def show_payments(uid: str, is_boss: bool):
 
     display_cols = [
         'payment_date', 'contract_name', 'contract_no', 'party_a',
-        'amount_wan', 'note', 'owner_name'
+        'amount_wan', 'pending_payment', 'note', 'owner_name'
     ]
 
     column_config = {
@@ -190,6 +193,7 @@ def show_payments(uid: str, is_boss: bool):
         "contract_no": "合同编号",
         "party_a": "甲方",
         "amount_wan": st.column_config.NumberColumn("回款金额(万元)", format="%.2f"),
+        "pending_payment": st.column_config.NumberColumn("待回款(万元)", format="%.2f"),
         "note": "备注",
         "owner_name": "负责人"
     }
