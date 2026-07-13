@@ -1,1 +1,0 @@
-from database import hash_password, check_password
