@@ -11,7 +11,6 @@ from config import STAGES
 from settings import HIGH_SEAS_DAYS_THRESHOLD
 
 
-@st.cache_data(ttl=300, show_spinner="正在加载数据...")
 def load_business_data(uid: str, is_boss: bool):
     """加载商机数据（带缓存）"""
     if is_boss:
@@ -25,7 +24,6 @@ def load_business_data(uid: str, is_boss: bool):
     return df
 
 
-@st.cache_data(ttl=300, show_spinner="正在加载数据...")
 def load_contracts_data(uid: str, is_boss: bool):
     """加载合同数据（带缓存）"""
     if is_boss:
@@ -40,7 +38,6 @@ def load_contracts_data(uid: str, is_boss: bool):
     return df
 
 
-@st.cache_data(ttl=300, show_spinner="正在加载数据...")
 def load_payments_data(uid: str, is_boss: bool):
     """加载回款数据（带缓存）"""
     if is_boss:
@@ -57,7 +54,6 @@ def load_payments_data(uid: str, is_boss: bool):
     return df
 
 
-@st.cache_data(ttl=60, show_spinner="正在检查公海池...")
 def get_high_seas_data():
     """获取公海池数据（带缓存，短期TTL）"""
     sea_count = query_df("SELECT COUNT(*) as cnt FROM customers WHERE owner_id IS NULL").iloc[0, 0]
@@ -70,7 +66,6 @@ def get_high_seas_data():
     return sea_count, customers_to_release
 
 
-@st.cache_data(ttl=300, show_spinner="正在检查跟进记录...")
 def get_follow_alerts(df_b, uid, is_boss):
     """获取跟进预警数据（带缓存）"""
     if df_b.empty:
@@ -320,11 +315,6 @@ def show_dashboard(uid: str, is_boss: bool):
                             for cust_id in customers_to_release['id']:
                                 execute_sql("UPDATE customers SET owner_id = NULL WHERE id = ?", (cust_id,))
                             clear_user_cache()
-                            # 清除相关缓存
-                            load_business_data.clear()
-                            load_contracts_data.clear()
-                            load_payments_data.clear()
-                            get_high_seas_data.clear()
                             st.success(f"已将 {len(customers_to_release)} 个客户释放到公海！")
                             st.rerun()
                 with col2:

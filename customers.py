@@ -21,7 +21,6 @@ except ImportError:
     DOCX_AVAILABLE = False
 
 
-@st.cache_data(ttl=300, show_spinner="正在加载客户数据...")
 def load_customers_data(uid: str, is_boss: bool):
     """加载客户数据（带缓存）"""
     if is_boss:
@@ -31,7 +30,6 @@ def load_customers_data(uid: str, is_boss: bool):
     return df
 
 
-@st.cache_data(ttl=300, show_spinner="正在加载客户列表...")
 def load_customers_list(uid: str, is_boss: bool):
     """加载客户选择列表（带缓存）"""
     if is_boss:
@@ -212,9 +210,6 @@ def show_customers(uid: str, is_boss: bool):
                                 execute_sql(sql, params)
                                 st.success("客户入库成功")
                                 clear_user_cache()
-                                # 清除相关缓存
-                                load_customers_data.clear()
-                                load_customers_list.clear()
                                 time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
@@ -280,9 +275,6 @@ def show_customers(uid: str, is_boss: bool):
                                         execute_sql(sql, params)
                                         st.success("客户信息已更新")
                                         clear_user_cache()
-                                        # 清除相关缓存
-                                        load_customers_data.clear()
-                                        load_customers_list.clear()
                                         time.sleep(0.5)
                                         st.rerun()
                                     except Exception as e:
@@ -304,9 +296,6 @@ def show_customers(uid: str, is_boss: bool):
                                     execute_sql("DELETE FROM customers WHERE id=?", (selected_id,))
                                     st.success("客户已删除")
                                     clear_user_cache()
-                                    # 清除相关缓存
-                                    load_customers_data.clear()
-                                    load_customers_list.clear()
                                     time.sleep(0.5)
                                     st.rerun()
                                 except Exception as e:

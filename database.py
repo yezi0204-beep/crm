@@ -3,12 +3,11 @@
 import sqlite3
 import bcrypt
 import pandas as pd
-import streamlit as st
 import hashlib
 from contextlib import contextmanager
 from datetime import datetime, date
 
-DB_PATH = "crm_app.db"
+from config import DB_PATH
 
 # ========== 1. 连接管理 ==========
 @contextmanager
@@ -20,7 +19,6 @@ def get_db_connection():
         conn.commit()
     except Exception as e:
         conn.rollback()
-        st.error(f"数据库操作失败: {e}")
         raise
     finally:
         conn.close()
@@ -202,9 +200,9 @@ def init_db():
                     FROM project_costs_old
                     WHERE business_id IS NOT NULL
                 ''')
-                st.info("已迁移旧版成本数据到新表")
+                print("已迁移旧版成本数据到新表")
             except Exception as e:
-                st.warning(f"旧数据迁移失败，请手动处理: {e}")
+                print(f"旧数据迁移失败，请手动处理: {e}")
             cursor.execute("DROP TABLE project_costs_old")
         else:
             # 直接创建新表
@@ -243,6 +241,10 @@ def init_db():
         _add_column_if_not_exists(conn, 'contracts', 'expected_income_year', 'expected_income_year REAL DEFAULT 0')
         _add_column_if_not_exists(conn, 'contracts', 'business_type', 'business_type TEXT')
         _add_column_if_not_exists(conn, 'contracts', 'project_order_no', 'project_order_no TEXT')
+        _add_column_if_not_exists(conn, 'contracts', 'acceptance_nodes', 'acceptance_nodes TEXT')
+        _add_column_if_not_exists(conn, 'contracts', 'payment_nodes', 'payment_nodes TEXT')
+        _add_column_if_not_exists(conn, 'contracts', 'contract_file_path', 'contract_file_path TEXT')
+        _add_column_if_not_exists(conn, 'contracts', 'tech_agreement_file_path', 'tech_agreement_file_path TEXT')
 
         _add_column_if_not_exists(conn, 'business', 'probability', 'probability INTEGER DEFAULT 0')
         _add_column_if_not_exists(conn, 'business', 'tax_rate', 'tax_rate REAL DEFAULT 0')
@@ -356,7 +358,7 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_assignments_project ON project_assignments(project_type, project_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_username ON user_roles(username)")
 
-        # ---------- 3.6 初始化默认用户 ----------
+        # ---------- 3.6 初始化默认用户（仅首次运行时创建，生产环境建议移除） ----------
         cursor.execute("SELECT COUNT(*) FROM users")
         if cursor.fetchone()[0] == 0:
             default_users = {

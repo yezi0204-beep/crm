@@ -69,7 +69,6 @@ def show_business(uid: str, is_boss: bool):
                             update_customer_last_follow(cust_id)
                         st.success("商机创建成功")
                         clear_user_cache()
-                        st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"创建失败: {e}")
@@ -331,7 +330,6 @@ def show_business(uid: str, is_boss: bool):
                                             update_customer_last_follow(new_cust_id)
                                         st.success("商机更新成功")
                                         clear_user_cache()
-                                        st.cache_data.clear()
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f"更新失败: {e}")
@@ -346,7 +344,6 @@ def show_business(uid: str, is_boss: bool):
                                     execute_sql("UPDATE business SET status = 'void' WHERE id = ?", (selected_id,))
                                     st.success("商机已作废")
                                     clear_user_cache()
-                                    st.cache_data.clear()
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"作废失败: {e}")
@@ -367,7 +364,6 @@ def show_business(uid: str, is_boss: bool):
                                         execute_sql("DELETE FROM business WHERE id=?", (selected_id,))
                                         st.success("商机已删除")
                                         clear_user_cache()
-                                        st.cache_data.clear()
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f"删除失败: {e}")
@@ -405,7 +401,6 @@ def show_business(uid: str, is_boss: bool):
                                                 update_customer_last_follow(original_row['cust_id'], combined)
                                             st.success("跟进已记录")
                                             clear_user_cache()
-                                            st.cache_data.clear()
                                             st.rerun()
                                         except Exception as e:
                                             st.error(f"记录失败: {e}")
@@ -424,7 +419,6 @@ def show_business(uid: str, is_boss: bool):
                                     execute_sql("UPDATE business SET status = 'active' WHERE id = ?", (selected_id,))
                                     st.success("商机已恢复")
                                     clear_user_cache()
-                                    st.cache_data.clear()
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"恢复失败: {e}")

@@ -7,7 +7,6 @@ from database import query_df, execute_sql
 from utils import get_user_map, clear_user_cache
 
 
-@st.cache_data(ttl=300, show_spinner="正在加载回款数据...")
 def load_payments_data(uid: str, is_boss: bool):
     """加载回款数据（带缓存）"""
     if is_boss:
@@ -34,7 +33,6 @@ def load_payments_data(uid: str, is_boss: bool):
     return df
 
 
-@st.cache_data(ttl=300, show_spinner="正在加载合同列表...")
 def load_contracts_list(uid: str, is_boss: bool):
     """加载合同列表用于选择（带缓存）"""
     if is_boss:
@@ -81,8 +79,6 @@ def show_payments(uid: str, is_boss: bool):
                             execute_sql("UPDATE contracts SET paid_amt = paid_amt + ? WHERE id = ?", (pay_amount, contract_id))
                             st.success("回款记录添加成功")
                             clear_user_cache()
-                            load_payments_data.clear()
-                            load_contracts_list.clear()
                             st.rerun()
                         except Exception as e:
                             st.error(f"添加失败: {e}")
@@ -273,7 +269,6 @@ def show_payments(uid: str, is_boss: bool):
                                     )
                                     st.success("回款记录更新成功")
                                     clear_user_cache()
-                                    load_payments_data.clear()
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"更新失败: {e}")
@@ -289,7 +284,6 @@ def show_payments(uid: str, is_boss: bool):
                                 execute_sql("DELETE FROM payment_records WHERE id = ?", (row['id'],))
                                 st.success("回款记录已删除")
                                 clear_user_cache()
-                                load_payments_data.clear()
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"删除失败: {e}")
