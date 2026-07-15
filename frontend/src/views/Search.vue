@@ -21,6 +21,7 @@
         <el-tab-pane label="客户" name="customers"></el-tab-pane>
         <el-tab-pane label="商机" name="business"></el-tab-pane>
         <el-tab-pane label="合同" name="contracts"></el-tab-pane>
+        <el-tab-pane label="跟进记录" name="follow_logs"></el-tab-pane>
       </el-tabs>
     </div>
     
@@ -66,6 +67,25 @@
         </div>
         <p v-else class="no-results">暂无合同结果</p>
       </div>
+      
+      <div v-if="activeTab === 'follow_logs' || activeTab === 'all'" class="result-section">
+        <h3>📝 跟进记录 ({{ followLogResults.length }})</h3>
+        <div v-if="followLogResults.length > 0" class="result-list">
+          <div v-for="item in followLogResults" :key="item.id" class="result-item">
+            <div class="result-icon">✏️</div>
+            <div class="result-content">
+              <div class="result-title">{{ item.subject || '无主题' }}</div>
+              <div class="result-subtitle">
+                {{ item.user_name || item.user_id }} | 
+                {{ item.ref_type === 'business' ? '商机' : '客户' }}跟进 | 
+                {{ item.created_at }}
+              </div>
+              <div class="result-preview">{{ item.content }}</div>
+            </div>
+          </div>
+        </div>
+        <p v-else class="no-results">暂无跟进记录结果</p>
+      </div>
     </div>
   </div>
 </template>
@@ -85,9 +105,10 @@ const activeFilters = ref([])
 const customerResults = ref([])
 const businessResults = ref([])
 const contractResults = ref([])
+const followLogResults = ref([])
 
 const totalResults = computed(() => {
-  return customerResults.value.length + businessResults.value.length + contractResults.value.length
+  return customerResults.value.length + businessResults.value.length + contractResults.value.length + followLogResults.value.length
 })
 
 const handleSearch = async () => {
@@ -98,6 +119,7 @@ const handleSearch = async () => {
     customerResults.value = response.data.customers || []
     businessResults.value = response.data.business || []
     contractResults.value = response.data.contracts || []
+    followLogResults.value = response.data.follow_logs || []
   }
 }
 
@@ -240,6 +262,17 @@ watch(() => route.query.keyword, (newKeyword) => {
   font-size: 13px;
   color: #999;
   margin-top: 4px;
+}
+
+.result-preview {
+  font-size: 13px;
+  color: #666;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .no-results {

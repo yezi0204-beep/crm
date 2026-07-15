@@ -96,8 +96,8 @@
           :sort-order="sortField === 'pending_amt' ? sortOrder : undefined"
         >
           <template #default="scope">
-            <span :class="{ 'pending-highlight': (scope.row.total_amt || 0) - (scope.row.paid_amt || 0) > 0 }">
-              {{ formatAmount((scope.row.total_amt || 0) - (scope.row.paid_amt || 0)) }}
+            <span :class="{ 'pending-highlight': getPendingAmt(scope.row) > 0.01 }">
+              {{ formatAmount(getPendingAmt(scope.row)) }}
             </span>
           </template>
         </el-table-column>
@@ -588,6 +588,12 @@ const rules = {
 
 const formatAmount = (value) => {
   return ((value || 0) / 10000).toFixed(2)
+}
+
+const getPendingAmt = (row) => {
+  const total = row.total_amt || 0
+  const paid = row.paid_amt || 0
+  return Math.max(0, total - paid)
 }
 
 const handleImportParse = (response) => {

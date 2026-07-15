@@ -81,7 +81,17 @@
     <el-dialog v-model="showFollowModal" :title="`商机跟进 - ${currentBusiness?.title}`" width="700px">
       <div class="follow-container">
         <div class="follow-history">
-          <h4>跟进记录</h4>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h4>跟进记录</h4>
+            <el-input 
+              v-model="followSearchKeyword" 
+              placeholder="搜索记录内容、主题、参与人..." 
+              size="small" 
+              style="width: 250px;"
+              clearable
+              @input="handleFollowSearch"
+            />
+          </div>
           <el-timeline v-if="followLogs.length > 0">
             <el-timeline-item 
               v-for="log in followLogs" 
@@ -162,6 +172,8 @@ const showFollowModal = ref(false)
 const followFormRef = ref(null)
 const currentBusiness = ref(null)
 const followLogs = ref([])
+
+const followSearchKeyword = ref('')
 
 const followForm = reactive({
   subject: '',
@@ -294,14 +306,25 @@ const deleteBusiness = async (row) => {
 const showFollow = async (row) => {
   currentBusiness.value = row
   followLogs.value = []
+  followSearchKeyword.value = ''
   showFollowModal.value = true
   await fetchFollowLogs(row.id)
 }
 
 const fetchFollowLogs = async (businessId) => {
-  const response = await api.get('/follow_logs', { ref_type: 'business', ref_id: businessId })
+  const params = { ref_type: 'business', ref_id: businessId }
+  if (followSearchKeyword.value) {
+    params.keyword = followSearchKeyword.value
+  }
+  const response = await api.get('/follow_logs', params)
   if (response.code === 200) {
     followLogs.value = response.data
+  }
+}
+
+const handleFollowSearch = () => {
+  if (currentBusiness.value) {
+    fetchFollowLogs(currentBusiness.value.id)
   }
 }
 
