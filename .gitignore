@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# Node.js / Frontend
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Vite Build
+.vite/
+dist/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads (用户上传的合同文件)
+uploads/
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Streamlit (legacy)
+.streamlit/
+
+# Editor
+.vim/
+*.nvim
