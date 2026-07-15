@@ -1,9 +1,24 @@
 <template>
   <div class="payments">
-    <el-button type="primary" @click="showAddModal = true" class="add-btn">
-      <el-icon><Plus /></el-icon>
-      添加回款记录
-    </el-button>
+    <div class="header-row">
+      <el-button type="primary" @click="showAddModal = true" class="add-btn">
+        <el-icon><Plus /></el-icon>
+        添加回款记录
+      </el-button>
+      
+      <div class="search-wrapper">
+        <el-input 
+          v-model="searchKeyword" 
+          placeholder="搜索合同名称、编号、甲方..." 
+          clearable
+          style="width: 300px;"
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+      </div>
+    </div>
     
     <el-table :data="paymentRecords" stripe border class="data-table">
       <el-table-column prop="contract_name" label="合同名称" min-width="180" sortable />
@@ -27,8 +42,20 @@
     
     <el-dialog v-model="showAddModal" title="添加回款记录" width="500px">
       <el-form :model="paymentForm" :rules="rules" ref="formRef">
-        <el-form-item label="合同ID" prop="contract_id">
-          <el-input v-model="paymentForm.contract_id" />
+        <el-form-item label="选择合同" prop="contract_id">
+          <el-select 
+            v-model="paymentForm.contract_id" 
+            placeholder="请选择合同" 
+            filterable
+            style="width: 100%;"
+          >
+            <el-option 
+              v-for="contract in contracts" 
+              :key="contract.id" 
+              :label="`${contract.contract_name} (${contract.contract_no}) - ${contract.party_a}`" 
+              :value="contract.id" 
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="回款日期" prop="payment_date">
           <el-date-picker v-model="paymentForm.payment_date" type="date" />
@@ -49,14 +76,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
-const paymentRecords = ref([])
+const allPaymentRecords = ref([])
+const contracts = ref([])
 const showAddModal = ref(false)
 const formRef = ref(null)
+const searchKeyword = ref('')
 
 const paymentForm = reactive({
   id: null,
@@ -67,7 +96,7 @@ const paymentForm = reactive({
 })
 
 const rules = {
-  contract_id: [{ required: true, message: '请输入合同ID', trigger: 'blur' }],
+  contract_id: [{ required: true, message: '请选择合同', trigger: 'blur' }],
   amount: [{ required: true, message: '请输入金额', trigger: 'blur' }]
 }
 
@@ -75,11 +104,50 @@ const formatAmount = (value) => {
   return ((value || 0) / 10000).toFixed(2)
 }
 
+const paymentRecords = computed(() => {
+  console.log('searchKeyword:', searchKeyword.value, 'allRecords:', allPaymentRecords.value.length)
+  
+  if (!searchKeyword.value) {
+    return allPaymentRecords.value
+  }
+  
+  const keyword = searchKeyword.value.toLowerCase()
+  const filtered = allPaymentRecords.value.filter(record => {
+    return (
+      (record.contract_name && record.contract_name.toLowerCase().includes(keyword)) ||
+      (record.contract_no && record.contract_no.toLowerCase().includes(keyword)) ||
+      (record.party_a && record.party_a.toLowerCase().includes(keyword)) ||
+      (record.owner_name && record.owner_name.toLowerCase().includes(keyword)) ||
+      (record.note && record.note.toLowerCase().includes(keyword))
+    )
+  })
+  console.log('filtered count:', filtered.length)
+  return filtered
+})
+
 const fetchPayments = async () => {
   const response = await api.get('/payment_records')
   if (response.code === 200) {
-    paymentRecords.value = response.data
+    allPaymentRecords.value = response.data
   }
+}
+
+const fetchContracts = async () => {
+  const response = await api.get('/contracts')
+  if (response.code === 200) {
+    contracts.value = response.data
+  }
+}
+
+const filterContracts = (query, item) => {
+  if (!query) return true
+  const q = query.toLowerCase()
+  const contract = item
+  return (
+    (contract.contract_name && contract.contract_name.toLowerCase().includes(q)) ||
+    (contract.contract_no && contract.contract_no.toLowerCase().includes(q)) ||
+    (contract.party_a && contract.party_a.toLowerCase().includes(q))
+  )
 }
 
 const savePayment = async () => {
@@ -131,6 +199,7 @@ const deletePayment = async (row) => {
 
 onMounted(() => {
   fetchPayments()
+  fetchContracts()
 })
 </script>
 
@@ -141,8 +210,18 @@ onMounted(() => {
   gap: 16px;
 }
 
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .add-btn {
   align-self: flex-start;
+}
+
+.search-wrapper {
+  margin-left: auto;
 }
 
 .data-table {

@@ -55,8 +55,8 @@
               <span>📊 业务趋势分析</span>
               <div class="time-range">
                 <el-radio-group v-model="timeRange">
-                  <el-radio-button label="week">本周</el-radio-button>
                   <el-radio-button label="month">本月</el-radio-button>
+                  <el-radio-button label="quarter">本季度</el-radio-button>
                   <el-radio-button label="year">本年</el-radio-button>
                 </el-radio-group>
               </div>
@@ -159,7 +159,7 @@ const formatAmount = (value) => {
 }
 
 const fetchDashboardData = async () => {
-  const response = await api.get('/dashboard')
+  const response = await api.get('/dashboard', { time_range: timeRange.value })
   if (response.code === 200) {
     dashboardData.value = response.data
     salesRanking.value = response.data.sales_ranking || []
@@ -253,7 +253,7 @@ const handleResize = () => {
 }
 
 watch(timeRange, () => {
-  updateTrendChart()
+  fetchDashboardData()
 })
 
 onMounted(() => {

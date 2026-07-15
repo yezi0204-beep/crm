@@ -8,6 +8,7 @@
     <el-table :data="businessList" stripe border class="data-table">
       <el-table-column prop="title" label="商机名称" min-width="180" sortable />
       <el-table-column prop="customer_name" label="客户" width="150" sortable />
+      <el-table-column prop="stakeholder" label="干系人" width="120" sortable />
       <el-table-column prop="amount" label="金额(万)" width="120" sortable>
         <template #default="scope">
           {{ formatAmount(scope.row.amount) }}
@@ -30,13 +31,20 @@
       </el-table-column>
     </el-table>
     
-    <el-dialog v-model="showAddModal" title="添加商机" width="500px">
+    <el-dialog v-model="showAddModal" :title="businessForm.id ? '编辑商机' : '添加商机'" width="500px">
       <el-form :model="businessForm" :rules="rules" ref="formRef">
         <el-form-item label="商机名称" prop="title">
           <el-input v-model="businessForm.title" />
         </el-form-item>
-        <el-form-item label="客户ID" prop="cust_id">
-          <el-input v-model="businessForm.cust_id" />
+        <el-form-item label="客户" prop="cust_id">
+          <el-select v-model="businessForm.cust_id" placeholder="请选择客户" filterable remote :remote-method="searchCustomers">
+            <el-option v-for="customer in customers" :key="customer.id" :label="customer.company || customer.name" :value="customer.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="干系人">
+          <el-select v-model="businessForm.stakeholder" placeholder="请选择干系人" filterable allow-create>
+            <el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="customer.name" />
+          </el-select>
         </el-form-item>
         <el-form-item label="金额(万)" prop="amount">
           <el-input-number v-model="businessForm.amount" :min="0" :step="0.01" />
@@ -80,6 +88,7 @@ import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
 const businessList = ref([])
+const customers = ref([])
 const showAddModal = ref(false)
 const formRef = ref(null)
 
@@ -87,6 +96,7 @@ const businessForm = reactive({
   id: null,
   title: '',
   cust_id: '',
+  stakeholder: '',
   amount: 0,
   stage: '初步接触',
   predict_date: '',
@@ -129,16 +139,35 @@ const fetchBusiness = async () => {
   }
 }
 
+const fetchCustomers = async (keyword = '') => {
+  const response = await api.get('/customers', { params: { keyword } })
+  if (response.code === 200) {
+    customers.value = response.data
+  }
+}
+
+const searchCustomers = async (keyword) => {
+  await fetchCustomers(keyword)
+}
+
 const saveBusiness = async () => {
   if (!formRef.value) return
   
   await formRef.value.validate(async (valid) => {
     if (valid) {
       businessForm.amount = (businessForm.amount || 0) * 10000
-      businessForm.owner_id = authStore.username
+      
+      if (!businessForm.id) {
+        businessForm.owner_id = authStore.username
+      }
       
       try {
-        const response = await api.post('/business', businessForm)
+        let response
+        if (businessForm.id) {
+          response = await api.put(`/business/${businessForm.id}`, businessForm)
+        } else {
+          response = await api.post('/business', businessForm)
+        }
         if (response.code === 200) {
           ElMessage.success('保存成功')
           showAddModal.value = false
@@ -179,6 +208,7 @@ const deleteBusiness = async (row) => {
 
 onMounted(() => {
   fetchBusiness()
+  fetchCustomers()
 })
 </script>
 

@@ -12,7 +12,7 @@ app = Flask(__name__)
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,PATCH,OPTIONS')
     response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
@@ -157,25 +157,52 @@ def get_contracts():
     
     username = payload['username']
     role = payload['role']
+    sort_field = request.args.get('sort_field', 'sign_date')
+    sort_order = request.args.get('sort_order', 'desc')
     
     db = get_db()
     cursor = db.cursor()
     
+    valid_fields = ['sign_date', 'total_amt', 'paid_amt', 'contract_name', 'contract_no', 'pending_amt']
+    if sort_field not in valid_fields:
+        sort_field = 'sign_date'
+    
+    order_by = f"{sort_field} {'DESC' if sort_order.lower() == 'desc' else 'ASC'}"
+    
     if role == '主任' or role == '院长':
-        cursor.execute("""
-            SELECT c.*, u.name as owner_name 
-            FROM contracts c 
-            LEFT JOIN users u ON c.owner_id = u.username 
-            ORDER BY c.sign_date DESC
-        """)
+        if sort_field == 'pending_amt':
+            cursor.execute(f"""
+                SELECT c.*, u.name as owner_name, 
+                       (COALESCE(c.total_amt, 0) - COALESCE(c.paid_amt, 0)) as pending_amt
+                FROM contracts c 
+                LEFT JOIN users u ON c.owner_id = u.username 
+                ORDER BY pending_amt {sort_order.upper()}
+            """)
+        else:
+            cursor.execute(f"""
+                SELECT c.*, u.name as owner_name 
+                FROM contracts c 
+                LEFT JOIN users u ON c.owner_id = u.username 
+                ORDER BY c.{order_by}
+            """)
     else:
-        cursor.execute("""
-            SELECT c.*, u.name as owner_name 
-            FROM contracts c 
-            LEFT JOIN users u ON c.owner_id = u.username 
-            WHERE c.owner_id = ? 
-            ORDER BY c.sign_date DESC
-        """, (username,))
+        if sort_field == 'pending_amt':
+            cursor.execute(f"""
+                SELECT c.*, u.name as owner_name, 
+                       (COALESCE(c.total_amt, 0) - COALESCE(c.paid_amt, 0)) as pending_amt
+                FROM contracts c 
+                LEFT JOIN users u ON c.owner_id = u.username 
+                WHERE c.owner_id = ? 
+                ORDER BY pending_amt {sort_order.upper()}
+            """, (username,))
+        else:
+            cursor.execute(f"""
+                SELECT c.*, u.name as owner_name 
+                FROM contracts c 
+                LEFT JOIN users u ON c.owner_id = u.username 
+                WHERE c.owner_id = ? 
+                ORDER BY c.{order_by}
+            """, (username,))
     
     rows = cursor.fetchall()
     contracts = []
@@ -183,6 +210,29 @@ def get_contracts():
         contracts.append(dict(row))
     
     return jsonify({'code': 200, 'message': 'success', 'data': contracts})
+
+
+@app.route('/api/contracts/check-no', methods=['GET'])
+def check_contract_no():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    contract_no = request.args.get('contract_no', '')
+    exclude_id = request.args.get('exclude_id', type=int, default=None)
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    if exclude_id:
+        cursor.execute("SELECT COUNT(*) FROM contracts WHERE contract_no = ? AND id != ?", (contract_no, exclude_id))
+    else:
+        cursor.execute("SELECT COUNT(*) FROM contracts WHERE contract_no = ?", (contract_no,))
+    
+    count = cursor.fetchone()[0]
+    
+    return jsonify({'code': 200, 'message': 'success', 'data': {'exists': count > 0}})
 
 
 @app.route('/api/contracts/<int:contract_id>', methods=['GET'])
@@ -215,6 +265,16 @@ def create_contract():
     cursor = db.cursor()
     
     try:
+        contract_no = data.get('contract_no')
+        if not contract_no or contract_no.strip() == '':
+            cursor.execute("SELECT MAX(id) FROM contracts")
+            max_id = cursor.fetchone()[0] or 0
+            contract_no = f"HT{datetime.now().strftime('%Y%m%d%H%M%S')}{str(max_id + 1).zfill(3)}"
+        
+        cursor.execute("SELECT COUNT(*) FROM contracts WHERE contract_no = ?", (contract_no,))
+        if cursor.fetchone()[0] > 0:
+            contract_no = f"HT{datetime.now().strftime('%Y%m%d%H%M%S')}{str(max_id + 1).zfill(3)}{str(uuid.uuid4().hex[:3])}"
+        
         cursor.execute("""
             INSERT INTO contracts
             (b_id, contract_no, party_a, project_order_no, total_amt, paid_amt, sign_date, owner_id, status,
@@ -223,7 +283,7 @@ def create_contract():
              expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
         """, (
-            data.get('b_id'), data.get('contract_no'), data.get('party_a'), data.get('project_order_no'),
+            data.get('b_id'), contract_no, data.get('party_a'), data.get('project_order_no'),
             data.get('total_amt'), 0, data.get('sign_date'), data.get('owner_id'), '执行中',
             data.get('contract_name'), data.get('classification'), data.get('is_audit'), data.get('pending_acceptance_amount'),
             data.get('cost'), data.get('gross_profit'), data.get('acceptance_date'), data.get('expected_income_date'),
@@ -232,7 +292,7 @@ def create_contract():
         db.commit()
         contract_id = cursor.lastrowid
         
-        return jsonify({'code': 200, 'message': '合同创建成功', 'data': {'id': contract_id}})
+        return jsonify({'code': 200, 'message': '合同创建成功', 'data': {'id': contract_id, 'contract_no': contract_no}})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
@@ -275,6 +335,264 @@ def update_contract(contract_id):
         return jsonify({'code': 500, 'message': str(e), 'data': None})
 
 
+@app.route('/api/contracts/<int:contract_id>/owner', methods=['PATCH', 'POST'])
+def update_contract_owner(contract_id):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    if payload['role'] != '主任' and payload['role'] != '院长':
+        return jsonify({'code': 403, 'message': '无权修改负责人', 'data': None})
+    
+    data = request.get_json(silent=True) or request.json
+    if not data:
+        return jsonify({'code': 400, 'message': '请求数据为空', 'data': None})
+    
+    owner_id = data.get('owner_id')
+    
+    if not owner_id:
+        return jsonify({'code': 400, 'message': '请选择负责人', 'data': None})
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute("UPDATE contracts SET owner_id = ? WHERE id = ?", (owner_id, contract_id))
+        db.commit()
+        
+        return jsonify({'code': 200, 'message': '负责人修改成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@app.route('/api/contracts/import-parse', methods=['POST'])
+def import_parse_contracts():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    if 'file' not in request.files:
+        return jsonify({'code': 400, 'message': '请选择文件', 'data': None})
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'code': 400, 'message': '请选择文件', 'data': None})
+    
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        return jsonify({'code': 400, 'message': '仅支持Excel文件（.xlsx/.xls）', 'data': None})
+    
+    try:
+        from io import BytesIO
+        from openpyxl import load_workbook
+        
+        wb = load_workbook(BytesIO(file.read()), data_only=True)
+        ws = wb.active
+        
+        headers = [cell.value for cell in ws[1]]
+        col_map = {}
+        for idx, header in enumerate(headers):
+            header = str(header).strip() if header else ''
+            if header == '合同编号':
+                col_map['contract_no'] = idx
+            elif header == '合同名称':
+                col_map['contract_name'] = idx
+            elif header == '甲方':
+                col_map['party_a'] = idx
+            elif header == '项目令号':
+                col_map['project_order_no'] = idx
+            elif header == '合同总额(万)':
+                col_map['total_amt'] = idx
+            elif header == '签约日期':
+                col_map['sign_date'] = idx
+            elif header == '业态':
+                col_map['business_type'] = idx
+            elif header == '密级':
+                col_map['classification'] = idx
+            elif header == '负责人':
+                col_map['owner_name'] = idx
+            elif header == '验收节点':
+                col_map['acceptance_nodes'] = idx
+            elif header == '回款节点':
+                col_map['payment_nodes'] = idx
+        
+        required_cols = ['contract_no', 'contract_name', 'total_amt']
+        for col in required_cols:
+            if col not in col_map:
+                return jsonify({'code': 400, 'message': f'缺少必要列：{col}', 'data': None})
+        
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute("SELECT contract_no FROM contracts")
+        existing_nos = set(row[0] for row in cursor.fetchall())
+        
+        rows = []
+        batch_nos = set()
+        valid_count = 0
+        
+        for row_idx in range(2, ws.max_row + 1):
+            row_data = {}
+            errors = []
+            
+            for key, idx in col_map.items():
+                cell = ws.cell(row=row_idx, column=idx + 1)
+                value = cell.value
+                
+                if key == 'total_amt':
+                    if value is None:
+                        errors.append('合同总额不能为空')
+                    else:
+                        try:
+                            value = float(value) * 10000
+                        except:
+                            errors.append('合同总额格式错误')
+                elif key == 'sign_date':
+                    if value:
+                        if isinstance(value, datetime):
+                            value = value.strftime('%Y-%m-%d')
+                        else:
+                            value = str(value)[:10]
+                
+                row_data[key] = value
+            
+            contract_no = row_data.get('contract_no')
+            if contract_no:
+                contract_no = str(contract_no).strip()
+                row_data['contract_no'] = contract_no
+                
+                if contract_no in existing_nos:
+                    errors.append('合同编号已存在')
+                if contract_no in batch_nos:
+                    errors.append('批内合同编号重复')
+                batch_nos.add(contract_no)
+            
+            contract_name = row_data.get('contract_name')
+            if not contract_name:
+                errors.append('合同名称不能为空')
+            
+            valid = len(errors) == 0
+            if valid:
+                valid_count += 1
+            
+            rows.append({
+                'row_index': row_idx,
+                'data': row_data,
+                'valid': valid,
+                'errors': errors
+            })
+        
+        return jsonify({
+            'code': 200,
+            'message': '解析成功',
+            'data': {
+                'total': len(rows),
+                'valid_count': valid_count,
+                'invalid_count': len(rows) - valid_count,
+                'rows': rows
+            }
+        })
+    
+    except Exception as e:
+        return jsonify({'code': 500, 'message': f'解析失败：{str(e)}', 'data': None})
+
+
+@app.route('/api/contracts/import-execute', methods=['POST'])
+def import_execute_contracts():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    data = request.json
+    if not data or not isinstance(data, list):
+        return jsonify({'code': 400, 'message': '数据格式错误', 'data': None})
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    success_count = 0
+    fail_count = 0
+    results = []
+    
+    cursor.execute("SELECT contract_no FROM contracts")
+    existing_nos = set(row[0] for row in cursor.fetchall())
+    
+    for item in data:
+        row_data = item.get('data', {})
+        row_index = item.get('row_index', 0)
+        
+        contract_no = row_data.get('contract_no')
+        if not contract_no or contract_no in existing_nos:
+            results.append({
+                'row_index': row_index,
+                'success': False,
+                'message': '合同编号已存在或为空'
+            })
+            fail_count += 1
+            continue
+        
+        try:
+            cursor.execute("""
+                INSERT INTO contracts
+                (contract_no, party_a, project_order_no, total_amt, paid_amt, sign_date, owner_id, status,
+                 contract_name, classification, is_audit, pending_acceptance_amount,
+                 cost, gross_profit, acceptance_date, expected_income_date,
+                 expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            """, (
+                contract_no, 
+                row_data.get('party_a'), 
+                row_data.get('project_order_no'),
+                row_data.get('total_amt', 0), 
+                0, 
+                row_data.get('sign_date'), 
+                payload['username'], 
+                '执行中',
+                row_data.get('contract_name'), 
+                row_data.get('classification'), 
+                0, 
+                0,
+                0, 
+                0, 
+                '', 
+                '',
+                '', 
+                row_data.get('business_type'), 
+                row_data.get('acceptance_nodes'), 
+                row_data.get('payment_nodes')
+            ))
+            
+            existing_nos.add(contract_no)
+            success_count += 1
+            results.append({
+                'row_index': row_index,
+                'success': True,
+                'message': '导入成功'
+            })
+        except Exception as e:
+            fail_count += 1
+            results.append({
+                'row_index': row_index,
+                'success': False,
+                'message': str(e)
+            })
+    
+    db.commit()
+    
+    return jsonify({
+        'code': 200,
+        'message': '导入完成',
+        'data': {
+            'total': len(data),
+            'success_count': success_count,
+            'fail_count': fail_count,
+            'results': results
+        }
+    })
+
+
 @app.route('/api/contracts/<int:contract_id>', methods=['DELETE'])
 def delete_contract(contract_id):
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
@@ -304,25 +622,44 @@ def get_customers():
     
     username = payload['username']
     role = payload['role']
+    keyword = request.args.get('keyword', '')
     
     db = get_db()
     cursor = db.cursor()
     
     if role == '主任' or role == '院长':
-        cursor.execute("""
-            SELECT c.*, u.name as owner_name 
-            FROM customers c 
-            LEFT JOIN users u ON c.owner_id = u.username 
-            ORDER BY c.created_at DESC
-        """)
+        if keyword:
+            cursor.execute("""
+                SELECT c.*, u.name as owner_name 
+                FROM customers c 
+                LEFT JOIN users u ON c.owner_id = u.username 
+                WHERE c.company LIKE ? OR c.name LIKE ? OR c.contact_name LIKE ?
+                ORDER BY c.created_at DESC
+            """, (f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'))
+        else:
+            cursor.execute("""
+                SELECT c.*, u.name as owner_name 
+                FROM customers c 
+                LEFT JOIN users u ON c.owner_id = u.username 
+                ORDER BY c.created_at DESC
+            """)
     else:
-        cursor.execute("""
-            SELECT c.*, u.name as owner_name 
-            FROM customers c 
-            LEFT JOIN users u ON c.owner_id = u.username 
-            WHERE c.owner_id = ? 
-            ORDER BY c.created_at DESC
-        """, (username,))
+        if keyword:
+            cursor.execute("""
+                SELECT c.*, u.name as owner_name 
+                FROM customers c 
+                LEFT JOIN users u ON c.owner_id = u.username 
+                WHERE c.owner_id = ? AND (c.company LIKE ? OR c.name LIKE ? OR c.contact_name LIKE ?)
+                ORDER BY c.created_at DESC
+            """, (username, f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'))
+        else:
+            cursor.execute("""
+                SELECT c.*, u.name as owner_name 
+                FROM customers c 
+                LEFT JOIN users u ON c.owner_id = u.username 
+                WHERE c.owner_id = ? 
+                ORDER BY c.created_at DESC
+            """, (username,))
     
     rows = cursor.fetchall()
     customers = []
@@ -346,11 +683,12 @@ def create_customer():
     
     try:
         cursor.execute("""
-            INSERT INTO customers (name, contact_name, phone, email, industry, region, level, owner_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO customers (name, company, phone, level, source, owner_id, contact_name, email, industry, region, created_at, last_follow)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """, (
-            data.get('name'), data.get('contact_name'), data.get('phone'), data.get('email'),
-            data.get('industry'), data.get('region'), data.get('level'), data.get('owner_id')
+            data.get('name'), data.get('company'), data.get('phone'),
+            data.get('level'), data.get('source'), data.get('owner_id'),
+            data.get('contact_name'), data.get('email'), data.get('industry'), data.get('region')
         ))
         db.commit()
         
@@ -380,6 +718,38 @@ def delete_customer(cust_id):
         return jsonify({'code': 500, 'message': str(e), 'data': None})
 
 
+@app.route('/api/customers/<int:cust_id>', methods=['PUT'])
+def update_customer(cust_id):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    data = request.json
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE customers SET
+                name=?, company=?, phone=?, level=?, source=?,
+                contact_name=?, email=?, industry=?, region=?
+            WHERE id=?
+        """, (
+            data.get('name'), data.get('company'), data.get('phone'),
+            data.get('level'), data.get('source'),
+            data.get('contact_name'), data.get('email'),
+            data.get('industry'), data.get('region'), cust_id
+        ))
+        db.commit()
+        
+        return jsonify({'code': 200, 'message': '客户更新成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
 @app.route('/api/business', methods=['GET'])
 def get_business():
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
@@ -395,7 +765,7 @@ def get_business():
     
     if role == '主任' or role == '院长':
         cursor.execute("""
-            SELECT b.*, c.name as customer_name, u.name as owner_name 
+            SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name 
             FROM business b 
             LEFT JOIN customers c ON b.cust_id = c.id 
             LEFT JOIN users u ON b.owner_id = u.username 
@@ -404,7 +774,7 @@ def get_business():
         """)
     else:
         cursor.execute("""
-            SELECT b.*, c.name as customer_name, u.name as owner_name 
+            SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name 
             FROM business b 
             LEFT JOIN customers c ON b.cust_id = c.id 
             LEFT JOIN users u ON b.owner_id = u.username 
@@ -434,10 +804,10 @@ def create_business():
     
     try:
         cursor.execute("""
-            INSERT INTO business (title, cust_id, amount, stage, predict_date, source, industry, region, owner_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO business (title, cust_id, stakeholder, amount, stage, predict_date, source, industry, region, owner_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            data.get('title'), data.get('cust_id'), data.get('amount'), data.get('stage'),
+            data.get('title'), data.get('cust_id'), data.get('stakeholder'), data.get('amount'), data.get('stage'),
             data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id')
         ))
         db.commit()
@@ -468,6 +838,37 @@ def delete_business(business_id):
         return jsonify({'code': 500, 'message': str(e), 'data': None})
 
 
+@app.route('/api/business/<int:business_id>', methods=['PUT'])
+def update_business(business_id):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    data = request.json
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE business SET
+                title=?, cust_id=?, stakeholder=?, amount=?, stage=?, predict_date=?,
+                source=?, industry=?, region=?
+            WHERE id=?
+        """, (
+            data.get('title'), data.get('cust_id'), data.get('stakeholder'), 
+            data.get('amount'), data.get('stage'), data.get('predict_date'),
+            data.get('source'), data.get('industry'), data.get('region'), business_id
+        ))
+        db.commit()
+        
+        return jsonify({'code': 200, 'message': '商机更新成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard():
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
@@ -477,91 +878,204 @@ def get_dashboard():
     
     username = payload['username']
     role = payload['role']
+    time_range = request.args.get('time_range', 'all')
     
     db = get_db()
     cursor = db.cursor()
     
     result = {}
     
+    now = datetime.now()
+    if time_range == 'month':
+        date_filter = f"{now.year}-{str(now.month).zfill(2)}-01"
+        date_condition = "WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')"
+        contract_date_condition = "WHERE strftime('%Y-%m', sign_date) = strftime('%Y-%m', 'now')"
+        payment_date_condition = "WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now')"
+    elif time_range == 'quarter':
+        quarter = (now.month - 1) // 3 + 1
+        start_month = (quarter - 1) * 3 + 1
+        date_condition = f"WHERE created_at >= '{now.year}-{str(start_month).zfill(2)}-01'"
+        contract_date_condition = f"WHERE sign_date >= '{now.year}-{str(start_month).zfill(2)}-01'"
+        payment_date_condition = f"WHERE payment_date >= '{now.year}-{str(start_month).zfill(2)}-01'"
+    elif time_range == 'year':
+        date_condition = f"WHERE strftime('%Y', created_at) = '{now.year}'"
+        contract_date_condition = f"WHERE strftime('%Y', sign_date) = '{now.year}'"
+        payment_date_condition = f"WHERE strftime('%Y', payment_date) = '{now.year}'"
+    else:
+        date_condition = ""
+        contract_date_condition = ""
+        payment_date_condition = ""
+    
     if role == '主任' or role == '院长':
-        cursor.execute("SELECT COUNT(*) as total FROM customers")
+        cursor.execute(f"SELECT COUNT(*) as total FROM customers {date_condition}")
         result['total_customers'] = cursor.fetchone()['total']
         
-        cursor.execute("SELECT COUNT(*) as total FROM business WHERE status = 'active'")
+        cursor.execute(f"SELECT COUNT(*) as total FROM business {date_condition} AND status = 'active'" if date_condition else "SELECT COUNT(*) as total FROM business WHERE status = 'active'")
         result['total_business'] = cursor.fetchone()['total']
         
-        cursor.execute("SELECT COUNT(*) as total FROM contracts")
+        cursor.execute(f"SELECT COUNT(*) as total FROM contracts {contract_date_condition}")
         result['total_contracts'] = cursor.fetchone()['total']
         
-        cursor.execute("SELECT SUM(total_amt) as total FROM contracts")
+        cursor.execute(f"SELECT SUM(total_amt) as total FROM contracts {contract_date_condition}")
         total = cursor.fetchone()['total'] or 0
         result['contracts_amount'] = total
         
-        cursor.execute("SELECT SUM(amount) as total FROM payment_records")
+        cursor.execute(f"SELECT SUM(amount) as total FROM payment_records {payment_date_condition}")
         total = cursor.fetchone()['total'] or 0
         result['total_payments'] = total
     else:
-        cursor.execute("SELECT COUNT(*) as total FROM customers WHERE owner_id = ?", (username,))
+        cursor.execute(f"SELECT COUNT(*) as total FROM customers WHERE owner_id = ? {('AND' if date_condition else '')} {date_condition.replace('WHERE', '')}", (username,))
         result['total_customers'] = cursor.fetchone()['total']
         
-        cursor.execute("SELECT COUNT(*) as total FROM business WHERE owner_id = ? AND status = 'active'", (username,))
+        if date_condition:
+            cursor.execute(f"SELECT COUNT(*) as total FROM business WHERE owner_id = ? AND status = 'active' AND {date_condition.replace('WHERE', '')}", (username,))
+        else:
+            cursor.execute("SELECT COUNT(*) as total FROM business WHERE owner_id = ? AND status = 'active'", (username,))
         result['total_business'] = cursor.fetchone()['total']
         
-        cursor.execute("SELECT COUNT(*) as total FROM contracts WHERE owner_id = ?", (username,))
+        if contract_date_condition:
+            cursor.execute(f"SELECT COUNT(*) as total FROM contracts WHERE owner_id = ? AND {contract_date_condition.replace('WHERE', '')}", (username,))
+        else:
+            cursor.execute("SELECT COUNT(*) as total FROM contracts WHERE owner_id = ?", (username,))
         result['total_contracts'] = cursor.fetchone()['total']
         
-        cursor.execute("SELECT SUM(total_amt) as total FROM contracts WHERE owner_id = ?", (username,))
+        if contract_date_condition:
+            cursor.execute(f"SELECT SUM(total_amt) as total FROM contracts WHERE owner_id = ? AND {contract_date_condition.replace('WHERE', '')}", (username,))
+        else:
+            cursor.execute("SELECT SUM(total_amt) as total FROM contracts WHERE owner_id = ?", (username,))
         total = cursor.fetchone()['total'] or 0
         result['contracts_amount'] = total
         
-        cursor.execute("""
-            SELECT SUM(pr.amount) as total 
-            FROM payment_records pr 
-            JOIN contracts c ON pr.contract_id = c.id 
-            WHERE c.owner_id = ?
-        """, (username,))
+        if payment_date_condition:
+            cursor.execute(f"""
+                SELECT SUM(pr.amount) as total 
+                FROM payment_records pr 
+                JOIN contracts c ON pr.contract_id = c.id 
+                WHERE c.owner_id = ? AND {payment_date_condition.replace('WHERE', '')}
+            """, (username,))
+        else:
+            cursor.execute("""
+                SELECT SUM(pr.amount) as total 
+                FROM payment_records pr 
+                JOIN contracts c ON pr.contract_id = c.id 
+                WHERE c.owner_id = ?
+            """, (username,))
         total = cursor.fetchone()['total'] or 0
         result['total_payments'] = total
     
-    cursor.execute("""
-        SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count 
-        FROM customers 
-        WHERE created_at >= DATE('now', '-12 months') 
-        GROUP BY strftime('%Y-%m', created_at) 
-        ORDER BY month
-    """)
-    customer_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
-    
-    cursor.execute("""
-        SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count 
-        FROM business 
-        WHERE status = 'active' AND created_at >= DATE('now', '-12 months') 
-        GROUP BY strftime('%Y-%m', created_at) 
-        ORDER BY month
-    """)
-    business_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
-    
-    cursor.execute("""
-        SELECT strftime('%Y-%m', sign_date) as month, COUNT(*) as count 
-        FROM contracts 
-        WHERE sign_date >= DATE('now', '-12 months') 
-        GROUP BY strftime('%Y-%m', sign_date) 
-        ORDER BY month
-    """)
-    contract_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
-    
-    months = []
-    customer_data = []
-    business_data = []
-    contract_data = []
-    
-    for i in range(12):
-        date = datetime.now() - timedelta(days=i*30)
-        month_str = date.strftime('%Y-%m')
-        months.insert(0, date.strftime('%m月'))
-        customer_data.insert(0, customer_monthly.get(month_str, 0))
-        business_data.insert(0, business_monthly.get(month_str, 0))
-        contract_data.insert(0, contract_monthly.get(month_str, 0))
+    if time_range == 'month':
+        cursor.execute("""
+            SELECT strftime('%d', created_at) as day, COUNT(*) as count 
+            FROM customers 
+            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+            GROUP BY strftime('%d', created_at) 
+            ORDER BY day
+        """)
+        customer_monthly = {row['day']: row['count'] for row in cursor.fetchall()}
+        
+        cursor.execute("""
+            SELECT strftime('%d', created_at) as day, COUNT(*) as count 
+            FROM business 
+            WHERE status = 'active' AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+            GROUP BY strftime('%d', created_at) 
+            ORDER BY day
+        """)
+        business_monthly = {row['day']: row['count'] for row in cursor.fetchall()}
+        
+        cursor.execute("""
+            SELECT strftime('%d', sign_date) as day, COUNT(*) as count 
+            FROM contracts 
+            WHERE strftime('%Y-%m', sign_date) = strftime('%Y-%m', 'now')
+            GROUP BY strftime('%d', sign_date) 
+            ORDER BY day
+        """)
+        contract_monthly = {row['day']: row['count'] for row in cursor.fetchall()}
+        
+        days_in_month = (now.replace(month=now.month % 12 + 1, day=1) - timedelta(days=1)).day
+        months = [f"{i}日" for i in range(1, days_in_month + 1)]
+        customer_data = [customer_monthly.get(str(i), 0) for i in range(1, days_in_month + 1)]
+        business_data = [business_monthly.get(str(i), 0) for i in range(1, days_in_month + 1)]
+        contract_data = [contract_monthly.get(str(i), 0) for i in range(1, days_in_month + 1)]
+    elif time_range == 'quarter':
+        quarter = (now.month - 1) // 3 + 1
+        start_month = (quarter - 1) * 3 + 1
+        cursor.execute(f"""
+            SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count 
+            FROM customers 
+            WHERE created_at >= '{now.year}-{str(start_month).zfill(2)}-01'
+            GROUP BY strftime('%Y-%m', created_at) 
+            ORDER BY month
+        """)
+        customer_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
+        
+        cursor.execute(f"""
+            SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count 
+            FROM business 
+            WHERE status = 'active' AND created_at >= '{now.year}-{str(start_month).zfill(2)}-01'
+            GROUP BY strftime('%Y-%m', created_at) 
+            ORDER BY month
+        """)
+        business_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
+        
+        cursor.execute(f"""
+            SELECT strftime('%Y-%m', sign_date) as month, COUNT(*) as count 
+            FROM contracts 
+            WHERE sign_date >= '{now.year}-{str(start_month).zfill(2)}-01'
+            GROUP BY strftime('%Y-%m', sign_date) 
+            ORDER BY month
+        """)
+        contract_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
+        
+        months = []
+        customer_data = []
+        business_data = []
+        contract_data = []
+        for m in range(start_month, start_month + 3):
+            month_str = f"{now.year}-{str(m).zfill(2)}"
+            months.append(f"{m}月")
+            customer_data.append(customer_monthly.get(month_str, 0))
+            business_data.append(business_monthly.get(month_str, 0))
+            contract_data.append(contract_monthly.get(month_str, 0))
+    else:
+        cursor.execute("""
+            SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count 
+            FROM customers 
+            WHERE created_at >= DATE('now', '-12 months') 
+            GROUP BY strftime('%Y-%m', created_at) 
+            ORDER BY month
+        """)
+        customer_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
+        
+        cursor.execute("""
+            SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count 
+            FROM business 
+            WHERE status = 'active' AND created_at >= DATE('now', '-12 months') 
+            GROUP BY strftime('%Y-%m', created_at) 
+            ORDER BY month
+        """)
+        business_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
+        
+        cursor.execute("""
+            SELECT strftime('%Y-%m', sign_date) as month, COUNT(*) as count 
+            FROM contracts 
+            WHERE sign_date >= DATE('now', '-12 months') 
+            GROUP BY strftime('%Y-%m', sign_date) 
+            ORDER BY month
+        """)
+        contract_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
+        
+        months = []
+        customer_data = []
+        business_data = []
+        contract_data = []
+        
+        for i in range(12):
+            date = now - timedelta(days=i*30)
+            month_str = date.strftime('%Y-%m')
+            months.insert(0, date.strftime('%m月'))
+            customer_data.insert(0, customer_monthly.get(month_str, 0))
+            business_data.insert(0, business_monthly.get(month_str, 0))
+            contract_data.insert(0, contract_monthly.get(month_str, 0))
     
     result['chart_data'] = {
         'months': months,
@@ -596,9 +1110,6 @@ def get_users():
     payload = verify_token(token)
     if not payload:
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
-    
-    if payload['role'] != '主任' and payload['role'] != '院长':
-        return jsonify({'code': 403, 'message': '无权访问', 'data': None})
     
     db = get_db()
     cursor = db.cursor()
@@ -684,7 +1195,7 @@ def get_payment_records():
     
     if contract_id:
         cursor.execute("""
-            SELECT pr.*, c.contract_name, c.contract_no, u.name as owner_name 
+            SELECT pr.*, c.contract_name, c.contract_no, c.party_a, u.name as owner_name 
             FROM payment_records pr 
             LEFT JOIN contracts c ON pr.contract_id = c.id 
             LEFT JOIN users u ON c.owner_id = u.username 
@@ -694,7 +1205,7 @@ def get_payment_records():
     else:
         if role == '主任' or role == '院长':
             cursor.execute("""
-                SELECT pr.*, c.contract_name, c.contract_no, u.name as owner_name 
+                SELECT pr.*, c.contract_name, c.contract_no, c.party_a, u.name as owner_name 
                 FROM payment_records pr 
                 LEFT JOIN contracts c ON pr.contract_id = c.id 
                 LEFT JOIN users u ON c.owner_id = u.username 
@@ -702,7 +1213,7 @@ def get_payment_records():
             """)
         else:
             cursor.execute("""
-                SELECT pr.*, c.contract_name, c.contract_no, u.name as owner_name 
+                SELECT pr.*, c.contract_name, c.contract_no, c.party_a, u.name as owner_name 
                 FROM payment_records pr 
                 LEFT JOIN contracts c ON pr.contract_id = c.id 
                 LEFT JOIN users u ON c.owner_id = u.username 

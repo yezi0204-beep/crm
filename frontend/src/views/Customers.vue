@@ -26,7 +26,7 @@
       </el-table-column>
     </el-table>
     
-    <el-dialog v-model="showAddModal" title="添加客户" width="500px">
+    <el-dialog v-model="showAddModal" :title="customerForm.id ? '编辑客户' : '添加客户'" width="500px">
       <el-form :model="customerForm" :rules="rules" ref="formRef">
         <el-form-item label="联系人" prop="name">
           <el-input v-model="customerForm.name" />
@@ -110,10 +110,17 @@ const saveCustomer = async () => {
   
   await formRef.value.validate(async (valid) => {
     if (valid) {
-      customerForm.owner_id = authStore.username
+      if (!customerForm.id) {
+        customerForm.owner_id = authStore.username
+      }
       
       try {
-        const response = await api.post('/customers', customerForm)
+        let response
+        if (customerForm.id) {
+          response = await api.put(`/customers/${customerForm.id}`, customerForm)
+        } else {
+          response = await api.post('/customers', customerForm)
+        }
         if (response.code === 200) {
           ElMessage.success('保存成功')
           showAddModal.value = false

@@ -71,7 +71,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import api from '../api'
 
@@ -93,7 +93,7 @@ const totalResults = computed(() => {
 const handleSearch = async () => {
   if (!keyword.value.trim()) return
   
-  const response = await api.get('/search', { params: { keyword: keyword.value } })
+  const response = await api.get('/search', { keyword: keyword.value })
   if (response.code === 200) {
     customerResults.value = response.data.customers || []
     businessResults.value = response.data.business || []
@@ -109,14 +109,20 @@ const removeFilter = (filter) => {
 }
 
 const goToDetail = (type, id) => {
-  router.push(`/${type}/${id}`)
+  router.push({ path: `/${type}`, query: { keyword: keyword.value } })
 }
 
 onMounted(() => {
-  const params = new URLSearchParams(route.query)
-  const kw = params.get('keyword')
+  const kw = route.query.keyword
   if (kw) {
     keyword.value = kw
+    handleSearch()
+  }
+})
+
+watch(() => route.query.keyword, (newKeyword) => {
+  if (newKeyword) {
+    keyword.value = newKeyword
     handleSearch()
   }
 })
