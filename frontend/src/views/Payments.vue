@@ -1,6 +1,7 @@
 <template>
   <div class="payments">
     <div class="header-row">
+<<<<<<< HEAD
       <div class="header-left">
         <el-button type="primary" @click="showAddModal = true" class="add-btn">
           <el-icon><Plus /></el-icon>
@@ -12,6 +13,12 @@
           导入回款记录
         </el-button>
       </div>
+=======
+      <el-button type="primary" @click="showAddModal = true" class="add-btn">
+        <el-icon><Plus /></el-icon>
+        添加回款记录
+      </el-button>
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
       
       <div class="search-wrapper">
         <el-input 
@@ -79,6 +86,7 @@
         <el-button type="primary" @click="savePayment">确定</el-button>
       </template>
     </el-dialog>
+<<<<<<< HEAD
     
     <el-dialog v-model="showImportModal" title="导入回款记录" width="900px">
       <div v-if="importStep === 1" class="import-step-1">
@@ -229,10 +237,13 @@
         <el-button type="primary" @click="saveDuplicateActions">确定</el-button>
       </template>
     </el-dialog>
+=======
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
   </div>
 </template>
 
 <script setup>
+<<<<<<< HEAD
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { Plus, Search, Upload, CircleCheck } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -244,6 +255,16 @@ const allPaymentRecords = ref([])
 const contracts = ref([])
 const showAddModal = ref(false)
 const showImportModal = ref(false)
+=======
+import { ref, reactive, onMounted, computed } from 'vue'
+import { Plus, Search } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import api from '../api'
+
+const allPaymentRecords = ref([])
+const contracts = ref([])
+const showAddModal = ref(false)
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
 const formRef = ref(null)
 const searchKeyword = ref('')
 
@@ -265,6 +286,11 @@ const formatAmount = (value) => {
 }
 
 const paymentRecords = computed(() => {
+<<<<<<< HEAD
+=======
+  console.log('searchKeyword:', searchKeyword.value, 'allRecords:', allPaymentRecords.value.length)
+  
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
   if (!searchKeyword.value) {
     return allPaymentRecords.value
   }
@@ -279,6 +305,10 @@ const paymentRecords = computed(() => {
       (record.note && record.note.toLowerCase().includes(keyword))
     )
   })
+<<<<<<< HEAD
+=======
+  console.log('filtered count:', filtered.length)
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
   return filtered
 })
 
@@ -296,6 +326,20 @@ const fetchContracts = async () => {
   }
 }
 
+<<<<<<< HEAD
+=======
+const filterContracts = (query, item) => {
+  if (!query) return true
+  const q = query.toLowerCase()
+  const contract = item
+  return (
+    (contract.contract_name && contract.contract_name.toLowerCase().includes(q)) ||
+    (contract.contract_no && contract.contract_no.toLowerCase().includes(q)) ||
+    (contract.party_a && contract.party_a.toLowerCase().includes(q))
+  )
+}
+
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
 const savePayment = async () => {
   if (!formRef.value) return
   
@@ -304,6 +348,7 @@ const savePayment = async () => {
       paymentForm.amount = (paymentForm.amount || 0) * 10000
       
       try {
+<<<<<<< HEAD
         let response
         if (paymentForm.id) {
           response = await api.put(`/payment_records/${paymentForm.id}`, paymentForm)
@@ -313,6 +358,11 @@ const savePayment = async () => {
         
         if (response.code === 200) {
           ElMessage.success(paymentForm.id ? '更新成功' : '创建成功')
+=======
+        const response = await api.post('/payment_records', paymentForm)
+        if (response.code === 200) {
+          ElMessage.success('保存成功')
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
           showAddModal.value = false
           fetchPayments()
         } else {
@@ -349,6 +399,7 @@ const deletePayment = async (row) => {
   }
 }
 
+<<<<<<< HEAD
 const importStep = ref(1)
 const isImporting = ref(false)
 const importRows = ref([])
@@ -442,10 +493,13 @@ const closeImportModal = () => {
   importResult.value = { total: 0, success_count: 0, fail_count: 0, results: [] }
 }
 
+=======
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
 onMounted(() => {
   fetchPayments()
   fetchContracts()
 })
+<<<<<<< HEAD
 
 watch(showImportModal, (newVal) => {
   if (!newVal) {
@@ -455,6 +509,8 @@ watch(showImportModal, (newVal) => {
     importResult.value = { total: 0, success_count: 0, fail_count: 0, results: [] }
   }
 })
+=======
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
 </script>
 
 <style scoped>
@@ -470,12 +526,15 @@ watch(showImportModal, (newVal) => {
   gap: 16px;
 }
 
+<<<<<<< HEAD
 .header-left {
   display: flex;
   align-items: center;
   gap: 16px;
 }
 
+=======
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
 .add-btn {
   align-self: flex-start;
 }
@@ -487,6 +546,7 @@ watch(showImportModal, (newVal) => {
 .data-table {
   width: 100%;
 }
+<<<<<<< HEAD
 
 .import-step-1 {
   text-align: center;
@@ -654,4 +714,6 @@ watch(showImportModal, (newVal) => {
   max-height: 400px;
   overflow-y: auto;
 }
+=======
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
 </style>

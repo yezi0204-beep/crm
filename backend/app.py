@@ -177,7 +177,11 @@ def get_contracts():
                        (COALESCE(c.total_amt, 0) - COALESCE(c.paid_amt, 0)) as pending_amt
                 FROM contracts c 
                 LEFT JOIN users u ON c.owner_id = u.username 
+<<<<<<< HEAD
                 ORDER BY pending_amt {sort_direction}
+=======
+                ORDER BY pending_amt {sort_order.upper()}
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
             """)
         else:
             cursor.execute(f"""
@@ -194,7 +198,11 @@ def get_contracts():
                 FROM contracts c 
                 LEFT JOIN users u ON c.owner_id = u.username 
                 WHERE c.owner_id = ? 
+<<<<<<< HEAD
                 ORDER BY pending_amt {sort_direction}
+=======
+                ORDER BY pending_amt {sort_order.upper()}
+>>>>>>> 2ef103962ff8135cf37e418794ed224df71b3525
             """, (username,))
         else:
             cursor.execute(f"""
