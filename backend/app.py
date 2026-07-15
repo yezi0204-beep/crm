@@ -1314,6 +1314,102 @@ def get_stage_logs():
     return jsonify({'code': 200, 'message': 'success', 'data': logs})
 
 
+@app.route('/api/follow_logs', methods=['GET'])
+def get_follow_logs():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    ref_type = request.args.get('ref_type')
+    ref_id = request.args.get('ref_id')
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    if ref_type and ref_id:
+        cursor.execute("""
+            SELECT fl.*, u.name as user_name 
+            FROM follow_logs fl 
+            LEFT JOIN users u ON fl.user_id = u.username 
+            WHERE fl.ref_type = ? AND fl.ref_id = ? 
+            ORDER BY fl.created_at DESC
+        """, (ref_type, ref_id))
+    elif ref_type:
+        cursor.execute("""
+            SELECT fl.*, u.name as user_name 
+            FROM follow_logs fl 
+            LEFT JOIN users u ON fl.user_id = u.username 
+            WHERE fl.ref_type = ? 
+            ORDER BY fl.created_at DESC
+        """, (ref_type,))
+    else:
+        cursor.execute("""
+            SELECT fl.*, u.name as user_name 
+            FROM follow_logs fl 
+            LEFT JOIN users u ON fl.user_id = u.username 
+            ORDER BY fl.created_at DESC
+        """)
+    
+    rows = cursor.fetchall()
+    logs = []
+    for row in rows:
+        logs.append(dict(row))
+    
+    return jsonify({'code': 200, 'message': 'success', 'data': logs})
+
+
+@app.route('/api/follow_logs', methods=['POST'])
+def create_follow_log():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    data = request.json
+    username = payload['username']
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT INTO follow_logs 
+            (ref_type, ref_id, user_id, content, log_time, subject, participants, location, next_plan)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data.get('ref_type'), data.get('ref_id'), username,
+            data.get('content'), data.get('log_time'), data.get('subject'),
+            data.get('participants'), data.get('location'), data.get('next_plan')
+        ))
+        db.commit()
+        
+        return jsonify({'code': 200, 'message': '跟进记录添加成功', 'data': {'id': cursor.lastrowid}})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@app.route('/api/follow_logs/<int:log_id>', methods=['DELETE'])
+def delete_follow_log(log_id):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute("DELETE FROM follow_logs WHERE id = ?", (log_id,))
+        db.commit()
+        
+        return jsonify({'code': 200, 'message': '跟进记录删除成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
 @app.route('/api/pool', methods=['GET'])
 def get_pool():
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
