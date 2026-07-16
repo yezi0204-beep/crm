@@ -24,10 +24,36 @@ SECRET_KEY = "crm_secret_key_2026"
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "crm_app.db")
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads", "contracts")
 
+def init_business_table():
+    db = get_db()
+    cursor = db.cursor()
+    try:
+        cursor.execute("ALTER TABLE business ADD COLUMN address TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE business ADD COLUMN customer_relation TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE business ADD COLUMN weekly_plan TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE business ADD COLUMN next_week_plan TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE business ADD COLUMN plan_week TEXT")
+    except:
+        pass
+    db.commit()
+
 def get_db():
     if 'db' not in g:
         g.db = sqlite3.connect(DB_PATH, check_same_thread=False)
         g.db.row_factory = sqlite3.Row
+        init_business_table()
     return g.db
 
 
@@ -760,28 +786,65 @@ def get_business():
     
     username = payload['username']
     role = payload['role']
+    status = request.args.get('status', 'active')
     
     db = get_db()
     cursor = db.cursor()
     
-    if role == '主任' or role == '院长':
-        cursor.execute("""
-            SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name 
-            FROM business b 
-            LEFT JOIN customers c ON b.cust_id = c.id 
-            LEFT JOIN users u ON b.owner_id = u.username 
-            WHERE b.status = 'active' 
-            ORDER BY b.created_at DESC
-        """)
+    today = datetime.now()
+    current_week = today.strftime('%Y-W%W')
+    
+    cursor.execute("""
+        UPDATE business SET 
+            weekly_plan = next_week_plan, 
+            next_week_plan = '', 
+            plan_week = ?
+        WHERE status = 'active' AND plan_week != ? AND next_week_plan IS NOT NULL AND next_week_plan != ''
+    """, (current_week, current_week))
+    db.commit()
+    
+    if status == 'deleted':
+        db_status = 'void'
     else:
-        cursor.execute("""
-            SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name 
-            FROM business b 
-            LEFT JOIN customers c ON b.cust_id = c.id 
-            LEFT JOIN users u ON b.owner_id = u.username 
-            WHERE b.owner_id = ? AND b.status = 'active' 
-            ORDER BY b.created_at DESC
-        """, (username,))
+        db_status = status
+    
+    if role == '主任' or role == '院长':
+        if status == 'all':
+            cursor.execute("""
+                SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name 
+                FROM business b 
+                LEFT JOIN customers c ON b.cust_id = c.id 
+                LEFT JOIN users u ON b.owner_id = u.username 
+                ORDER BY b.created_at DESC
+            """)
+        else:
+            cursor.execute("""
+                SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name 
+                FROM business b 
+                LEFT JOIN customers c ON b.cust_id = c.id 
+                LEFT JOIN users u ON b.owner_id = u.username 
+                WHERE b.status = ? 
+                ORDER BY b.created_at DESC
+            """, (db_status,))
+    else:
+        if status == 'all':
+            cursor.execute("""
+                SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name 
+                FROM business b 
+                LEFT JOIN customers c ON b.cust_id = c.id 
+                LEFT JOIN users u ON b.owner_id = u.username 
+                WHERE b.owner_id = ? 
+                ORDER BY b.created_at DESC
+            """, (username,))
+        else:
+            cursor.execute("""
+                SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name 
+                FROM business b 
+                LEFT JOIN customers c ON b.cust_id = c.id 
+                LEFT JOIN users u ON b.owner_id = u.username 
+                WHERE b.owner_id = ? AND b.status = ? 
+                ORDER BY b.created_at DESC
+            """, (username, db_status))
     
     rows = cursor.fetchall()
     business = []
@@ -805,11 +868,12 @@ def create_business():
     
     try:
         cursor.execute("""
-            INSERT INTO business (title, cust_id, stakeholder, amount, stage, predict_date, source, industry, region, owner_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO business (title, cust_id, stakeholder, amount, stage, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get('title'), data.get('cust_id'), data.get('stakeholder'), data.get('amount'), data.get('stage'),
-            data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id')
+            data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id'),
+            data.get('address'), data.get('customer_relation'), data.get('weekly_plan'), data.get('next_week_plan'), data.get('plan_week')
         ))
         db.commit()
         
@@ -830,10 +894,30 @@ def delete_business(business_id):
     cursor = db.cursor()
     
     try:
-        cursor.execute("DELETE FROM business WHERE id=?", (business_id,))
+        cursor.execute("UPDATE business SET status = 'void' WHERE id=?", (business_id,))
         db.commit()
         
-        return jsonify({'code': 200, 'message': '商机删除成功', 'data': None})
+        return jsonify({'code': 200, 'message': '商机作废成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@app.route('/api/business/<int:business_id>/restore', methods=['PUT'])
+def restore_business(business_id):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute("UPDATE business SET status = 'active' WHERE id=?", (business_id,))
+        db.commit()
+        
+        return jsonify({'code': 200, 'message': '商机恢复成功', 'data': None})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
@@ -855,12 +939,16 @@ def update_business(business_id):
         cursor.execute("""
             UPDATE business SET
                 title=?, cust_id=?, stakeholder=?, amount=?, stage=?, predict_date=?,
-                source=?, industry=?, region=?
+                source=?, industry=?, region=?, address=?, customer_relation=?,
+                weekly_plan=?, next_week_plan=?, plan_week=?
             WHERE id=?
         """, (
             data.get('title'), data.get('cust_id'), data.get('stakeholder'), 
             data.get('amount'), data.get('stage'), data.get('predict_date'),
-            data.get('source'), data.get('industry'), data.get('region'), business_id
+            data.get('source'), data.get('industry'), data.get('region'),
+            data.get('address'), data.get('customer_relation'),
+            data.get('weekly_plan'), data.get('next_week_plan'), data.get('plan_week'),
+            business_id
         ))
         db.commit()
         

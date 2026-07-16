@@ -1,36 +1,70 @@
 <template>
   <div class="business">
-    <el-button type="primary" @click="showAddModal = true" class="add-btn">
-      <el-icon><Plus /></el-icon>
-      添加商机
-    </el-button>
+    <div class="header-row">
+      <el-button type="primary" @click="showAddModal = true" class="add-btn">
+        <el-icon><Plus /></el-icon>
+        添加商机
+      </el-button>
+      <el-select v-model="statusFilter" @change="fetchBusiness" placeholder="状态筛选" class="status-filter">
+        <el-option label="全部" value="all" />
+        <el-option label="进行中" value="active" />
+        <el-option label="已作废" value="deleted" />
+      </el-select>
+    </div>
     
-    <el-table :data="businessList" stripe border class="data-table">
-      <el-table-column prop="title" label="商机名称" min-width="180" sortable />
-      <el-table-column prop="customer_name" label="客户" width="150" sortable />
-      <el-table-column prop="stakeholder" label="干系人" width="120" sortable />
-      <el-table-column prop="amount" label="金额(万)" width="120" sortable>
-        <template #default="scope">
-          {{ formatAmount(scope.row.amount) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="stage" label="阶段" width="120" sortable>
-        <template #default="scope">
-          <el-tag :type="getStageType(scope.row.stage)" size="small">{{ scope.row.stage }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="predict_date" label="预计成交日期" width="150" sortable />
-      <el-table-column prop="source" label="来源" width="120" sortable />
-      <el-table-column prop="owner_name" label="负责人" width="100" sortable />
-      <el-table-column prop="created_at" label="创建时间" width="150" sortable />
-      <el-table-column label="操作" width="180">
-        <template #default="scope">
-          <el-button size="small" @click="editBusiness(scope.row)">编辑</el-button>
-          <el-button size="small" type="warning" @click="showFollow(scope.row)">跟进</el-button>
-          <el-button size="small" type="danger" @click="deleteBusiness(scope.row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <div class="table-wrapper">
+      <el-table :data="businessList" stripe border class="data-table">
+        <el-table-column prop="title" label="商机名称" min-width="140" sortable />
+        <el-table-column prop="customer_name" label="客户" width="120" sortable />
+        <el-table-column prop="stakeholder" label="干系人" width="100" sortable />
+        <el-table-column prop="amount" label="预算(万)" width="100" sortable>
+          <template #default="scope">
+            {{ formatAmount(scope.row.amount) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="customer_relation" label="客情关系" width="100" />
+        <el-table-column prop="weekly_plan" label="本周工作安排" min-width="140">
+          <template #default="scope">
+            <el-popover trigger="hover" placement="top" width="300">
+              <template #content>
+                <div style="white-space: pre-wrap;">{{ scope.row.weekly_plan || '暂无' }}</div>
+              </template>
+              <span>{{ (scope.row.weekly_plan || '').length > 15 ? (scope.row.weekly_plan.substring(0, 15) + '...') : (scope.row.weekly_plan || '暂无') }}</span>
+            </el-popover>
+          </template>
+        </el-table-column>
+        <el-table-column prop="next_week_plan" label="下周工作计划" min-width="140">
+          <template #default="scope">
+            <el-popover trigger="hover" placement="top" width="300">
+              <template #content>
+                <div style="white-space: pre-wrap;">{{ scope.row.next_week_plan || '暂无' }}</div>
+              </template>
+              <span>{{ (scope.row.next_week_plan || '').length > 15 ? (scope.row.next_week_plan.substring(0, 15) + '...') : (scope.row.next_week_plan || '暂无') }}</span>
+            </el-popover>
+          </template>
+        </el-table-column>
+        <el-table-column prop="stage" label="阶段" width="100" sortable>
+          <template #default="scope">
+            <el-tag :type="getStageType(scope.row.stage)" size="small">{{ scope.row.stage }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="predict_date" label="预计成交日期" width="130" sortable />
+        <el-table-column prop="owner_name" label="负责人" width="90" sortable />
+        <el-table-column prop="created_at" label="创建时间" width="130" sortable />
+        <el-table-column label="操作" width="180">
+          <template #default="scope">
+            <template v-if="scope.row.status === 'active'">
+              <el-button size="small" @click="editBusiness(scope.row)">编辑</el-button>
+              <el-button size="small" type="warning" @click="showFollow(scope.row)">跟进</el-button>
+              <el-button size="small" type="danger" @click="deleteBusiness(scope.row)">作废</el-button>
+            </template>
+            <template v-else>
+              <el-button size="small" type="success" @click="restoreBusiness(scope.row)">恢复</el-button>
+            </template>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
     
     <el-dialog v-model="showAddModal" :title="businessForm.id ? '编辑商机' : '添加商机'" width="500px">
       <el-form :model="businessForm" :rules="rules" ref="formRef">
@@ -62,14 +96,26 @@
         <el-form-item label="预计成交日期">
           <el-date-picker v-model="businessForm.predict_date" type="date" />
         </el-form-item>
-        <el-form-item label="来源">
-          <el-input v-model="businessForm.source" />
-        </el-form-item>
         <el-form-item label="行业">
           <el-input v-model="businessForm.industry" />
         </el-form-item>
         <el-form-item label="地区">
           <el-input v-model="businessForm.region" />
+        </el-form-item>
+        <el-form-item label="客情关系">
+          <el-select v-model="businessForm.customer_relation">
+            <el-option label="初次接触" value="初次接触" />
+            <el-option label="熟悉" value="熟悉" />
+            <el-option label="良好" value="良好" />
+            <el-option label="紧密" value="紧密" />
+            <el-option label="战略合作" value="战略合作" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="本周工作安排">
+          <el-input v-model="businessForm.weekly_plan" type="textarea" :rows="3" placeholder="本周工作安排（每周自动更新）" />
+        </el-form-item>
+        <el-form-item label="下周工作计划">
+          <el-input v-model="businessForm.next_week_plan" type="textarea" :rows="3" placeholder="下周工作计划（下周自动转为本周安排）" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -174,6 +220,7 @@ const currentBusiness = ref(null)
 const followLogs = ref([])
 
 const followSearchKeyword = ref('')
+const statusFilter = ref('active')
 
 const followForm = reactive({
   subject: '',
@@ -197,9 +244,12 @@ const businessForm = reactive({
   amount: 0,
   stage: '初步接触',
   predict_date: '',
-  source: '',
   industry: '',
   region: '',
+  customer_relation: '',
+  weekly_plan: '',
+  next_week_plan: '',
+  plan_week: '',
   owner_id: ''
 })
 
@@ -230,7 +280,7 @@ const getStageType = (stage) => {
 }
 
 const fetchBusiness = async () => {
-  const response = await api.get('/business')
+  const response = await api.get('/business', { status: statusFilter.value })
   if (response.code === 200) {
     businessList.value = response.data
   }
@@ -287,19 +337,37 @@ const editBusiness = (row) => {
 
 const deleteBusiness = async (row) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个商机吗？', '提示', {
+    await ElMessageBox.confirm('确定要作废这个商机吗？', '提示', {
       type: 'warning'
     })
     
     const response = await api.delete(`/business/${row.id}`)
     if (response.code === 200) {
-      ElMessage.success('删除成功')
+      ElMessage.success('作废成功')
       fetchBusiness()
     } else {
       ElMessage.error(response.message)
     }
   } catch (error) {
-    ElMessage.info('已取消删除')
+    ElMessage.info('已取消作废')
+  }
+}
+
+const restoreBusiness = async (row) => {
+  try {
+    await ElMessageBox.confirm('确定要恢复这个商机吗？', '提示', {
+      type: 'warning'
+    })
+    
+    const response = await api.put(`/business/${row.id}/restore`)
+    if (response.code === 200) {
+      ElMessage.success('恢复成功')
+      fetchBusiness()
+    } else {
+      ElMessage.error(response.message)
+    }
+  } catch (error) {
+    ElMessage.info('已取消恢复')
   }
 }
 
@@ -384,12 +452,28 @@ onMounted(() => {
   gap: 16px;
 }
 
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .add-btn {
   align-self: flex-start;
 }
 
+.status-filter {
+  width: 150px;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
 .data-table {
   width: 100%;
+  min-width: max-content;
 }
 
 .follow-container {
