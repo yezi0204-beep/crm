@@ -1,36 +1,17 @@
-import requests
-import json
+from app import app
 
-session = requests.Session()
-session.verify = False
-
-login_data = {'username': 'yewei', 'password': '123456'}
-try:
-    r = session.post('http://localhost:5000/api/auth/login', json=login_data)
-    result = r.json()
+with app.test_client() as client:
+    login_response = client.post('/api/auth/login', json={'username': 'yewei', 'password': '123456'})
+    token = login_response.get_json()['data']['token']
     
-    if result.get('code') == 200:
-        data = result.get('data', {})
-        token = data.get('token', data.get('access_token'))
-        
-        headers = {'Authorization': f'Bearer {token}'}
-        r = session.get('http://localhost:5000/api/business?status=active', headers=headers)
-        
-        data = r.json()
-        if data.get('code') == 200:
-            business_list = data.get('data', [])
-            
-            print("\n=== 检查有next_week_plan的商机 ===")
-            for b in business_list:
-                if b.get('next_week_plan'):
-                    print(f"ID:{b['id']} | {b['title'][:15]} | next_week_plan='{b['next_week_plan']}'")
-            
-            print("\n=== 检查字段是否存在 ===")
-            if business_list:
-                first = business_list[0]
-                print(f"所有字段: {list(first.keys())}")
-                print(f"next_week_plan存在: {'next_week_plan' in first}")
-                print(f"next_week_plan类型: {type(first.get('next_week_plan'))}")
-                print(f"next_week_plan值: '{first.get('next_week_plan')}'")
-except Exception as e:
-    print(f"Error: {e}")
+    auth_header = 'Bearer ' + token
+    qa_response = client.post(
+        '/api/qa',
+        json={'question': '我负责的客户有多少个？', 'stream': False},
+        headers={'Authorization': auth_header}
+    )
+    
+    data = qa_response.get_json()
+    print('Code:', data['code'])
+    print('Message:', data['message'])
+    print('Answer:', data['data']['answer'][:200], '...')
