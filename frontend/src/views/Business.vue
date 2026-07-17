@@ -25,22 +25,12 @@
         <el-table-column prop="customer_relation" label="客情关系" width="100" />
         <el-table-column prop="weekly_plan" label="本周工作安排" min-width="140">
           <template #default="scope">
-            <el-popover trigger="hover" placement="top" width="300">
-              <template #content>
-                <div style="white-space: pre-wrap;">{{ scope.row.weekly_plan || '暂无' }}</div>
-              </template>
-              <span>{{ (scope.row.weekly_plan || '').length > 15 ? (scope.row.weekly_plan.substring(0, 15) + '...') : (scope.row.weekly_plan || '暂无') }}</span>
-            </el-popover>
+            {{ scope.row.weekly_plan || '暂无' }}
           </template>
         </el-table-column>
         <el-table-column prop="next_week_plan" label="下周工作计划" min-width="140">
           <template #default="scope">
-            <el-popover trigger="hover" placement="top" width="300">
-              <template #content>
-                <div style="white-space: pre-wrap;">{{ scope.row.next_week_plan || '暂无' }}</div>
-              </template>
-              <span>{{ (scope.row.next_week_plan || '').length > 15 ? (scope.row.next_week_plan.substring(0, 15) + '...') : (scope.row.next_week_plan || '暂无') }}</span>
-            </el-popover>
+            {{ scope.row.next_week_plan || '暂无' }}
           </template>
         </el-table-column>
         <el-table-column prop="stage" label="阶段" width="100" sortable>
@@ -118,6 +108,30 @@
           <el-input v-model="businessForm.next_week_plan" type="textarea" :rows="3" placeholder="下周工作计划（下周自动转为本周安排）" />
         </el-form-item>
       </el-form>
+      
+      <div v-if="businessForm.id" class="plan-history-section">
+        <el-divider content-position="left">历史工作计划</el-divider>
+        <el-timeline v-if="planHistory.length > 0">
+          <el-timeline-item 
+            v-for="item in planHistory" 
+            :key="item.id" 
+            :timestamp="item.created_at"
+            placement="top"
+          >
+            <el-card>
+              <div class="plan-history-header">
+                <span class="plan-type" :class="item.plan_type">{{ item.plan_type === 'weekly' ? '本周计划' : '下周计划' }}</span>
+                <span class="plan-week">{{ item.week_label }}</span>
+              </div>
+              <div class="plan-content">{{ item.content }}</div>
+            </el-card>
+          </el-timeline-item>
+        </el-timeline>
+        <div v-else class="empty-history">
+          暂无历史工作计划
+        </div>
+      </div>
+      
       <template #footer>
         <el-button @click="showAddModal = false">取消</el-button>
         <el-button type="primary" @click="saveBusiness">确定</el-button>
@@ -253,6 +267,8 @@ const businessForm = reactive({
   owner_id: ''
 })
 
+const planHistory = ref([])
+
 const rules = {
   title: [{ required: true, message: '请输入商机名称', trigger: 'blur' }],
   amount: [{ required: true, message: '请输入金额', trigger: 'blur' }]
@@ -283,6 +299,16 @@ const fetchBusiness = async () => {
   const response = await api.get('/business', { status: statusFilter.value })
   if (response.code === 200) {
     businessList.value = response.data
+    if (businessList.value.length > 0) {
+      const first = businessList.value[0]
+      console.log('Business data sample:', {
+        id: first.id,
+        title: first.title,
+        next_week_plan: first.next_week_plan,
+        weekly_plan: first.weekly_plan,
+        plan_week: first.plan_week
+      })
+    }
   }
 }
 
@@ -308,6 +334,10 @@ const saveBusiness = async () => {
         businessForm.owner_id = authStore.username
       }
       
+      if (businessForm.next_week_plan) {
+        businessForm.plan_week = 'auto'
+      }
+      
       try {
         let response
         if (businessForm.id) {
@@ -329,10 +359,32 @@ const saveBusiness = async () => {
   })
 }
 
+const fetchPlanHistory = async (businessId) => {
+  const response = await api.get(`/business/${businessId}/plan_history`)
+  if (response.code === 200) {
+    planHistory.value = response.data
+  }
+}
+
 const editBusiness = (row) => {
-  Object.assign(businessForm, row)
-  businessForm.amount = (row.amount || 0) / 10000
+  Object.assign(businessForm, {
+    id: row.id,
+    title: row.title || '',
+    cust_id: row.cust_id || '',
+    stakeholder: row.stakeholder || '',
+    amount: (row.amount || 0) / 10000,
+    stage: row.stage || '初步接触',
+    predict_date: row.predict_date || '',
+    industry: row.industry || '',
+    region: row.region || '',
+    customer_relation: row.customer_relation || '',
+    weekly_plan: row.weekly_plan || '',
+    next_week_plan: row.next_week_plan || '',
+    plan_week: row.plan_week || '',
+    owner_id: row.owner_id || ''
+  })
   showAddModal.value = true
+  fetchPlanHistory(row.id)
 }
 
 const deleteBusiness = async (row) => {
@@ -547,4 +599,41 @@ onMounted(() => {
   padding-top: 16px;
   border-top: 1px solid #ebeef5;
 }
-</style>
+
+.plan-history-section {
+  margin-top: 16px;
+}
+
+.plan-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.plan-type {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.plan-type.weekly {
+  background: #e6f7ff;
+  color: #1890ff;
+}
+
+.plan-type.next_week {
+  background: #f6ffed;
+  color: #52c41a;
+}
+
+.plan-week {
+  font-size: 12px;
+  color: #909399;
+}
+
+.plan-content {
+  font-size: 14px;
+  color: #303133;
+  line-height: 1.6;
+}</style>

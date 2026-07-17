@@ -170,7 +170,7 @@
       <el-table-column label="操作" width="180" fixed="right">
         <template #default="scope">
           <el-button size="small" @click="editContract(scope.row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="deleteContract(scope.row)">删除</el-button>
+          <el-button v-if="isAdmin" size="small" type="danger" @click="deleteContract(scope.row)">删除</el-button>
           <el-button size="small" @click="previewFiles(scope.row)">预览文件</el-button>
         </template>
       </el-table-column>
@@ -267,6 +267,10 @@
         
         <el-form-item label="合同约定回款节点">
           <el-input v-model="contractForm.payment_nodes" type="textarea" :rows="3" />
+        </el-form-item>
+        
+        <el-form-item label="备注">
+          <el-input v-model="contractForm.note" type="textarea" :rows="3" placeholder="输入合同备注信息" />
         </el-form-item>
         
         <el-divider content-position="left">📎 文件上传</el-divider>
@@ -451,6 +455,7 @@ import { useRoute } from 'vue-router'
 const authStore = useAuthStore()
 const route = useRoute()
 const contracts = ref([])
+const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
 const users = ref([])
 const searchKeyword = ref('')
 const showAddModal = ref(false)
@@ -483,13 +488,14 @@ const allColumns = [
   { prop: 'owner_name', label: '负责人', width: 90 },
   { prop: 'acceptance_nodes', label: '验收节点', width: 120 },
   { prop: 'payment_nodes', label: '回款节点', width: 120 },
+  { prop: 'note', label: '备注', width: '', minWidth: 150 },
   { prop: 'status', label: '状态', width: 80 }
 ]
 
 const visibleColumns = ref([
   'contract_name', 'contract_no', 'party_a', 'total_amt', 
   'paid_amt', 'pending_amt', 'sign_date', 'business_type', 
-  'classification', 'owner_name', 'acceptance_nodes', 'payment_nodes', 'status'
+  'classification', 'owner_name', 'acceptance_nodes', 'payment_nodes', 'note', 'status'
 ])
 
 const visibleColumnConfigs = computed(() => {
@@ -525,6 +531,7 @@ const contractForm = reactive({
   owner_id: '',
   acceptance_nodes: '',
   payment_nodes: '',
+  note: '',
   contract_file_path: '',
   tech_agreement_file_path: ''
 })

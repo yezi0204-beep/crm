@@ -20,9 +20,9 @@ def after_request(response):
 def options():
     return jsonify({'code': 200, 'message': 'OK', 'data': None})
 
-SECRET_KEY = "crm_secret_key_2026"
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "crm_app.db")
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads", "contracts")
+SECRET_KEY = os.environ.get('SECRET_KEY', "crm_secret_key_2026")
+DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(os.path.dirname(__file__)), "crm_app.db"))
+UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads", "contracts"))
 
 def init_business_table():
     db = get_db()
@@ -45,6 +45,21 @@ def init_business_table():
         pass
     try:
         cursor.execute("ALTER TABLE business ADD COLUMN plan_week TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("""
+            CREATE TABLE business_plan_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                business_id INTEGER,
+                plan_type TEXT,
+                week_label TEXT,
+                content TEXT,
+                created_at TEXT,
+                created_by TEXT,
+                FOREIGN KEY (business_id) REFERENCES business(id)
+            )
+        """)
     except:
         pass
     db.commit()
@@ -307,14 +322,15 @@ def create_contract():
             (b_id, contract_no, party_a, project_order_no, total_amt, paid_amt, sign_date, owner_id, status,
              contract_name, classification, is_audit, pending_acceptance_amount,
              cost, gross_profit, acceptance_date, expected_income_date,
-             expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+             expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
         """, (
             data.get('b_id'), contract_no, data.get('party_a'), data.get('project_order_no'),
             data.get('total_amt'), 0, data.get('sign_date'), data.get('owner_id'), '执行中',
             data.get('contract_name'), data.get('classification'), data.get('is_audit'), data.get('pending_acceptance_amount'),
             data.get('cost'), data.get('gross_profit'), data.get('acceptance_date'), data.get('expected_income_date'),
-            data.get('expected_income_year'), data.get('business_type'), data.get('acceptance_nodes'), data.get('payment_nodes')
+            data.get('expected_income_year'), data.get('business_type'), data.get('acceptance_nodes'), data.get('payment_nodes'),
+            data.get('note')
         ))
         db.commit()
         contract_id = cursor.lastrowid
@@ -344,7 +360,7 @@ def update_contract(contract_id):
                 classification=?, is_audit=?, pending_acceptance_amount=?,
                 cost=?, gross_profit=?, acceptance_date=?, expected_income_date=?,
                 expected_income_year=?, business_type=?, status=?, owner_id=?,
-                acceptance_nodes=?, payment_nodes=?
+                acceptance_nodes=?, payment_nodes=?, note=?
             WHERE id=?
         """, (
             data.get('contract_name'), data.get('contract_no'), data.get('party_a'), data.get('project_order_no'),
@@ -352,7 +368,7 @@ def update_contract(contract_id):
             data.get('pending_acceptance_amount'), data.get('cost'), data.get('gross_profit'),
             data.get('acceptance_date'), data.get('expected_income_date'), data.get('expected_income_year'),
             data.get('business_type'), data.get('status'), data.get('owner_id'),
-            data.get('acceptance_nodes'), data.get('payment_nodes'), contract_id
+            data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'), contract_id
         ))
         db.commit()
         
@@ -627,6 +643,10 @@ def delete_contract(contract_id):
     if not payload:
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
+    role = payload.get('role', '')
+    if role != '主任' and role != '院长':
+        return jsonify({'code': 403, 'message': '权限不足，仅主任和院长可删除合同', 'data': None})
+    
     db = get_db()
     cursor = db.cursor()
     
@@ -792,15 +812,36 @@ def get_business():
     cursor = db.cursor()
     
     today = datetime.now()
-    current_week = today.strftime('%Y-W%W')
+    current_week_num = int(today.strftime('%W'))
+    
+    cursor.execute("""
+        INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
+        SELECT id, 'weekly', plan_week, weekly_plan, CURRENT_TIMESTAMP
+        FROM business 
+        WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != '' 
+            AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ? 
+            AND next_week_plan IS NOT NULL AND next_week_plan != ''
+            AND weekly_plan IS NOT NULL AND weekly_plan != ''
+    """, (current_week_num,))
+    
+    cursor.execute("""
+        INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
+        SELECT id, 'next_week', plan_week, next_week_plan, CURRENT_TIMESTAMP
+        FROM business 
+        WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != '' 
+            AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ? 
+            AND next_week_plan IS NOT NULL AND next_week_plan != ''
+    """, (current_week_num,))
     
     cursor.execute("""
         UPDATE business SET 
             weekly_plan = next_week_plan, 
             next_week_plan = '', 
             plan_week = ?
-        WHERE status = 'active' AND plan_week != ? AND next_week_plan IS NOT NULL AND next_week_plan != ''
-    """, (current_week, current_week))
+        WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != '' 
+            AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ? 
+            AND next_week_plan IS NOT NULL AND next_week_plan != ''
+    """, (today.strftime('%Y-W%W'), current_week_num))
     db.commit()
     
     if status == 'deleted':
@@ -867,13 +908,19 @@ def create_business():
     cursor = db.cursor()
     
     try:
+        plan_week = data.get('plan_week')
+        if plan_week == 'auto':
+            today = datetime.now()
+            current_week_num = int(today.strftime('%W'))
+            plan_week = today.strftime('%Y-W') + str(current_week_num + 1).zfill(2)
+        
         cursor.execute("""
             INSERT INTO business (title, cust_id, stakeholder, amount, stage, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get('title'), data.get('cust_id'), data.get('stakeholder'), data.get('amount'), data.get('stage'),
             data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id'),
-            data.get('address'), data.get('customer_relation'), data.get('weekly_plan'), data.get('next_week_plan'), data.get('plan_week')
+            data.get('address'), data.get('customer_relation'), data.get('weekly_plan'), data.get('next_week_plan'), plan_week
         ))
         db.commit()
         
@@ -936,6 +983,35 @@ def update_business(business_id):
     cursor = db.cursor()
     
     try:
+        cursor.execute("SELECT weekly_plan, next_week_plan, plan_week FROM business WHERE id=?", (business_id,))
+        old_data = cursor.fetchone()
+        
+        plan_week = data.get('plan_week')
+        if plan_week == 'auto':
+            today = datetime.now()
+            current_week_num = int(today.strftime('%W'))
+            plan_week = today.strftime('%Y-W') + str(current_week_num + 1).zfill(2)
+        
+        new_weekly_plan = data.get('weekly_plan', '')
+        new_next_week_plan = data.get('next_week_plan', '')
+        
+        if old_data:
+            old_weekly_plan = old_data['weekly_plan']
+            old_next_week_plan = old_data['next_week_plan']
+            old_plan_week = old_data['plan_week']
+            
+            if old_weekly_plan and old_weekly_plan != new_weekly_plan:
+                cursor.execute("""
+                    INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (business_id, 'weekly', old_plan_week or '', old_weekly_plan))
+            
+            if old_next_week_plan and old_next_week_plan != new_next_week_plan:
+                cursor.execute("""
+                    INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (business_id, 'next_week', plan_week or '', old_next_week_plan))
+        
         cursor.execute("""
             UPDATE business SET
                 title=?, cust_id=?, stakeholder=?, amount=?, stage=?, predict_date=?,
@@ -947,7 +1023,7 @@ def update_business(business_id):
             data.get('amount'), data.get('stage'), data.get('predict_date'),
             data.get('source'), data.get('industry'), data.get('region'),
             data.get('address'), data.get('customer_relation'),
-            data.get('weekly_plan'), data.get('next_week_plan'), data.get('plan_week'),
+            data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
             business_id
         ))
         db.commit()
@@ -956,6 +1032,37 @@ def update_business(business_id):
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@app.route('/api/business/<int:business_id>/plan_history', methods=['GET'])
+def get_business_plan_history(business_id):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute("""
+        SELECT id, plan_type, week_label, content, created_at
+        FROM business_plan_history 
+        WHERE business_id = ?
+        ORDER BY created_at DESC
+    """, (business_id,))
+    
+    rows = cursor.fetchall()
+    history = []
+    for row in rows:
+        history.append({
+            'id': row['id'],
+            'plan_type': row['plan_type'],
+            'week_label': row['week_label'],
+            'content': row['content'],
+            'created_at': row['created_at']
+        })
+    
+    return jsonify({'code': 200, 'message': 'success', 'data': history})
 
 
 @app.route('/api/dashboard', methods=['GET'])
@@ -1392,6 +1499,10 @@ def delete_payment_record(record_id):
     payload = verify_token(token)
     if not payload:
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    role = payload.get('role', '')
+    if role != '主任' and role != '院长':
+        return jsonify({'code': 403, 'message': '权限不足，仅主任和院长可删除回款记录', 'data': None})
     
     db = get_db()
     cursor = db.cursor()
@@ -1878,12 +1989,39 @@ def get_pool():
     db = get_db()
     cursor = db.cursor()
     
-    cursor.execute("SELECT * FROM customers WHERE owner_id IS NULL OR owner_id = '' ORDER BY created_at DESC")
+    cursor.execute("""
+        SELECT c.*, u.name as previous_owner_name 
+        FROM customers c 
+        LEFT JOIN users u ON c.previous_owner = u.username 
+        WHERE c.owner_id IS NULL OR c.owner_id = '' 
+        ORDER BY c.created_at DESC
+    """)
     rows = cursor.fetchall()
     pool_data = []
+    today = datetime.now().date()
     for row in rows:
         item = dict(row)
         item['quality_score'] = 65 + (item.get('id', 0) % 35)
+        
+        last_follow = item.get('last_follow')
+        if last_follow:
+            try:
+                follow_date = datetime.strptime(str(last_follow), '%Y-%m-%d').date()
+                days_unfollowed = (today - follow_date).days
+            except:
+                days_unfollowed = 0
+        else:
+            created_at = item.get('created_at')
+            if created_at:
+                try:
+                    create_date = datetime.strptime(str(created_at), '%Y-%m-%d').date()
+                    days_unfollowed = (today - create_date).days
+                except:
+                    days_unfollowed = 0
+            else:
+                days_unfollowed = 0
+        item['days_unfollowed'] = days_unfollowed
+        
         pool_data.append(item)
     
     return jsonify({'code': 200, 'message': 'success', 'data': pool_data})

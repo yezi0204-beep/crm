@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  backend:
+    image: crm-backend:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      - /share/CACHEDEV1_DATA/crm/data/crm_app.db:/app/crm_app.db
+      - /share/CACHEDEV1_DATA/crm/uploads:/app/uploads
+    environment:
+      - FLASK_ENV=production
+      - DB_PATH=/app/crm_app.db
+      - UPLOAD_DIR=/app/uploads
+    restart: unless-stopped
+    networks:
+      - crm-network
+
+  frontend:
+    image: crm-frontend:latest
+    ports:
+      - "8088:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - crm-network
+
+networks:
+  crm-network:
+    driver: bridge

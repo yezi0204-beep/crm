@@ -9,9 +9,9 @@
       <el-table-column prop="name" label="联系人" width="120" sortable />
       <el-table-column prop="phone" label="手机号" width="130" sortable />
       <el-table-column prop="company" label="公司名称" min-width="180" sortable />
-      <el-table-column prop="level" label="客户等级" width="100" sortable>
+      <el-table-column prop="level" label="客户等级" width="120" sortable>
         <template #default="scope">
-          <el-tag :type="getLevelType(scope.row.level)" size="small">{{ scope.row.level }}</el-tag>
+          <el-tag :type="getLevelType(scope.row.level)" size="small">{{ getLevelLabel(scope.row.level) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="source" label="来源" width="120" sortable />
@@ -40,9 +40,9 @@
         </el-form-item>
         <el-form-item label="客户等级">
           <el-select v-model="customerForm.level">
-            <el-option label="A" value="A" />
-            <el-option label="B" value="B" />
-            <el-option label="C" value="C" />
+            <el-option label="A(重点)" value="A" />
+            <el-option label="B(普通)" value="B" />
+            <el-option label="C(一般)" value="C" />
           </el-select>
         </el-form-item>
         <el-form-item label="来源">
@@ -187,12 +187,19 @@ const rules = {
 }
 
 const getLevelType = (level) => {
-  const types = {
-    'A': 'danger',
-    'B': 'warning',
-    'C': 'info'
-  }
-  return types[level] || 'info'
+  if (!level) return 'info'
+  if (level.startsWith('A')) return 'danger'
+  if (level.startsWith('B')) return 'warning'
+  if (level.startsWith('C')) return 'info'
+  return 'info'
+}
+
+const getLevelLabel = (level) => {
+  if (!level) return ''
+  if (level.startsWith('A')) return 'A(重点)'
+  if (level.startsWith('B')) return 'B(普通)'
+  if (level.startsWith('C')) return 'C(一般)'
+  return level
 }
 
 const fetchCustomers = async () => {

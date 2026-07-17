@@ -42,7 +42,7 @@
       <el-table-column label="操作" width="120">
         <template #default="scope">
           <el-button size="small" @click="editPayment(scope.row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="deletePayment(scope.row)">删除</el-button>
+          <el-button v-if="isAdmin" size="small" type="danger" @click="deletePayment(scope.row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -240,6 +240,7 @@ import api from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
 const allPaymentRecords = ref([])
 const contracts = ref([])
 const showAddModal = ref(false)

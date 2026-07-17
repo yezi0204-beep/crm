@@ -12,43 +12,52 @@
       <div class="filter-row">
         <el-select v-model="filters.industry" placeholder="行业" clearable>
           <el-option label="全部" value="" />
-          <el-option label="信息技术" value="信息技术" />
-          <el-option label="金融" value="金融" />
-          <el-option label="制造业" value="制造业" />
-          <el-option label="政府" value="政府" />
+          <el-option label="J(咨询服务)" value="J" />
+          <el-option label="M(技术开发)" value="M" />
         </el-select>
         <el-select v-model="filters.level" placeholder="客户级别" clearable>
           <el-option label="全部" value="" />
-          <el-option label="A级" value="A" />
-          <el-option label="B级" value="B" />
-          <el-option label="C级" value="C" />
+          <el-option label="A(重点)" value="A" />
+          <el-option label="B(普通)" value="B" />
+          <el-option label="C(一般)" value="C" />
         </el-select>
         <el-input v-model="filters.keyword" placeholder="搜索客户名称" clearable />
         <el-button type="primary" @click="fetchPoolData">搜索</el-button>
       </div>
     </el-card>
     
-    <el-card>
-      <el-table :data="poolData" stripe @selection-change="handleSelectionChange">
+    <div class="table-wrapper">
+      <el-table :data="poolData" stripe border @selection-change="handleSelectionChange" class="data-table">
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="name" label="客户名称" sortable />
-        <el-table-column prop="company" label="公司名称" sortable />
-        <el-table-column prop="phone" label="电话" sortable />
-        <el-table-column prop="level" label="级别" sortable />
-        <el-table-column prop="source" label="来源" sortable />
-        <el-table-column prop="created_at" label="入库时间" sortable />
-        <el-table-column prop="quality_score" label="质量评分" sortable>
+        <el-table-column prop="name" label="联系人" width="120" sortable />
+        <el-table-column prop="phone" label="手机号" width="130" sortable />
+        <el-table-column prop="company" label="公司名称" min-width="180" sortable />
+        <el-table-column prop="level" label="客户等级" width="120" sortable>
           <template #default="scope">
-            <el-progress :percentage="scope.row.quality_score" :color="getScoreColor(scope.row.quality_score)" />
+            <el-tag :type="getLevelType(scope.row.level)" size="small">{{ getLevelLabel(scope.row.level) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作">
+        <el-table-column prop="source" label="来源" width="120" sortable />
+        <el-table-column prop="previous_owner_name" label="前负责人" width="120" sortable />
+        <el-table-column prop="days_unfollowed" label="未跟进天数" width="120" sortable>
+          <template #default="scope">
+            <span :class="{ 'unfollowed-highlight': scope.row.days_unfollowed > 7 }">{{ scope.row.days_unfollowed }}天</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="industry" label="业态" width="100" sortable />
+        <el-table-column prop="quality_score" label="质量评分" width="100" sortable>
+          <template #default="scope">
+            <span :class="{ 'score-high': scope.row.quality_score >= 80, 'score-medium': scope.row.quality_score >= 60 && scope.row.quality_score < 80, 'score-low': scope.row.quality_score < 60 }">{{ scope.row.quality_score }}分</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="入库时间" width="150" sortable />
+        <el-table-column label="操作" width="100">
           <template #default="scope">
             <el-button size="small" @click="handleClaimSingle(scope.row)">认领</el-button>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
+    </div>
   </div>
 </template>
 
@@ -103,6 +112,22 @@ const getScoreColor = (score) => {
   return '#ff6b6b'
 }
 
+const getLevelType = (level) => {
+  if (!level) return 'info'
+  if (level.startsWith('A')) return 'danger'
+  if (level.startsWith('B')) return 'warning'
+  if (level.startsWith('C')) return 'info'
+  return 'info'
+}
+
+const getLevelLabel = (level) => {
+  if (!level) return ''
+  if (level.startsWith('A')) return 'A(重点)'
+  if (level.startsWith('B')) return 'B(普通)'
+  if (level.startsWith('C')) return 'C(一般)'
+  return level
+}
+
 onMounted(() => {
   fetchPoolData()
 })
@@ -148,5 +173,34 @@ onMounted(() => {
 
 :deep(.el-input) {
   width: 200px;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  min-width: max-content;
+}
+
+.unfollowed-highlight {
+  color: #f56c6c;
+  font-weight: bold;
+}
+
+.score-high {
+  color: #4ecdc4;
+  font-weight: bold;
+}
+
+.score-medium {
+  color: #fac858;
+  font-weight: bold;
+}
+
+.score-low {
+  color: #ff6b6b;
+  font-weight: bold;
 }
 </style>
