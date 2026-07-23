@@ -63,6 +63,10 @@ def init_business_table():
     except:
         pass
     try:
+        cursor.execute("ALTER TABLE business ADD COLUMN note TEXT")
+    except:
+        pass
+    try:
         cursor.execute("""
             CREATE TABLE business_plan_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,11 +83,49 @@ def init_business_table():
         pass
     db.commit()
 
+def init_operation_logs_table():
+    db = get_db()
+    cursor = db.cursor()
+    try:
+        cursor.execute("""
+            CREATE TABLE operation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                module TEXT NOT NULL,
+                detail TEXT,
+                ip_address TEXT,
+                created_at TEXT NOT NULL,
+                is_read INTEGER DEFAULT 0
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE operation_logs ADD COLUMN is_read INTEGER DEFAULT 0")
+    except:
+        pass
+    db.commit()
+
+def record_operation_log(username, operation, module, detail=''):
+    try:
+        db = get_db()
+        cursor = db.cursor()
+        ip_address = request.remote_addr if request else ''
+        cursor.execute("""
+            INSERT INTO operation_logs (username, operation, module, detail, ip_address, created_at, is_read)
+            VALUES (?, ?, ?, ?, ?, ?, 0)
+        """, (username, operation, module, detail, ip_address, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        db.commit()
+    except Exception as e:
+        print(f"Failed to record operation log: {e}")
+
 def get_db():
     if 'db' not in g:
         g.db = sqlite3.connect(DB_PATH, check_same_thread=False)
         g.db.row_factory = sqlite3.Row
         init_business_table()
+        init_operation_logs_table()
     return g.db
 
 
@@ -155,6 +197,7 @@ def login():
     
     if row and check_password(password, row['password_hash']):
         token = create_token(row['username'], row['name'], row['role'])
+        record_operation_log(row['username'], '登录', '系统', f'用户 {row["name"]} 登录系统')
         return jsonify({
             'code': 200,
             'message': '登录成功',
@@ -199,6 +242,10 @@ def logout():
     if token:
         db = get_db()
         cursor = db.cursor()
+        cursor.execute('SELECT username, name FROM tokens WHERE token = ?', (token,))
+        row = cursor.fetchone()
+        if row:
+            record_operation_log(row['username'], '登出', '系统', f'用户 {row["name"]} 退出系统')
         cursor.execute('DELETE FROM tokens WHERE token = ?', (token,))
         db.commit()
     return jsonify({'code': 200, 'message': '退出成功', 'data': None})
@@ -317,6 +364,7 @@ def create_contract():
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
     data = request.json
+    username = payload['username']
     
     db = get_db()
     cursor = db.cursor()
@@ -350,6 +398,8 @@ def create_contract():
         db.commit()
         contract_id = cursor.lastrowid
         
+        record_operation_log(username, '创建', '合同', f'创建合同：{data.get("contract_name")}（{contract_no}）')
+        
         return jsonify({'code': 200, 'message': '合同创建成功', 'data': {'id': contract_id, 'contract_no': contract_no}})
     except Exception as e:
         db.rollback()
@@ -364,6 +414,7 @@ def update_contract(contract_id):
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
     data = request.json
+    username = payload['username']
     
     db = get_db()
     cursor = db.cursor()
@@ -386,6 +437,8 @@ def update_contract(contract_id):
             data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'), contract_id
         ))
         db.commit()
+        
+        record_operation_log(username, '编辑', '合同', f'编辑合同：{data.get("contract_name")}（ID:{contract_id}）')
         
         return jsonify({'code': 200, 'message': '合同更新成功', 'data': None})
     except Exception as e:
@@ -666,8 +719,14 @@ def delete_contract(contract_id):
     cursor = db.cursor()
     
     try:
+        cursor.execute("SELECT contract_name, contract_no FROM contracts WHERE id=?", (contract_id,))
+        row = cursor.fetchone()
+        contract_info = f"{row['contract_name']}（{row['contract_no']}）" if row else f"ID:{contract_id}"
+        
         cursor.execute("DELETE FROM contracts WHERE id=?", (contract_id,))
         db.commit()
+        
+        record_operation_log(payload['username'], '删除', '合同', f'删除合同：{contract_info}')
         
         return jsonify({'code': 200, 'message': '合同删除成功', 'data': None})
     except Exception as e:
@@ -739,6 +798,7 @@ def create_customer():
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
     data = request.json
+    username = payload['username']
     
     db = get_db()
     cursor = db.cursor()
@@ -753,6 +813,8 @@ def create_customer():
             data.get('contact_name'), data.get('email'), data.get('industry'), data.get('region')
         ))
         db.commit()
+        
+        record_operation_log(username, '创建', '客户', f'创建客户：{data.get("name")}（{data.get("company")}）')
         
         return jsonify({'code': 200, 'message': '客户创建成功', 'data': {'id': cursor.lastrowid}})
     except Exception as e:
@@ -771,8 +833,14 @@ def delete_customer(cust_id):
     cursor = db.cursor()
     
     try:
+        cursor.execute("SELECT name, company FROM customers WHERE id=?", (cust_id,))
+        row = cursor.fetchone()
+        customer_info = f"{row['name']}（{row['company']}）" if row else f"ID:{cust_id}"
+        
         cursor.execute("DELETE FROM customers WHERE id=?", (cust_id,))
         db.commit()
+        
+        record_operation_log(payload['username'], '删除', '客户', f'删除客户：{customer_info}')
         
         return jsonify({'code': 200, 'message': '客户删除成功', 'data': None})
     except Exception as e:
@@ -788,6 +856,7 @@ def update_customer(cust_id):
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
     data = request.json
+    username = payload['username']
     
     db = get_db()
     cursor = db.cursor()
@@ -823,6 +892,8 @@ def update_customer(cust_id):
                 data.get('industry'), data.get('region'), cust_id
             ))
         db.commit()
+        
+        record_operation_log(username, '编辑', '客户', f'编辑客户：{data.get("name")}（ID:{cust_id}）')
         
         return jsonify({'code': 200, 'message': '客户更新成功', 'data': None})
     except Exception as e:
@@ -936,6 +1007,7 @@ def create_business():
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
     data = request.json
+    username = payload['username']
     
     db = get_db()
     cursor = db.cursor()
@@ -948,14 +1020,17 @@ def create_business():
             plan_week = today.strftime('%Y-W') + str(current_week_num + 1).zfill(2)
         
         cursor.execute("""
-            INSERT INTO business (title, cust_id, stakeholder, amount, stage, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO business (title, cust_id, stakeholder, amount, stage, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get('title'), data.get('cust_id'), data.get('stakeholder'), data.get('amount'), data.get('stage'),
             data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id'),
-            data.get('address'), data.get('customer_relation'), data.get('weekly_plan'), data.get('next_week_plan'), plan_week
+            data.get('address'), data.get('customer_relation'), data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
+            data.get('note')
         ))
         db.commit()
+        
+        record_operation_log(username, '创建', '商机', f'创建商机：{data.get("title")}')
         
         return jsonify({'code': 200, 'message': '商机创建成功', 'data': {'id': cursor.lastrowid}})
     except Exception as e:
@@ -974,8 +1049,14 @@ def delete_business(business_id):
     cursor = db.cursor()
     
     try:
+        cursor.execute("SELECT title FROM business WHERE id=?", (business_id,))
+        row = cursor.fetchone()
+        business_info = row['title'] if row else f"ID:{business_id}"
+        
         cursor.execute("UPDATE business SET status = 'void' WHERE id=?", (business_id,))
         db.commit()
+        
+        record_operation_log(payload['username'], '作废', '商机', f'作废商机：{business_info}')
         
         return jsonify({'code': 200, 'message': '商机作废成功', 'data': None})
     except Exception as e:
@@ -1011,6 +1092,7 @@ def update_business(business_id):
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
     data = request.json
+    username = payload['username']
     
     db = get_db()
     cursor = db.cursor()
@@ -1045,21 +1127,42 @@ def update_business(business_id):
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """, (business_id, 'next_week', plan_week or '', old_next_week_plan))
         
-        cursor.execute("""
-            UPDATE business SET
-                title=?, cust_id=?, stakeholder=?, amount=?, stage=?, predict_date=?,
-                source=?, industry=?, region=?, address=?, customer_relation=?,
-                weekly_plan=?, next_week_plan=?, plan_week=?
-            WHERE id=?
-        """, (
-            data.get('title'), data.get('cust_id'), data.get('stakeholder'), 
-            data.get('amount'), data.get('stage'), data.get('predict_date'),
-            data.get('source'), data.get('industry'), data.get('region'),
-            data.get('address'), data.get('customer_relation'),
-            data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
-            business_id
-        ))
+        current_role = payload.get('role', '')
+        can_change_owner = current_role == '主任' or current_role == '院长'
+        
+        if can_change_owner and 'owner_id' in data:
+            cursor.execute("""
+                UPDATE business SET
+                    title=?, cust_id=?, stakeholder=?, amount=?, stage=?, predict_date=?,
+                    source=?, industry=?, region=?, address=?, customer_relation=?,
+                    weekly_plan=?, next_week_plan=?, plan_week=?, owner_id=?, note=?
+                WHERE id=?
+            """, (
+                data.get('title'), data.get('cust_id'), data.get('stakeholder'), 
+                data.get('amount'), data.get('stage'), data.get('predict_date'),
+                data.get('source'), data.get('industry'), data.get('region'),
+                data.get('address'), data.get('customer_relation'),
+                data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
+                data.get('owner_id'), data.get('note'), business_id
+            ))
+        else:
+            cursor.execute("""
+                UPDATE business SET
+                    title=?, cust_id=?, stakeholder=?, amount=?, stage=?, predict_date=?,
+                    source=?, industry=?, region=?, address=?, customer_relation=?,
+                    weekly_plan=?, next_week_plan=?, plan_week=?, note=?
+                WHERE id=?
+            """, (
+                data.get('title'), data.get('cust_id'), data.get('stakeholder'), 
+                data.get('amount'), data.get('stage'), data.get('predict_date'),
+                data.get('source'), data.get('industry'), data.get('region'),
+                data.get('address'), data.get('customer_relation'),
+                data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
+                data.get('note'), business_id
+            ))
         db.commit()
+        
+        record_operation_log(username, '编辑', '商机', f'编辑商机：{data.get("title")}（ID:{business_id}）')
         
         return jsonify({'code': 200, 'message': '商机更新成功', 'data': None})
     except Exception as e:
@@ -1466,6 +1569,7 @@ def create_payment_record():
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
     data = request.json
+    username = payload['username']
     
     db = get_db()
     cursor = db.cursor()
@@ -1482,6 +1586,8 @@ def create_payment_record():
         cursor.execute("UPDATE contracts SET paid_amt = ? WHERE id = ?", (total_paid, data.get('contract_id')))
         db.commit()
         
+        record_operation_log(username, '创建', '回款', f'创建回款记录，合同ID:{data.get("contract_id")}，金额:{data.get("amount")}')
+        
         return jsonify({'code': 200, 'message': '回款记录创建成功', 'data': None})
     except Exception as e:
         db.rollback()
@@ -1496,6 +1602,7 @@ def update_payment_record(record_id):
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
     
     data = request.json
+    username = payload['username']
     
     db = get_db()
     cursor = db.cursor()
@@ -1519,6 +1626,8 @@ def update_payment_record(record_id):
         total_paid = cursor.fetchone()['total'] or 0
         cursor.execute("UPDATE contracts SET paid_amt = ? WHERE id = ?", (total_paid, original_contract_id))
         db.commit()
+        
+        record_operation_log(username, '编辑', '回款', f'编辑回款记录，ID:{record_id}，金额:{data.get("amount")}')
         
         return jsonify({'code': 200, 'message': '回款记录更新成功', 'data': None})
     except Exception as e:
@@ -1553,6 +1662,8 @@ def delete_payment_record(record_id):
             cursor.execute("UPDATE contracts SET paid_amt = ? WHERE id = ?", (total_paid, contract_id))
         
         db.commit()
+        
+        record_operation_log(payload['username'], '删除', '回款', f'删除回款记录，ID:{record_id}')
         
         return jsonify({'code': 200, 'message': '回款记录删除成功', 'data': None})
     except Exception as e:
@@ -2087,10 +2198,47 @@ def claim_pool():
         """, (username, datetime.now().strftime('%Y-%m-%d'), *customer_ids))
         
         db.commit()
+        record_operation_log(username, '认领', '公海池', f'认领客户，数量:{cursor.rowcount}，ID:{customer_ids}')
         return jsonify({'code': 200, 'message': f'成功认领 {cursor.rowcount} 条线索', 'data': {'claimed_count': cursor.rowcount}})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': f'认领失败: {str(e)}', 'data': None})
+
+
+@app.route('/api/pool/release', methods=['POST'])
+def release_pool():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    current_role = payload.get('role', '')
+    if current_role != '主任' and current_role != '院长':
+        return jsonify({'code': 403, 'message': '无权操作', 'data': None})
+    
+    data = request.get_json()
+    customer_ids = data.get('customer_ids', [])
+    
+    if not customer_ids:
+        return jsonify({'code': 400, 'message': '请选择要释放的客户', 'data': None})
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        placeholders = ','.join('?' * len(customer_ids))
+        cursor.execute(f"""
+            UPDATE customers 
+            SET previous_owner = owner_id, owner_id = '', last_follow = NULL
+            WHERE id IN ({placeholders}) AND owner_id IS NOT NULL AND owner_id != ''
+        """, (*customer_ids,))
+        
+        db.commit()
+        record_operation_log(payload['username'], '释放', '公海池', f'释放客户到公海池，数量:{cursor.rowcount}，ID:{customer_ids}')
+        return jsonify({'code': 200, 'message': f'成功释放 {cursor.rowcount} 条客户到公海池', 'data': {'released_count': cursor.rowcount}})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': f'释放失败: {str(e)}', 'data': None})
 
 
 @app.route('/api/workhours', methods=['GET'])
@@ -2246,14 +2394,25 @@ def upload_contract_file():
     return jsonify({'code': 200, 'message': '文件上传成功', 'data': {'file_path': f"uploads/contracts/{filename}"}})
 
 
-@app.route('/api/contracts/download/<int:contract_id>/<file_type>', methods=['GET'])
-def download_contract_file(contract_id, file_type):
+@app.route('/api/contracts/test-download', methods=['GET'])
+def test_download_route():
+    print("DEBUG: test_download_route called")
+    return jsonify({'code': 200, 'message': '测试路由工作正常', 'data': None})
+
+@app.route('/api/download-contract', methods=['GET'])
+def download_contract_file():
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
     if not token:
         token = request.args.get('token', '')
     payload = verify_token(token)
     if not payload:
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    contract_id = request.args.get('id', type=int)
+    file_type = request.args.get('type')
+    
+    if not contract_id or not file_type:
+        return jsonify({'code': 400, 'message': '参数错误', 'data': None})
     
     db = get_db()
     cursor = db.cursor()
@@ -2276,11 +2435,15 @@ def download_contract_file(contract_id, file_type):
         return jsonify({'code': 404, 'message': '文件不存在', 'data': None})
     
     full_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), file_path)
+    full_path = os.path.abspath(full_path)
     
     if not os.path.exists(full_path):
         return jsonify({'code': 404, 'message': '文件不存在', 'data': None})
     
-    return send_from_directory(os.path.dirname(full_path), os.path.basename(full_path), as_attachment=False)
+    directory = os.path.dirname(full_path)
+    filename = os.path.basename(full_path)
+    
+    return send_from_directory(directory, filename, as_attachment=False)
 
 
 @app.route('/api/qa', methods=['POST'])
@@ -2725,6 +2888,247 @@ def get_default_answer(question):
 请用自然语言提问，例如："待回款金额最高的客户是谁？"
 """
     return help_text
+
+
+@app.route('/api/operation_logs', methods=['GET'])
+def get_operation_logs():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    role = payload.get('role', '')
+    if role != '主任':
+        return jsonify({'code': 403, 'message': '权限不足，仅主任可查看操作日志', 'data': None})
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    keyword = request.args.get('keyword', '')
+    start_date = request.args.get('start_date', '')
+    end_date = request.args.get('end_date', '')
+    
+    conditions = []
+    params = []
+    
+    if keyword:
+        conditions.append("(username LIKE ? OR operation LIKE ? OR module LIKE ? OR detail LIKE ?)")
+        params.extend([f'%{keyword}%', f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'])
+    
+    if start_date:
+        conditions.append("created_at >= ?")
+        params.append(start_date)
+    
+    if end_date:
+        conditions.append("created_at <= ?")
+        params.append(end_date + ' 23:59:59')
+    
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+    
+    cursor.execute(f"""
+        SELECT ol.*, u.name as user_name 
+        FROM operation_logs ol 
+        LEFT JOIN users u ON ol.username = u.username 
+        {where_clause}
+        ORDER BY ol.created_at DESC
+    """, params)
+    
+    rows = cursor.fetchall()
+    logs = []
+    for row in rows:
+        logs.append(dict(row))
+    
+    return jsonify({'code': 200, 'message': 'success', 'data': logs})
+
+
+@app.route('/api/operation_logs/unread_count', methods=['GET'])
+def get_unread_log_count():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    role = payload.get('role', '')
+    if role != '主任':
+        return jsonify({'code': 200, 'message': 'success', 'data': {'unread_count': 0}})
+    
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("SELECT COUNT(*) as count FROM operation_logs WHERE is_read = 0")
+    count = cursor.fetchone()['count']
+    
+    return jsonify({'code': 200, 'message': 'success', 'data': {'unread_count': count}})
+
+
+@app.route('/api/operation_logs/read', methods=['POST'])
+def mark_logs_read():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    role = payload.get('role', '')
+    if role != '主任':
+        return jsonify({'code': 403, 'message': '权限不足', 'data': None})
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute("UPDATE operation_logs SET is_read = 1 WHERE is_read = 0")
+        db.commit()
+        
+        return jsonify({'code': 200, 'message': '已标记全部已读', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@app.route('/api/alerts', methods=['GET'])
+def get_alerts():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
+    
+    username = payload['username']
+    role = payload['role']
+    
+    db = get_db()
+    cursor = db.cursor()
+    
+    alerts = []
+    
+    today = datetime.now().strftime('%Y-%m-%d')
+    seven_days_later = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+    
+    if role == '主任' or role == '院长':
+        cursor.execute("""
+            SELECT id, contract_name, expected_income_date, total_amt, paid_amt, owner_id, u.name as owner_name
+            FROM contracts c 
+            LEFT JOIN users u ON c.owner_id = u.username
+            WHERE status = '执行中' AND expected_income_date IS NOT NULL AND expected_income_date != ''
+                AND expected_income_date >= ? AND expected_income_date <= ?
+            ORDER BY expected_income_date ASC
+        """, (today, seven_days_later))
+        rows = cursor.fetchall()
+        for row in rows:
+            alerts.append({
+                'type': 'payment',
+                'title': '回款预警',
+                'detail': f"合同「{row['contract_name']}」预计回款日期即将到期",
+                'due_date': row['expected_income_date'],
+                'amount': (row['total_amt'] - row['paid_amt']) / 10000 if row['total_amt'] else 0,
+                'owner': row['owner_name'],
+                'contract_id': row['id']
+            })
+        
+        cursor.execute("""
+            SELECT id, contract_name, acceptance_date, owner_id, u.name as owner_name
+            FROM contracts c 
+            LEFT JOIN users u ON c.owner_id = u.username
+            WHERE status = '执行中' AND acceptance_date IS NOT NULL AND acceptance_date != ''
+                AND acceptance_date >= ? AND acceptance_date <= ?
+            ORDER BY acceptance_date ASC
+        """, (today, seven_days_later))
+        rows = cursor.fetchall()
+        for row in rows:
+            alerts.append({
+                'type': 'acceptance',
+                'title': '验收预警',
+                'detail': f"合同「{row['contract_name']}」验收日期即将到期",
+                'due_date': row['acceptance_date'],
+                'amount': 0,
+                'owner': row['owner_name'],
+                'contract_id': row['id']
+            })
+        
+        cursor.execute("""
+            SELECT id, title, predict_date, owner_id, u.name as owner_name
+            FROM business b 
+            LEFT JOIN users u ON b.owner_id = u.username
+            WHERE status = 'active' AND predict_date IS NOT NULL AND predict_date != ''
+                AND predict_date >= ? AND predict_date <= ?
+            ORDER BY predict_date ASC
+        """, (today, seven_days_later))
+        rows = cursor.fetchall()
+        for row in rows:
+            alerts.append({
+                'type': 'business',
+                'title': '商机预警',
+                'detail': f"商机「{row['title']}」预计成交日期即将到期",
+                'due_date': row['predict_date'],
+                'amount': 0,
+                'owner': row['owner_name'],
+                'business_id': row['id']
+            })
+    else:
+        cursor.execute("""
+            SELECT id, contract_name, expected_income_date, total_amt, paid_amt, owner_id, u.name as owner_name
+            FROM contracts c 
+            LEFT JOIN users u ON c.owner_id = u.username
+            WHERE status = '执行中' AND owner_id = ? 
+                AND expected_income_date IS NOT NULL AND expected_income_date != ''
+                AND expected_income_date >= ? AND expected_income_date <= ?
+            ORDER BY expected_income_date ASC
+        """, (username, today, seven_days_later))
+        rows = cursor.fetchall()
+        for row in rows:
+            alerts.append({
+                'type': 'payment',
+                'title': '回款预警',
+                'detail': f"合同「{row['contract_name']}」预计回款日期即将到期",
+                'due_date': row['expected_income_date'],
+                'amount': (row['total_amt'] - row['paid_amt']) / 10000 if row['total_amt'] else 0,
+                'owner': row['owner_name'],
+                'contract_id': row['id']
+            })
+        
+        cursor.execute("""
+            SELECT id, contract_name, acceptance_date, owner_id, u.name as owner_name
+            FROM contracts c 
+            LEFT JOIN users u ON c.owner_id = u.username
+            WHERE status = '执行中' AND owner_id = ? 
+                AND acceptance_date IS NOT NULL AND acceptance_date != ''
+                AND acceptance_date >= ? AND acceptance_date <= ?
+            ORDER BY acceptance_date ASC
+        """, (username, today, seven_days_later))
+        rows = cursor.fetchall()
+        for row in rows:
+            alerts.append({
+                'type': 'acceptance',
+                'title': '验收预警',
+                'detail': f"合同「{row['contract_name']}」验收日期即将到期",
+                'due_date': row['acceptance_date'],
+                'amount': 0,
+                'owner': row['owner_name'],
+                'contract_id': row['id']
+            })
+        
+        cursor.execute("""
+            SELECT id, title, predict_date, owner_id, u.name as owner_name
+            FROM business b 
+            LEFT JOIN users u ON b.owner_id = u.username
+            WHERE status = 'active' AND owner_id = ? 
+                AND predict_date IS NOT NULL AND predict_date != ''
+                AND predict_date >= ? AND predict_date <= ?
+            ORDER BY predict_date ASC
+        """, (username, today, seven_days_later))
+        rows = cursor.fetchall()
+        for row in rows:
+            alerts.append({
+                'type': 'business',
+                'title': '商机预警',
+                'detail': f"商机「{row['title']}」预计成交日期即将到期",
+                'due_date': row['predict_date'],
+                'amount': 0,
+                'owner': row['owner_name'],
+                'business_id': row['id']
+            })
+    
+    alerts.sort(key=lambda x: x['due_date'])
+    
+    return jsonify({'code': 200, 'message': 'success', 'data': {'alerts': alerts, 'count': len(alerts)}})
 
 
 if __name__ == '__main__':
