@@ -201,12 +201,21 @@ def check_login_rate_limit(ip_address):
     if ip_address in LOGIN_ATTEMPTS:
         LOGIN_ATTEMPTS[ip_address] = [t for t in LOGIN_ATTEMPTS[ip_address] if now - t < LOGIN_WINDOW_SECONDS]
         if len(LOGIN_ATTEMPTS[ip_address]) >= LOGIN_MAX_ATTEMPTS:
-            return False
-    return True
+            oldest = LOGIN_ATTEMPTS[ip_address][0]
+            wait_seconds = int(LOGIN_WINDOW_SECONDS - (now - oldest))
+            return False, wait_seconds
+    return True, 0
 
 
 def record_login_attempt(ip_address):
     LOGIN_ATTEMPTS[ip_address].append(time.time())
+
+
+def reset_login_rate_limit(ip_address=None):
+    if ip_address:
+        LOGIN_ATTEMPTS.pop(ip_address, None)
+    else:
+        LOGIN_ATTEMPTS.clear()
 
 
 INACTIVE_DAYS = 100

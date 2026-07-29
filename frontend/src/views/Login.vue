@@ -98,13 +98,13 @@ const handleLogin = async () => {
   loading.value = true
   
   try {
-    const success = await authStore.login(form.username, form.password)
+    const result = await authStore.login(form.username, form.password)
     
-    if (success) {
+    if (result.success) {
       ElMessage.success('登录成功')
       router.push('/dashboard')
     } else {
-      ElMessage.error('账号或密码错误')
+      ElMessage.error(result.message || '账号或密码错误')
     }
   } catch (error) {
     ElMessage.error('登录失败，请重试')

@@ -31,11 +31,17 @@ export const useAuthStore = defineStore('auth', () => {
         
         await getUserInfo()
         
-        return true
+        return { success: true }
       }
-      return false
+      return { success: false, message: response.message || '登录失败' }
     } catch (error) {
-      return false
+      let message = '登录失败，请重试'
+      if (error.response?.data?.message) {
+        message = error.response.data.message
+      } else if (error.message) {
+        message = error.message
+      }
+      return { success: false, message }
     }
   }
 
