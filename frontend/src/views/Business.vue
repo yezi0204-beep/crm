@@ -1,59 +1,81 @@
 <template>
   <div class="business">
     <div class="header-row">
-      <el-button type="primary" @click="showAddModal = true" class="add-btn">
-        <el-icon><Plus /></el-icon>
-        添加商机
-      </el-button>
-      <el-select v-model="statusFilter" @change="fetchBusiness" placeholder="状态筛选" class="status-filter">
-        <el-option label="全部" value="all" />
-        <el-option label="进行中" value="active" />
-        <el-option label="已作废" value="deleted" />
-      </el-select>
+      <div class="header-left">
+        <el-button type="primary" @click="addBusiness" class="add-btn">
+          <el-icon><Plus /></el-icon>
+          添加商机
+        </el-button>
+        <el-button @click="exportBusiness" class="export-btn">
+          <el-icon><Download /></el-icon>
+          导出商机
+        </el-button>
+        <el-select v-model="statusFilter" @change="fetchBusiness" placeholder="状态筛选" class="status-filter">
+          <el-option label="全部" value="all" />
+          <el-option label="进行中" value="active" />
+          <el-option label="已作废" value="deleted" />
+        </el-select>
+      </div>
+      <div class="search-wrapper">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索商机名称、客户..."
+          class="search-input"
+          clearable
+          @keyup.enter="handleSearch"
+        >
+          <template #prefix>
+            <span>🔍</span>
+          </template>
+        </el-input>
+        <el-button @click="handleSearch" class="search-btn">搜索</el-button>
+      </div>
     </div>
     
-    <div class="table-wrapper">
-      <el-table :data="businessList" stripe border class="data-table">
-        <el-table-column prop="title" label="商机名称" min-width="140" sortable />
-        <el-table-column prop="customer_name" label="客户" width="120" sortable />
-        <el-table-column prop="stakeholder" label="干系人" width="100" sortable />
-        <el-table-column prop="amount" label="预算(万)" width="100" sortable>
-          <template #default="scope">
-            {{ formatAmount(scope.row.amount) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="customer_relation" label="客情关系" width="100" />
-        <el-table-column prop="weekly_plan" label="本周工作安排" min-width="140">
-          <template #default="scope">
-            {{ scope.row.weekly_plan || '暂无' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="next_week_plan" label="下周工作计划" min-width="140">
-          <template #default="scope">
-            {{ scope.row.next_week_plan || '暂无' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="stage" label="阶段" width="100" sortable>
-          <template #default="scope">
-            <el-tag :type="getStageType(scope.row.stage)" size="small">{{ scope.row.stage }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="predict_date" label="预计成交日期" width="130" sortable />
-        <el-table-column prop="owner_name" label="负责人" width="90" sortable />
-        <el-table-column prop="created_at" label="创建时间" width="130" sortable />
-        <el-table-column label="操作" width="180">
-          <template #default="scope">
-            <template v-if="scope.row.status === 'active'">
-              <el-button size="small" @click="editBusiness(scope.row)">编辑</el-button>
-              <el-button size="small" type="warning" @click="showFollow(scope.row)">跟进</el-button>
-              <el-button size="small" type="danger" @click="deleteBusiness(scope.row)">作废</el-button>
+    <div class="table-container">
+      <div class="table-wrapper">
+        <el-table :data="filteredBusiness" stripe border class="data-table">
+          <el-table-column prop="title" label="商机名称" min-width="130" sortable show-overflow-tooltip />
+          <el-table-column prop="customer_name" label="客户" min-width="110" sortable show-overflow-tooltip />
+          <el-table-column prop="stakeholder" label="干系人" min-width="90" sortable />
+          <el-table-column prop="amount" label="预算(万)" min-width="100" sortable>
+            <template #default="scope">
+              {{ formatAmount(scope.row.amount) }}
             </template>
-            <template v-else>
-              <el-button size="small" type="success" @click="restoreBusiness(scope.row)">恢复</el-button>
+          </el-table-column>
+          <el-table-column prop="customer_relation" label="客情关系" min-width="90" />
+          <el-table-column prop="weekly_plan" label="本周安排" min-width="130" show-overflow-tooltip>
+            <template #default="scope">
+              {{ scope.row.weekly_plan || '暂无' }}
             </template>
-          </template>
-        </el-table-column>
-      </el-table>
+          </el-table-column>
+          <el-table-column prop="next_week_plan" label="下周计划" min-width="130" show-overflow-tooltip>
+            <template #default="scope">
+              {{ scope.row.next_week_plan || '暂无' }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="stage" label="阶段" min-width="90" sortable>
+            <template #default="scope">
+              <el-tag :type="getStageType(scope.row.stage)" size="small">{{ scope.row.stage }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="predict_date" label="预计成交" min-width="120" sortable />
+          <el-table-column prop="owner_name" label="负责人" min-width="80" sortable />
+          <el-table-column prop="created_at" label="创建时间" min-width="130" sortable />
+          <el-table-column label="操作" min-width="180" fixed="right">
+            <template #default="scope">
+              <template v-if="scope.row.status === 'active'">
+                <el-button size="small" @click="editBusiness(scope.row)">编辑</el-button>
+                <el-button size="small" type="warning" @click="showFollow(scope.row)">跟进</el-button>
+                <el-button size="small" type="danger" @click="deleteBusiness(scope.row)">作废</el-button>
+              </template>
+              <template v-else>
+                <el-button size="small" type="success" @click="restoreBusiness(scope.row)">恢复</el-button>
+              </template>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </div>
     
     <el-dialog v-model="showAddModal" :title="businessForm.id ? '编辑商机' : '添加商机'" width="500px">
@@ -92,6 +114,11 @@
         <el-form-item label="地区">
           <el-input v-model="businessForm.region" />
         </el-form-item>
+        <el-form-item label="负责人">
+          <el-select v-model="businessForm.owner_id" :disabled="!canEditOwner" placeholder="请选择负责人">
+            <el-option v-for="user in users" :key="user.username" :label="user.name" :value="user.username" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="客情关系">
           <el-select v-model="businessForm.customer_relation">
             <el-option label="初次接触" value="初次接触" />
@@ -106,6 +133,9 @@
         </el-form-item>
         <el-form-item label="下周工作计划">
           <el-input v-model="businessForm.next_week_plan" type="textarea" :rows="3" placeholder="下周工作计划（下周自动转为本周安排）" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="businessForm.note" type="textarea" :rows="3" placeholder="商机备注信息" />
         </el-form-item>
       </el-form>
       
@@ -216,8 +246,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { Plus, Download } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -225,6 +255,7 @@ import { useAuthStore } from '../stores/auth'
 const authStore = useAuthStore()
 const businessList = ref([])
 const customers = ref([])
+const users = ref([])
 const showAddModal = ref(false)
 const formRef = ref(null)
 
@@ -235,6 +266,18 @@ const followLogs = ref([])
 
 const followSearchKeyword = ref('')
 const statusFilter = ref('active')
+const searchKeyword = ref('')
+
+const filteredBusiness = computed(() => {
+  if (!searchKeyword.value) return businessList.value
+  const keyword = searchKeyword.value.toLowerCase()
+  return businessList.value.filter(b => 
+    (b.title && b.title.toLowerCase().includes(keyword)) ||
+    (b.customer_name && b.customer_name.toLowerCase().includes(keyword))
+  )
+})
+
+const handleSearch = () => {}
 
 const followForm = reactive({
   subject: '',
@@ -264,7 +307,8 @@ const businessForm = reactive({
   weekly_plan: '',
   next_week_plan: '',
   plan_week: '',
-  owner_id: ''
+  owner_id: '',
+  note: ''
 })
 
 const planHistory = ref([])
@@ -272,6 +316,17 @@ const planHistory = ref([])
 const rules = {
   title: [{ required: true, message: '请输入商机名称', trigger: 'blur' }],
   amount: [{ required: true, message: '请输入金额', trigger: 'blur' }]
+}
+
+const canEditOwner = () => {
+  return authStore.role === '主任' || authStore.role === '院长'
+}
+
+const fetchUsers = async () => {
+  const response = await api.get('/users')
+  if (response.code === 200) {
+    users.value = response.data
+  }
 }
 
 const formatAmount = (value) => {
@@ -359,6 +414,28 @@ const saveBusiness = async () => {
   })
 }
 
+const addBusiness = () => {
+  Object.assign(businessForm, {
+    id: null,
+    title: '',
+    cust_id: '',
+    stakeholder: '',
+    amount: 0,
+    stage: '初步接触',
+    predict_date: '',
+    industry: '',
+    region: '',
+    customer_relation: '',
+    weekly_plan: '',
+    next_week_plan: '',
+    plan_week: '',
+    owner_id: '',
+    note: ''
+  })
+  planHistory.value = []
+  showAddModal.value = true
+}
+
 const fetchPlanHistory = async (businessId) => {
   const response = await api.get(`/business/${businessId}/plan_history`)
   if (response.code === 200) {
@@ -381,7 +458,8 @@ const editBusiness = (row) => {
     weekly_plan: row.weekly_plan || '',
     next_week_plan: row.next_week_plan || '',
     plan_week: row.plan_week || '',
-    owner_id: row.owner_id || ''
+    owner_id: row.owner_id || '',
+    note: row.note || ''
   })
   showAddModal.value = true
   fetchPlanHistory(row.id)
@@ -424,6 +502,7 @@ const restoreBusiness = async (row) => {
 }
 
 const showFollow = async (row) => {
+  console.log('showFollow called with row:', row)
   currentBusiness.value = row
   followLogs.value = []
   followSearchKeyword.value = ''
@@ -432,13 +511,23 @@ const showFollow = async (row) => {
 }
 
 const fetchFollowLogs = async (businessId) => {
-  const params = { ref_type: 'business', ref_id: businessId }
-  if (followSearchKeyword.value) {
-    params.keyword = followSearchKeyword.value
-  }
-  const response = await api.get('/follow_logs', params)
-  if (response.code === 200) {
-    followLogs.value = response.data
+  try {
+    const params = { ref_type: 'business', ref_id: businessId }
+    if (followSearchKeyword.value) {
+      params.keyword = followSearchKeyword.value
+    }
+    console.log('fetchFollowLogs called with params:', params)
+    const response = await api.get('/follow_logs', params)
+    console.log('fetchFollowLogs response:', response)
+    if (response.code === 200) {
+      followLogs.value = response.data
+      console.log('followLogs set to:', response.data)
+    } else {
+      ElMessage.error('获取跟进记录失败: ' + response.message)
+    }
+  } catch (error) {
+    ElMessage.error('获取跟进记录失败，请稍后重试')
+    console.error('fetchFollowLogs error:', error)
   }
 }
 
@@ -491,41 +580,74 @@ const deleteFollowLog = async (logId) => {
   }
 }
 
+const exportBusiness = () => {
+  const data = filteredBusiness.value
+  if (data.length === 0) {
+    ElMessage.info('暂无数据可导出')
+    return
+  }
+
+  const exportColumns = [
+    { prop: 'title', label: '商机名称' },
+    { prop: 'customer_name', label: '客户' },
+    { prop: 'stakeholder', label: '干系人' },
+    { prop: 'amount', label: '预算(万)' },
+    { prop: 'customer_relation', label: '客情关系' },
+    { prop: 'weekly_plan', label: '本周安排' },
+    { prop: 'next_week_plan', label: '下周计划' },
+    { prop: 'stage', label: '阶段' },
+    { prop: 'predict_date', label: '预计成交日期' },
+    { prop: 'owner_name', label: '负责人' },
+    { prop: 'created_at', label: '创建时间' },
+    { prop: 'note', label: '备注' }
+  ]
+
+  const escapeCsvValue = (value) => {
+    if (value === null || value === undefined) {
+      return ''
+    }
+    let strValue = String(value)
+    strValue = strValue.replace(/"/g, '""')
+    return `"${strValue}"`
+  }
+
+  let csvContent = '\uFEFF' + exportColumns.map(col => escapeCsvValue(col.label)).join(',') + '\n'
+
+  data.forEach(row => {
+    const rowData = exportColumns.map(col => {
+      let value = row[col.prop]
+      if (col.prop === 'amount') {
+        value = ((value || 0) / 10000).toFixed(2)
+      }
+      return escapeCsvValue(value)
+    })
+    csvContent += rowData.join(',') + '\n'
+  })
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+  const link = document.createElement('a')
+  const url = URL.createObjectURL(blob)
+  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  link.setAttribute('href', url)
+  link.setAttribute('download', `商机列表_${timestamp}.csv`)
+  link.style.visibility = 'hidden'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+
+  ElMessage.success('导出成功')
+}
+
 onMounted(() => {
   fetchBusiness()
   fetchCustomers()
+  fetchUsers()
 })
 </script>
 
 <style scoped>
-.business {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.header-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.add-btn {
-  align-self: flex-start;
-}
-
 .status-filter {
   width: 150px;
-}
-
-.table-wrapper {
-  overflow-x: auto;
-}
-
-.data-table {
-  width: 100%;
-  min-width: max-content;
 }
 
 .follow-container {
@@ -541,8 +663,8 @@ onMounted(() => {
 .follow-form h4 {
   margin-bottom: 16px;
   font-size: 14px;
-  font-weight: bold;
-  color: #303133;
+  font-weight: 600;
+  color: #334155;
 }
 
 .empty-history {
@@ -557,29 +679,29 @@ onMounted(() => {
 }
 
 .log-user {
-  font-weight: bold;
-  color: #409eff;
+  font-weight: 600;
+  color: #4ecdc4;
 }
 
 .log-time {
   font-size: 12px;
-  color: #909399;
+  color: #94a3b8;
 }
 
 .log-subject {
-  font-weight: bold;
+  font-weight: 600;
   margin-bottom: 8px;
-  color: #303133;
+  color: #334155;
 }
 
 .log-content {
-  color: #606266;
+  color: #64748b;
   margin-bottom: 8px;
 }
 
 .log-meta {
   font-size: 12px;
-  color: #909399;
+  color: #94a3b8;
   margin-bottom: 8px;
 }
 
@@ -589,15 +711,15 @@ onMounted(() => {
 
 .log-next {
   font-size: 12px;
-  color: #67c23a;
-  background: #f0f9eb;
+  color: #10b981;
+  background: #f0fdf4;
   padding: 8px;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .follow-form {
   padding-top: 16px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid #e2e8f0;
 }
 
 .plan-history-section {
@@ -614,26 +736,27 @@ onMounted(() => {
 .plan-type {
   font-size: 12px;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .plan-type.weekly {
-  background: #e6f7ff;
-  color: #1890ff;
+  background: #ecfeff;
+  color: #06b6d4;
 }
 
 .plan-type.next_week {
-  background: #f6ffed;
-  color: #52c41a;
+  background: #f0fdf4;
+  color: #10b981;
 }
 
 .plan-week {
   font-size: 12px;
-  color: #909399;
+  color: #94a3b8;
 }
 
 .plan-content {
   font-size: 14px;
-  color: #303133;
+  color: #334155;
   line-height: 1.6;
-}</style>
+}
+</style>

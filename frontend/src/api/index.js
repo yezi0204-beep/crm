@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/auth'
 
 const instance = axios.create({
   baseURL: '/api',
-  timeout: 10000
+  timeout: 30000
 })
 
 instance.interceptors.request.use(
@@ -32,8 +32,8 @@ instance.interceptors.response.use(
 )
 
 export default {
-  get: (url, params) => instance.get(url, { params }),
-  post: (url, data) => instance.post(url, data),
-  put: (url, data) => instance.put(url, data),
-  delete: (url) => instance.delete(url)
+  get: (url, params, config) => instance.get(url, { params, ...config }),
+  post: (url, data, config) => instance.post(url, data, config),
+  put: (url, data, config) => instance.put(url, data, config),
+  delete: (url, config) => instance.delete(url, config)
 }

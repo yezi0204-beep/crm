@@ -17,35 +17,41 @@
         <el-input 
           v-model="searchKeyword" 
           placeholder="搜索合同名称、编号、甲方..." 
+          class="search-input"
           clearable
-          style="width: 300px;"
+          @keyup.enter="handleSearch"
         >
           <template #prefix>
-            <el-icon><Search /></el-icon>
+            <span>🔍</span>
           </template>
         </el-input>
+        <el-button @click="handleSearch" class="search-btn">搜索</el-button>
       </div>
     </div>
     
-    <el-table :data="paymentRecords" stripe border class="data-table">
-      <el-table-column prop="contract_name" label="合同名称" min-width="180" sortable />
-      <el-table-column prop="contract_no" label="合同编号" width="150" sortable />
-      <el-table-column prop="payment_date" label="回款日期" width="130" sortable />
-      <el-table-column prop="amount" label="金额(万)" width="120" sortable>
-        <template #default="scope">
-          {{ formatAmount(scope.row.amount) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="owner_name" label="负责人" width="100" sortable />
-      <el-table-column prop="note" label="备注" />
-      <el-table-column prop="created_at" label="创建时间" width="150" sortable />
-      <el-table-column label="操作" width="120">
-        <template #default="scope">
-          <el-button size="small" @click="editPayment(scope.row)">编辑</el-button>
-          <el-button v-if="isAdmin" size="small" type="danger" @click="deletePayment(scope.row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <div class="table-container">
+      <div class="table-wrapper">
+        <el-table :data="paymentRecords" stripe border class="data-table">
+          <el-table-column prop="contract_name" label="合同名称" min-width="160" sortable show-overflow-tooltip />
+          <el-table-column prop="contract_no" label="合同编号" min-width="130" sortable />
+          <el-table-column prop="payment_date" label="回款日期" min-width="120" sortable />
+          <el-table-column prop="amount" label="金额(万)" min-width="110" sortable>
+            <template #default="scope">
+              {{ formatAmount(scope.row.amount) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="owner_name" label="负责人" min-width="90" sortable />
+          <el-table-column prop="note" label="备注" min-width="150" show-overflow-tooltip />
+          <el-table-column prop="created_at" label="创建时间" min-width="140" sortable />
+          <el-table-column label="操作" min-width="120" fixed="right">
+            <template #default="scope">
+              <el-button size="small" @click="editPayment(scope.row)">编辑</el-button>
+              <el-button v-if="isAdmin" size="small" type="danger" @click="deletePayment(scope.row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
     
     <el-dialog v-model="showAddModal" title="添加回款记录" width="500px">
       <el-form :model="paymentForm" :rules="rules" ref="formRef">
@@ -247,6 +253,8 @@ const showAddModal = ref(false)
 const showImportModal = ref(false)
 const formRef = ref(null)
 const searchKeyword = ref('')
+
+const handleSearch = () => {}
 
 const paymentForm = reactive({
   id: null,
@@ -459,36 +467,6 @@ watch(showImportModal, (newVal) => {
 </script>
 
 <style scoped>
-.payments {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.header-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.add-btn {
-  align-self: flex-start;
-}
-
-.search-wrapper {
-  margin-left: auto;
-}
-
-.data-table {
-  width: 100%;
-}
-
 .import-step-1 {
   text-align: center;
   padding: 40px 0;

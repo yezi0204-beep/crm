@@ -62,6 +62,21 @@ const routes = [
         path: 'search',
         name: 'Search',
         component: () => import('../views/Search.vue')
+      },
+      {
+        path: 'qa',
+        name: 'Qa',
+        component: () => import('../views/Qa.vue')
+      },
+      {
+        path: 'alerts',
+        name: 'Alerts',
+        component: () => import('../views/Alerts.vue')
+      },
+      {
+        path: 'operation-logs',
+        name: 'OperationLogs',
+        component: () => import('../views/OperationLogs.vue')
       }
     ]
   }
@@ -84,11 +99,17 @@ router.beforeEach(async (to, from, next) => {
     await authStore.checkLogin()
   }
   
-  if (authStore.isLoggedIn) {
-    next()
-  } else {
+  if (!authStore.isLoggedIn) {
     next('/login')
+    return
   }
+  
+  if (to.path === '/operation-logs' && authStore.role !== '主任') {
+    next('/dashboard')
+    return
+  }
+  
+  next()
 })
 
 export default router

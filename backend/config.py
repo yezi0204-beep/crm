@@ -1,6 +1,6 @@
 import os
 
-LLM_API_KEY = os.environ.get('LLM_API_KEY', 'sk-51151dbb41e047029c02bd2bbfc61387')
+LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
 LLM_API_BASE = os.environ.get('LLM_API_BASE', 'https://api.deepseek.com/v1')
 LLM_MODEL = os.environ.get('LLM_MODEL', 'deepseek-v4-flash')
 

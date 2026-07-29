@@ -82,9 +82,22 @@
             <span class="menu-icon">👥</span>
             <span>用户管理</span>
           </el-menu-item>
+          <el-menu-item index="/alerts">
+            <span class="menu-icon">🔔</span>
+            <span>预警通知</span>
+            <el-badge v-if="alertCount > 0" :value="alertCount" class="menu-badge" />
+          </el-menu-item>
           <el-menu-item index="/search">
             <span class="menu-icon">🔍</span>
             <span>全局搜索</span>
+          </el-menu-item>
+          <el-menu-item index="/qa">
+            <span class="menu-icon">🤖</span>
+            <span>智能助手</span>
+          </el-menu-item>
+          <el-menu-item index="/operation-logs" v-if="authStore.role === '主任'">
+            <span class="menu-icon">📝</span>
+            <span>操作日志</span>
           </el-menu-item>
         </div>
       </el-menu>
@@ -115,9 +128,9 @@
             <span class="search-icon">🔍</span>
             <input type="text" placeholder="全局搜索..." class="search-input" @keyup.enter="handleGlobalSearch">
           </div>
-          <div class="notification-btn">
+          <div class="notification-btn" @click="handleNotificationClick">
             <span>🔔</span>
-            <span class="badge">3</span>
+            <span class="badge" v-if="totalUnread > 0">{{ totalUnread }}</span>
           </div>
           <div class="header-user">
             <span>{{ authStore.name }}</span>
@@ -133,7 +146,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
@@ -142,6 +155,8 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const isCollapsed = ref(false)
+const unreadLogCount = ref(0)
+const alertCount = ref(0)
 
 const activeMenu = computed(() => route.path)
 
@@ -155,10 +170,45 @@ const pageTitleMap = {
   '/workhours': '工时管理',
   '/projects': '项目分配',
   '/users': '用户管理',
-  '/search': '全局搜索'
+  '/alerts': '预警通知',
+  '/search': '全局搜索',
+  '/qa': '智能助手',
+  '/operation-logs': '操作日志'
 }
 
 const pageTitle = computed(() => pageTitleMap[route.path] || '')
+
+const totalUnread = computed(() => {
+  return unreadLogCount.value + alertCount.value
+})
+
+const fetchUnreadCounts = async () => {
+  try {
+    const token = authStore.token
+    if (!token) return
+    
+    const [logRes, alertRes] = await Promise.all([
+      fetch('/api/operation_logs/unread_count', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      }),
+      fetch('/api/alerts', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+    ])
+    
+    const logData = await logRes.json()
+    if (logData.code === 200) {
+      unreadLogCount.value = logData.data.unread_count || 0
+    }
+    
+    const alertData = await alertRes.json()
+    if (alertData.code === 200) {
+      alertCount.value = alertData.data.count || 0
+    }
+  } catch (error) {
+    console.error('Failed to fetch unread counts:', error)
+  }
+}
 
 const handleLogout = () => {
   authStore.logout()
@@ -180,6 +230,23 @@ const handleGlobalSearch = (e) => {
     router.push('/search?keyword=' + encodeURIComponent(keyword))
   }
 }
+
+const handleNotificationClick = () => {
+  router.push('/alerts')
+}
+
+let refreshInterval = null
+
+onMounted(() => {
+  fetchUnreadCounts()
+  refreshInterval = setInterval(fetchUnreadCounts, 30000)
+})
+
+onUnmounted(() => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+  }
+})
 </script>
 
 <style scoped>
@@ -209,10 +276,10 @@ const handleGlobalSearch = (e) => {
 }
 
 .sidebar-header {
-  padding: 24px 20px;
+  padding: 18px 16px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
 }
@@ -250,10 +317,10 @@ const handleGlobalSearch = (e) => {
 }
 
 .user-info {
-  padding: 20px;
+  padding: 14px 16px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -306,7 +373,26 @@ const handleGlobalSearch = (e) => {
 .sidebar-menu {
   flex: 1;
   border-right: none;
-  padding: 16px 0;
+  padding: 12px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.sidebar-menu::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-menu::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+}
+
+.sidebar-menu::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .menu-group {
@@ -322,9 +408,9 @@ const handleGlobalSearch = (e) => {
 }
 
 :deep(.el-menu-item) {
-  margin: 4px 8px;
-  border-radius: 10px;
-  padding: 12px 16px !important;
+  margin: 2px 8px;
+  border-radius: 8px;
+  padding: 10px 14px !important;
   transition: all 0.3s ease;
 }
 
@@ -342,11 +428,15 @@ const handleGlobalSearch = (e) => {
   font-size: 16px;
 }
 
+:deep(.menu-badge) {
+  margin-left: 4px;
+}
+
 .sidebar-footer {
-  padding: 16px;
+  padding: 12px 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
-  gap: 12px;
+  gap: 8px;
 }
 
 .collapse-btn {

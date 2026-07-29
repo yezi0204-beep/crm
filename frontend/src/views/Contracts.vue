@@ -58,123 +58,124 @@
       </div>
     </div>
     
-    <div class="table-wrapper">
-      <el-table :data="filteredContracts" stripe border class="data-table" @sort-change="handleSortChange">
-      <template v-for="col in visibleColumnConfigs" :key="col.prop">
-        <el-table-column 
-          v-if="col.prop === 'total_amt'" 
-          :prop="col.prop" 
-          :label="col.label" 
-          :width="col.width" 
-          sortable="custom"
-          :sort-order="sortField === 'total_amt' ? sortOrder : undefined"
-        >
-          <template #default="scope">
-            {{ formatAmount(scope.row.total_amt) }}
+    <div class="table-container">
+      <div class="table-wrapper">
+        <el-table :data="filteredContracts" stripe border class="data-table" @sort-change="handleSortChange">
+          <template v-for="col in visibleColumnConfigs" :key="col.prop">
+            <el-table-column 
+              v-if="col.prop === 'total_amt'" 
+              :prop="col.prop" 
+              :label="col.label" 
+              :min-width="col.width || 110" 
+              sortable="custom"
+              :sort-order="sortField === 'total_amt' ? sortOrder : undefined"
+            >
+              <template #default="scope">
+                {{ formatAmount(scope.row.total_amt) }}
+              </template>
+            </el-table-column>
+            
+            <el-table-column 
+              v-else-if="col.prop === 'paid_amt'" 
+              :prop="col.prop" 
+              :label="col.label" 
+              :min-width="col.width || 110" 
+              sortable="custom"
+              :sort-order="sortField === 'paid_amt' ? sortOrder : undefined"
+            >
+              <template #default="scope">
+                {{ formatAmount(scope.row.paid_amt) }}
+              </template>
+            </el-table-column>
+            
+            <el-table-column 
+              v-else-if="col.prop === 'pending_amt'" 
+              :prop="col.prop" 
+              :label="col.label" 
+              :min-width="col.width || 110" 
+              sortable="custom"
+              :sort-order="sortField === 'pending_amt' ? sortOrder : undefined"
+            >
+              <template #default="scope">
+                <span :class="{ 'pending-highlight': getPendingAmt(scope.row) > 0.01 }">
+                  {{ formatAmount(getPendingAmt(scope.row)) }}
+                </span>
+              </template>
+            </el-table-column>
+            
+            <el-table-column 
+              v-else-if="col.prop === 'status'" 
+              :prop="col.prop" 
+              :label="col.label" 
+              :min-width="col.width || 80" 
+              sortable
+            >
+              <template #default="scope">
+                <el-tag :type="getStatusType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            
+            <el-table-column 
+              v-else-if="col.prop === 'acceptance_nodes' || col.prop === 'payment_nodes'" 
+              :prop="col.prop" 
+              :label="col.label" 
+              :min-width="col.width || 120" 
+              show-overflow-tooltip
+            />
+            
+            <el-table-column 
+              v-else-if="col.prop === 'owner_name'" 
+              :prop="col.prop" 
+              :label="col.label" 
+              :min-width="col.width || 90"
+            >
+              <template #default="scope">
+                <template v-if="isAdminRole">
+                  <el-select 
+                    v-if="editingOwnerId === scope.row.id" 
+                    :value="scope.row.owner_id" 
+                    @change="(val) => saveOwnerChange(scope.row.id, val)"
+                    @visible-change="(visible) => { if (!visible) setTimeout(() => { if (!savingOwnerId) editingOwnerId = null }, 200) }"
+                    style="width: 120px;"
+                    filterable
+                  >
+                    <el-option 
+                      v-for="user in users" 
+                      :key="user.username" 
+                      :label="user.name" 
+                      :value="user.username" 
+                    />
+                  </el-select>
+                  <span 
+                    v-else 
+                    @click="startEditOwner(scope.row)"
+                    style="cursor: pointer; color: #4ecdc4;"
+                  >
+                    {{ scope.row.owner_name || '未分配' }}
+                  </span>
+                </template>
+                <span v-else>{{ scope.row.owner_name || '未分配' }}</span>
+              </template>
+            </el-table-column>
+            
+            <el-table-column 
+              v-else 
+              :prop="col.prop" 
+              :label="col.label" 
+              :min-width="col.minWidth || (col.width || 100)" 
+              :sortable="col.sortable !== false"
+            />
           </template>
-        </el-table-column>
-        
-        <el-table-column 
-          v-else-if="col.prop === 'paid_amt'" 
-          :prop="col.prop" 
-          :label="col.label" 
-          :width="col.width" 
-          sortable="custom"
-          :sort-order="sortField === 'paid_amt' ? sortOrder : undefined"
-        >
-          <template #default="scope">
-            {{ formatAmount(scope.row.paid_amt) }}
-          </template>
-        </el-table-column>
-        
-        <el-table-column 
-          v-else-if="col.prop === 'pending_amt'" 
-          :prop="col.prop" 
-          :label="col.label" 
-          :width="col.width" 
-          sortable="custom"
-          :sort-order="sortField === 'pending_amt' ? sortOrder : undefined"
-        >
-          <template #default="scope">
-            <span :class="{ 'pending-highlight': getPendingAmt(scope.row) > 0.01 }">
-              {{ formatAmount(getPendingAmt(scope.row)) }}
-            </span>
-          </template>
-        </el-table-column>
-        
-        <el-table-column 
-          v-else-if="col.prop === 'status'" 
-          :prop="col.prop" 
-          :label="col.label" 
-          :width="col.width" 
-          sortable
-        >
-          <template #default="scope">
-            <el-tag :type="getStatusType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        
-        <el-table-column 
-          v-else-if="col.prop === 'acceptance_nodes' || col.prop === 'payment_nodes'" 
-          :prop="col.prop" 
-          :label="col.label" 
-          :width="col.width" 
-          show-overflow-tooltip
-        />
-        
-        <el-table-column 
-          v-else-if="col.prop === 'owner_name'" 
-          :prop="col.prop" 
-          :label="col.label" 
-          :width="col.width"
-        >
-          <template #default="scope">
-            <template v-if="isAdminRole">
-              <el-select 
-                v-if="editingOwnerId === scope.row.id" 
-                :value="scope.row.owner_id" 
-                @change="(val) => saveOwnerChange(scope.row.id, val)"
-                @visible-change="(visible) => { if (!visible) setTimeout(() => { if (!savingOwnerId) editingOwnerId = null }, 200) }"
-                style="width: 120px;"
-                filterable
-              >
-                <el-option 
-                  v-for="user in users" 
-                  :key="user.username" 
-                  :label="user.name" 
-                  :value="user.username" 
-                />
-              </el-select>
-              <span 
-                v-else 
-                @click="startEditOwner(scope.row)"
-                style="cursor: pointer; color: #4ecdc4;"
-              >
-                {{ scope.row.owner_name || '未分配' }}
-              </span>
+          
+          <el-table-column label="操作" min-width="180" fixed="right">
+            <template #default="scope">
+              <el-button size="small" @click="editContract(scope.row)">编辑</el-button>
+              <el-button v-if="isAdmin" size="small" type="danger" @click="deleteContract(scope.row)">删除</el-button>
+              <el-button size="small" @click="previewFiles(scope.row)">预览</el-button>
             </template>
-            <span v-else>{{ scope.row.owner_name || '未分配' }}</span>
-          </template>
-        </el-table-column>
-        
-        <el-table-column 
-          v-else 
-          :prop="col.prop" 
-          :label="col.label" 
-          :width="col.width" 
-          :min-width="col.minWidth" 
-          :sortable="col.sortable !== false"
-        />
-      </template>
-      
-      <el-table-column label="操作" width="180" fixed="right">
-        <template #default="scope">
-          <el-button size="small" @click="editContract(scope.row)">编辑</el-button>
-          <el-button v-if="isAdmin" size="small" type="danger" @click="deleteContract(scope.row)">删除</el-button>
-          <el-button size="small" @click="previewFiles(scope.row)">预览文件</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+          </el-table-column>
+        </el-table>
+      </div>
     </div>
     
     <el-dialog v-model="showAddModal" :title="contractForm.id ? '编辑合同' : '新建合同'" width="700px">
@@ -926,7 +927,7 @@ const previewFiles = async (row) => {
   showPreviewModal.value = true
   
   if (row.contract_file_path) {
-    const downloadUrl = `/api/contracts/download/${row.id}/contract`
+    const downloadUrl = `/api/download-contract?id=${row.id}&type=contract`
     previewContractFile.value = downloadUrl
     previewContractFileName.value = row.contract_file_path.split('/').pop()
     
@@ -961,7 +962,7 @@ const previewFiles = async (row) => {
   }
   
   if (row.tech_agreement_file_path) {
-    const downloadUrl = `/api/contracts/download/${row.id}/tech`
+    const downloadUrl = `/api/download-contract?id=${row.id}&type=tech`
     previewTechFile.value = downloadUrl
     previewTechFileName.value = row.tech_agreement_file_path.split('/').pop()
     

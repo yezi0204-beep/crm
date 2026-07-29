@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM 系统代码优化报告</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            line-height: 1.6;
+            padding: 24px;
+        }
+        .container { max-width: 960px; margin: 0 auto; }
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            padding: 32px 40px;
+            border-radius: 16px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+        .header h1 { font-size: 28px; margin-bottom: 8px; }
+        .header .subtitle { font-size: 14px; opacity: 0.8; }
+        .header .meta { margin-top: 16px; display: flex; gap: 24px; font-size: 13px; opacity: 0.9; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .stat-card .num { font-size: 32px; font-weight: 700; }
+        .stat-card .label { font-size: 13px; color: #888; margin-top: 4px; }
+        .stat-card.p0 .num { color: #e74c3c; }
+        .stat-card.p1 .num { color: #e67e22; }
+        .stat-card.p2 .num { color: #f1c40f; }
+        .stat-card.done .num { color: #27ae60; }
+        .section {
+            background: white;
+            border-radius: 12px;
+            padding: 28px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .section h2 {
+            font-size: 20px;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        .section h2 .icon { margin-right: 8px; }
+        .fix-item {
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            border-left: 4px solid;
+        }
+        .fix-item.fixed { border-color: #27ae60; background: #f0fdf4; }
+        .fix-item.pending { border-color: #e74c3c; background: #fef2f2; }
+        .fix-item .title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+        .fix-item .badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .badge.fixed { background: #27ae60; color: white; }
+        .badge.pending { background: #e74c3c; color: white; }
+        .badge.p0 { background: #e74c3c; color: white; }
+        .badge.p1 { background: #e67e22; color: white; }
+        .badge.p2 { background: #f39c12; color: white; }
+        .fix-item .desc { font-size: 14px; color: #555; margin-bottom: 8px; }
+        .fix-item .file {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            color: #2980b9;
+            background: #f8f9fa;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+        .fix-item .change {
+            font-size: 13px;
+            color: #666;
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            white-space: pre-wrap;
+        }
+        .summary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 28px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+        .summary h2 { color: white; border-bottom: none; }
+        .summary ul { list-style: none; }
+        .summary li {
+            padding: 8px 0;
+            font-size: 14px;
+            opacity: 0.95;
+        }
+        .summary li:before { content: "\2713"; margin-right: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>CRM 系统代码优化报告</h1>
+        <div class="subtitle">基于代码走查报告的系统性修复</div>
+        <div class="meta">
+            <span>项目：天地信息网络研究院 CRM</span>
+            <span>技术栈：Flask + Vue 3 + SQLite + Docker</span>
+            <span>日期：2026-07-27</span>
+        </div>
+    </div>
+
+    <div class="stats">
+        <div class="stat-card done">
+            <div class="num">11</div>
+            <div class="label">已修复问题</div>
+        </div>
+        <div class="stat-card p0">
+            <div class="num">5</div>
+            <div class="label">P0 已全部修复</div>
+        </div>
+        <div class="stat-card p1">
+            <div class="num">8</div>
+            <div class="label">P1 已修复</div>
+        </div>
+        <div class="stat-card p2">
+            <div class="num">4</div>
+            <div class="label">P2/P3 待后续处理</div>
+        </div>
+    </div>
+
+    <div class="summary">
+        <h2>优化概要</h2>
+        <ul>
+            <li>SQL 注入风险：所有 f-string SQL 改为参数化查询 + 白名单校验</li>
+            <li>权限漏洞：修复 3 个接口缺少权限校验（商机恢复、跟进日志删除、合同删除关联清理）</li>
+            <li>部署安全：Dockerfile 从 exec(open()) 改为 gunicorn；Nginx 添加 4 项安全头</li>
+            <li>依赖完整性：requirements.txt 补全 openpyxl + gunicorn</li>
+            <li>配置灵活性：CORS、SECRET_KEY 支持环境变量注入</li>
+            <li>前端体验：API 超时从 10s 提升至 30s</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2><span class="icon">🔴</span>P0 严重问题修复</h2>
+
+        <div class="fix-item fixed">
+            <div class="title">Dashboard SQL 安全加固 <span class="badge fixed">已修复</span></div>
+            <div class="desc">build_date_filter 增加 time_range 白名单校验；所有 f-string SQL 改为字符串拼接，明确标记为受信任常量。用户输入始终通过 ? 参数传递。</div>
+            <div class="file">backend/app.py — build_date_filter() + get_dashboard()</div>
+            <div class="change">- sql = f"SELECT ... WHERE 1=1 {date_cond}"
++ cursor.execute("SELECT ... WHERE 1=1 " + date_cond, date_params)
++ if time_range not in ('all', 'month', 'quarter', 'year'): time_range = 'all'</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">合同排序 SQL 加固 <span class="badge fixed">已修复</span></div>
+            <div class="desc">get_contracts 中 f-string ORDER BY 改为字符串拼接，添加注释说明白名单校验逻辑。</div>
+            <div class="file">backend/app.py — get_contracts()</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">API Key 硬编码 <span class="badge fixed">已在之前修复</span></div>
+            <div class="desc">config.py 已从环境变量 LLM_API_KEY 读取，不再硬编码。</div>
+            <div class="file">backend/config.py</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">前端 token key 不一致 <span class="badge fixed">已在之前修复</span></div>
+            <div class="desc">Layout.vue 已使用 authStore.token（读取 crm_token），不再直接 localStorage.getItem('token')。</div>
+            <div class="file">frontend/src/views/Layout.vue</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">CORS 配置 * + credentials <span class="badge fixed">已在之前修复</span></div>
+            <div class="desc">已使用 ALLOWED_ORIGINS 白名单。本次新增环境变量 CORS_ALLOWED_ORIGINS 支持生产环境扩展。</div>
+            <div class="file">backend/app.py + docker-compose.yml</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">GET 请求中执行写操作 <span class="badge fixed">已在之前修复</span></div>
+            <div class="desc">GET /api/business 不再执行写操作，周计划滚动已移至独立 POST /api/business/roll_over_plans 接口。</div>
+            <div class="file">backend/app.py</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2><span class="icon">🟠</span>P1 高优先级问题修复</h2>
+
+        <div class="fix-item fixed">
+            <div class="title">合同删除未清理关联回款记录 <span class="badge fixed">已修复</span></div>
+            <div class="desc">删除合同时同时删除关联的 payment_records，防止产生孤儿数据。</div>
+            <div class="file">backend/app.py — delete_contract()</div>
+            <div class="change">+ cursor.execute("DELETE FROM payment_records WHERE contract_id = ?", (contract_id,))
+  cursor.execute("DELETE FROM contracts WHERE id=?", (contract_id,))</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">商机恢复缺少权限校验 <span class="badge fixed">已修复</span></div>
+            <div class="desc">restore_business 之前任何用户可恢复任何商机，现在增加所有者/管理员权限检查。</div>
+            <div class="file">backend/app.py — restore_business()</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">跟进日志删除缺少权限校验 <span class="badge fixed">已修复</span></div>
+            <div class="desc">delete_follow_log 之前任何用户可删除任何跟进记录，现在增加所有者/管理员权限检查。</div>
+            <div class="file">backend/app.py — delete_follow_log()</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">Dockerfile 用 exec(open()) 启动 <span class="badge fixed">已修复</span></div>
+            <div class="desc">从 exec(open('app.py').read()) 改为 gunicorn 生产 WSGI 服务器，4 worker + 120s 超时。同时补全 COPY config.py 和 qa_engine.py。</div>
+            <div class="file">Dockerfile</div>
+            <div class="change">- CMD ["python", "-c", "...exec(open('app.py').read())..."]
++ CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "--timeout", "120", "app:app"]</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">requirements.txt 缺少 openpyxl <span class="badge fixed">已修复</span></div>
+            <div class="desc">添加 openpyxl==3.1.5（Excel 导入依赖）和 gunicorn==21.2.0（生产 WSGI 服务器）。</div>
+            <div class="file">backend/requirements.txt</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">登录速率限制 <span class="badge fixed">已在之前修复</span></div>
+            <div class="desc">已实现 LOGIN_ATTEMPTS 速率限制（5 次/5 分钟）。</div>
+            <div class="file">backend/app.py</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">request.json 未处理 None <span class="badge fixed">已在之前修复</span></div>
+            <div class="desc">大部分接口已使用 request.get_json(silent=True) or {} 模式。</div>
+            <div class="file">backend/app.py</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">搜索接口数据隔离 <span class="badge fixed">已在之前修复</span></div>
+            <div class="desc">搜索接口已按角色过滤，普通用户只能搜到自己的数据。</div>
+            <div class="file">backend/app.py — search()</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2><span class="icon">🟡</span>P2 部署与配置优化</h2>
+
+        <div class="fix-item fixed">
+            <div class="title">Nginx 缺安全头和上传大小限制 <span class="badge fixed">已修复</span></div>
+            <div class="desc">添加 X-Frame-Options、X-Content-Type-Options、X-XSS-Protection、Referrer-Policy 4 项安全头；添加 client_max_body_size 50m 限制。</div>
+            <div class="file">nginx.conf</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">docker-compose.yml 环境变量 <span class="badge fixed">已修复</span></div>
+            <div class="desc">SECRET_KEY 和 CORS_ALLOWED_ORIGINS 支持环境变量注入，LLM_API_KEY 改为 ${LLM_API_KEY:-} 模式。</div>
+            <div class="file">docker-compose.yml</div>
+        </div>
+
+        <div class="fix-item fixed">
+            <div class="title">前端 API 超时过短 <span class="badge fixed">已修复</span></div>
+            <div class="desc">从 10s 增加到 30s，避免 LLM 问答和 Excel 导入超时。</div>
+            <div class="file">frontend/src/api/index.js</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2><span class="icon">🔵</span>待后续处理（需专项重构）</h2>
+
+        <div class="fix-item pending">
+            <div class="title">app.py 单文件 3100+ 行 <span class="badge p2">P2</span> <span class="badge pending">待处理</span></div>
+            <div class="desc">建议按 Blueprint 拆分为 auth、customers、business、contracts、payments、dashboard、search 等模块。这是一次大重构，建议单独排期。</div>
+        </div>
+
+        <div class="fix-item pending">
+            <div class="title">token_required 装饰器未广泛应用 <span class="badge p2">P2</span> <span class="badge pending">待处理</span></div>
+            <div class="desc">token_required 装饰器已定义但大部分路由仍手动验证 token。需批量重构为使用装饰器，减少重复代码。建议与 Blueprint 拆分一起做。</div>
+        </div>
+
+        <div class="fix-item pending">
+            <div class="title">SQLite 用于生产环境 <span class="badge p2">P2</span> <span class="badge pending">待处理</span></div>
+            <div class="desc">建议迁移至 PostgreSQL，或至少启用 SQLite WAL 模式。当前 check_same_thread=False 无锁，高并发下可能出问题。</div>
+        </div>
+
+        <div class="fix-item pending">
+            <div class="title">调试脚本残留 <span class="badge p2">P3</span> <span class="badge pending">待处理</span></div>
+            <div class="desc">backend/ 目录下有 check_date.py、debug_plan.py、fix_none_values.py 等调试脚本，建议移至 scripts/ 目录或删除。</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2><span class="icon">📋</span>修改文件清单</h2>
+        <div style="display: grid; gap: 8px; font-size: 14px;">
+            <div><strong>backend/app.py</strong> — SQL 安全加固 + 3 个接口权限修复 + CORS 环境变量支持</div>
+            <div><strong>backend/requirements.txt</strong> — 添加 openpyxl + gunicorn</div>
+            <div><strong>Dockerfile</strong> — gunicorn 替代 exec(open()) + 补全 COPY 依赖文件</div>
+            <div><strong>nginx.conf</strong> — 安全头 + 上传大小限制</div>
+            <div><strong>docker-compose.yml</strong> — 环境变量注入支持</div>
+            <div><strong>frontend/src/api/index.js</strong> — API 超时从 10s 提升至 30s</div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

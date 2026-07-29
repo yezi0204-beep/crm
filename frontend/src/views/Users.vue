@@ -1,21 +1,45 @@
 <template>
   <div class="users">
-    <el-button type="primary" @click="showAddModal = true" class="add-btn">
-      <el-icon><Plus /></el-icon>
-      添加用户
-    </el-button>
+    <div class="header-row">
+      <el-button type="primary" @click="showAddModal = true" class="add-btn">
+        <el-icon><Plus /></el-icon>
+        添加用户
+      </el-button>
+      <div class="search-wrapper">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索用户名、姓名..."
+          class="search-input"
+          clearable
+          @keyup.enter="handleSearch"
+        >
+          <template #prefix>
+            <span>🔍</span>
+          </template>
+        </el-input>
+        <el-button @click="handleSearch" class="search-btn">搜索</el-button>
+      </div>
+    </div>
     
-    <el-table :data="users" stripe border class="data-table">
-      <el-table-column prop="username" label="用户名" />
-      <el-table-column prop="name" label="姓名" />
-      <el-table-column prop="role" label="角色" />
-      <el-table-column label="操作">
-        <template #default="scope">
-          <el-button size="small" @click="editUser(scope.row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="deleteUser(scope.row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <div class="table-container">
+      <div class="table-wrapper">
+        <el-table :data="filteredUsers" stripe border class="data-table">
+          <el-table-column prop="username" label="用户名" min-width="120" sortable />
+          <el-table-column prop="name" label="姓名" min-width="100" sortable />
+          <el-table-column prop="role" label="角色" min-width="100" sortable>
+            <template #default="scope">
+              <el-tag :type="getRoleType(scope.row.role)" size="small">{{ scope.row.role }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" min-width="120" fixed="right">
+            <template #default="scope">
+              <el-button size="small" @click="editUser(scope.row)">编辑</el-button>
+              <el-button size="small" type="danger" @click="deleteUser(scope.row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
     
     <el-dialog v-model="showAddModal" title="添加用户" width="400px">
       <el-form :model="userForm" :rules="rules" ref="formRef">
@@ -45,7 +69,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -53,6 +77,27 @@ import api from '../api'
 const users = ref([])
 const showAddModal = ref(false)
 const formRef = ref(null)
+const searchKeyword = ref('')
+
+const filteredUsers = computed(() => {
+  if (!searchKeyword.value) return users.value
+  const keyword = searchKeyword.value.toLowerCase()
+  return users.value.filter(u => 
+    (u.username && u.username.toLowerCase().includes(keyword)) ||
+    (u.name && u.name.toLowerCase().includes(keyword))
+  )
+})
+
+const handleSearch = () => {}
+
+const getRoleType = (role) => {
+  const types = {
+    '主任': 'danger',
+    '院长': 'warning',
+    '销售人员': 'info'
+  }
+  return types[role] || 'info'
+}
 
 const userForm = reactive({
   id: null,
@@ -126,17 +171,4 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.users {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.add-btn {
-  align-self: flex-start;
-}
-
-.data-table {
-  width: 100%;
-}
 </style>

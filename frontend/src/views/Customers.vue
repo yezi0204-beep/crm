@@ -1,31 +1,52 @@
 <template>
   <div class="customers">
-    <el-button type="primary" @click="showAddModal = true" class="add-btn">
-      <el-icon><Plus /></el-icon>
-      添加客户
-    </el-button>
+    <div class="header-row">
+      <el-button type="primary" @click="showAddModal = true" class="add-btn">
+        <el-icon><Plus /></el-icon>
+        添加客户
+      </el-button>
+      <div class="search-wrapper">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索客户名称、联系人、手机号..."
+          class="search-input"
+          clearable
+          @keyup.enter="handleSearch"
+        >
+          <template #prefix>
+            <span>🔍</span>
+          </template>
+        </el-input>
+        <el-button @click="handleSearch" class="search-btn">搜索</el-button>
+      </div>
+    </div>
     
-    <el-table :data="customers" stripe border class="data-table">
-      <el-table-column prop="name" label="联系人" width="120" sortable />
-      <el-table-column prop="phone" label="手机号" width="130" sortable />
-      <el-table-column prop="company" label="公司名称" min-width="180" sortable />
-      <el-table-column prop="level" label="客户等级" width="120" sortable>
-        <template #default="scope">
-          <el-tag :type="getLevelType(scope.row.level)" size="small">{{ getLevelLabel(scope.row.level) }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="source" label="来源" width="120" sortable />
-      <el-table-column prop="owner_name" label="负责人" width="100" sortable />
-      <el-table-column prop="last_follow" label="最后跟进时间" width="150" sortable />
-      <el-table-column prop="created_at" label="创建时间" width="150" sortable />
-      <el-table-column label="操作" width="180">
-        <template #default="scope">
-          <el-button size="small" @click="editCustomer(scope.row)">编辑</el-button>
-          <el-button size="small" type="warning" @click="showFollow(scope.row)">跟进</el-button>
-          <el-button size="small" type="danger" @click="deleteCustomer(scope.row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <div class="table-container">
+      <div class="table-wrapper">
+        <el-table :data="filteredCustomers" stripe border class="data-table">
+          <el-table-column prop="name" label="联系人" min-width="100" sortable />
+          <el-table-column prop="phone" label="手机号" min-width="120" sortable />
+          <el-table-column prop="company" label="公司名称" min-width="160" sortable show-overflow-tooltip />
+          <el-table-column prop="level" label="客户等级" min-width="100" sortable>
+            <template #default="scope">
+              <el-tag :type="getLevelType(scope.row.level)" size="small">{{ getLevelLabel(scope.row.level) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="source" label="来源" min-width="100" sortable />
+          <el-table-column prop="owner_name" label="负责人" min-width="90" sortable />
+          <el-table-column prop="last_follow" label="最后跟进" min-width="120" sortable />
+          <el-table-column prop="created_at" label="创建时间" min-width="140" sortable />
+          <el-table-column label="操作" min-width="200" fixed="right">
+            <template #default="scope">
+              <el-button size="small" @click="editCustomer(scope.row)">编辑</el-button>
+              <el-button size="small" type="warning" @click="showFollow(scope.row)">跟进</el-button>
+              <el-button size="small" type="primary" v-if="canEditOwner && scope.row.owner_id" @click="releaseToPool(scope.row)">释放</el-button>
+              <el-button size="small" type="danger" @click="deleteCustomer(scope.row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
     
     <el-dialog v-model="showAddModal" :title="customerForm.id ? '编辑客户' : '添加客户'" width="500px">
       <el-form :model="customerForm" :rules="rules" ref="formRef">
@@ -49,7 +70,9 @@
           <el-input v-model="customerForm.source" />
         </el-form-item>
         <el-form-item label="负责人">
-          <el-input v-model="customerForm.owner_id" :disabled="true" />
+          <el-select v-model="customerForm.owner_id" :disabled="!canEditOwner" placeholder="请选择负责人">
+            <el-option v-for="user in users" :key="user.username" :label="user.name" :value="user.username" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -136,7 +159,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -146,6 +169,7 @@ const authStore = useAuthStore()
 const customers = ref([])
 const showAddModal = ref(false)
 const formRef = ref(null)
+const users = ref([])
 
 const showFollowModal = ref(false)
 const followFormRef = ref(null)
@@ -153,6 +177,19 @@ const currentCustomer = ref(null)
 const followLogs = ref([])
 
 const followSearchKeyword = ref('')
+const searchKeyword = ref('')
+
+const filteredCustomers = computed(() => {
+  if (!searchKeyword.value) return customers.value
+  const keyword = searchKeyword.value.toLowerCase()
+  return customers.value.filter(c => 
+    (c.name && c.name.toLowerCase().includes(keyword)) ||
+    (c.company && c.company.toLowerCase().includes(keyword)) ||
+    (c.phone && c.phone.toLowerCase().includes(keyword))
+  )
+})
+
+const handleSearch = () => {}
 
 const followForm = reactive({
   subject: '',
@@ -184,6 +221,17 @@ const rules = {
   name: [{ required: true, message: '请输入联系人', trigger: 'blur' }],
   phone: [{ required: true, message: '请输入手机号', trigger: 'blur' }],
   company: [{ required: true, message: '请输入公司名称', trigger: 'blur' }]
+}
+
+const canEditOwner = () => {
+  return authStore.role === '主任' || authStore.role === '院长'
+}
+
+const fetchUsers = async () => {
+  const response = await api.get('/users')
+  if (response.code === 200) {
+    users.value = response.data
+  }
 }
 
 const getLevelType = (level) => {
@@ -330,26 +378,31 @@ const deleteFollowLog = async (logId) => {
   }
 }
 
+const releaseToPool = async (row) => {
+  try {
+    await ElMessageBox.confirm('确定要将该客户释放到公海池吗？', '提示', {
+      type: 'warning'
+    })
+    
+    const response = await api.post('/pool/release', { customer_ids: [row.id] })
+    if (response.code === 200) {
+      ElMessage.success(response.message)
+      fetchCustomers()
+    } else {
+      ElMessage.error(response.message)
+    }
+  } catch (error) {
+    ElMessage.info('已取消释放')
+  }
+}
+
 onMounted(() => {
   fetchCustomers()
+  fetchUsers()
 })
 </script>
 
 <style scoped>
-.customers {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.add-btn {
-  align-self: flex-start;
-}
-
-.data-table {
-  width: 100%;
-}
-
 .follow-container {
   max-height: 600px;
   overflow-y: auto;
@@ -363,8 +416,8 @@ onMounted(() => {
 .follow-form h4 {
   margin-bottom: 16px;
   font-size: 14px;
-  font-weight: bold;
-  color: #303133;
+  font-weight: 600;
+  color: #334155;
 }
 
 .empty-history {
@@ -379,29 +432,29 @@ onMounted(() => {
 }
 
 .log-user {
-  font-weight: bold;
-  color: #409eff;
+  font-weight: 600;
+  color: #4ecdc4;
 }
 
 .log-time {
   font-size: 12px;
-  color: #909399;
+  color: #94a3b8;
 }
 
 .log-subject {
-  font-weight: bold;
+  font-weight: 600;
   margin-bottom: 8px;
-  color: #303133;
+  color: #334155;
 }
 
 .log-content {
-  color: #606266;
+  color: #64748b;
   margin-bottom: 8px;
 }
 
 .log-meta {
   font-size: 12px;
-  color: #909399;
+  color: #94a3b8;
   margin-bottom: 8px;
 }
 
@@ -411,14 +464,14 @@ onMounted(() => {
 
 .log-next {
   font-size: 12px;
-  color: #67c23a;
-  background: #f0f9eb;
+  color: #10b981;
+  background: #f0fdf4;
   padding: 8px;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .follow-form {
   padding-top: 16px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid #e2e8f0;
 }
 </style>
