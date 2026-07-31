@@ -164,7 +164,57 @@ const fetchDashboardData = async () => {
     dashboardData.value = response.data
     salesRanking.value = response.data.sales_ranking || []
     updateTrendChart()
+    updateFunnelChart()
   }
+}
+
+const fetchBusinessStats = async () => {
+  try {
+    const response = await api.get('/business', { status: 'active' })
+    if (response.code === 200 && response.data) {
+      const stats = {
+        '引导需求阶段': 0,
+        '能力展示阶段': 0,
+        '方案确定阶段': 0,
+        '商务谈判阶段': 0,
+        '合同签订阶段': 0,
+        '销售实现': 0
+      }
+      
+      response.data.forEach(b => {
+        const prob = b.probability || 0
+        if (prob < 30) stats['引导需求阶段']++
+        else if (prob < 60) stats['能力展示阶段']++
+        else if (prob < 80) stats['方案确定阶段']++
+        else if (prob < 90) stats['商务谈判阶段']++
+        else if (prob < 100) stats['合同签订阶段']++
+        else stats['销售实现']++
+      })
+      
+      return stats
+    }
+  } catch (e) {
+    console.error('获取商机统计失败', e)
+  }
+  return null
+}
+
+const updateFunnelChart = async () => {
+  if (!chart2) return
+  
+  const stats = await fetchBusinessStats()
+  if (!stats) return
+  
+  chart2.setOption({
+    data: [
+      { value: stats['引导需求阶段'], name: '引导需求阶段', itemStyle: { color: '#91cc75' } },
+      { value: stats['能力展示阶段'], name: '能力展示阶段', itemStyle: { color: '#5470c6' } },
+      { value: stats['方案确定阶段'], name: '方案确定阶段', itemStyle: { color: '#fac858' } },
+      { value: stats['商务谈判阶段'], name: '商务谈判阶段', itemStyle: { color: '#ee6666' } },
+      { value: stats['合同签订阶段'], name: '合同签订阶段', itemStyle: { color: '#73c0de' } },
+      { value: stats['销售实现'], name: '销售实现', itemStyle: { color: '#9a60b4' } }
+    ]
+  })
 }
 
 const fetchRecentContracts = async () => {
@@ -195,7 +245,7 @@ const initCharts = () => {
     chart2.setOption({
       tooltip: { trigger: 'item', formatter: '{b}: {c}%' },
       series: [{
-        name: '销售漏斗',
+        name: '商机漏斗',
         type: 'funnel',
         left: '10%',
         top: 20,
@@ -212,11 +262,12 @@ const initCharts = () => {
         itemStyle: { borderColor: '#fff', borderWidth: 1 },
         emphasis: { label: { fontSize: 14 } },
         data: [
-          { value: 100, name: '线索获取' },
-          { value: 65, name: '需求确认' },
-          { value: 45, name: '方案报价' },
-          { value: 30, name: '商务谈判' },
-          { value: 15, name: '合同签署' }
+          { value: 100, name: '引导需求阶段', itemStyle: { color: '#91cc75' } },
+          { value: 50, name: '能力展示阶段', itemStyle: { color: '#5470c6' } },
+          { value: 35, name: '方案确定阶段', itemStyle: { color: '#fac858' } },
+          { value: 20, name: '商务谈判阶段', itemStyle: { color: '#ee6666' } },
+          { value: 10, name: '合同签订阶段', itemStyle: { color: '#73c0de' } },
+          { value: 5, name: '销售实现', itemStyle: { color: '#9a60b4' } }
         ]
       }]
     })

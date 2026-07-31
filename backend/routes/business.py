@@ -133,11 +133,11 @@ def create_business():
             plan_week = today.strftime('%Y-W') + str(current_week_num + 1).zfill(2)
 
         cursor.execute("""
-            INSERT INTO business (title, cust_id, stakeholder, amount, stage, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO business (title, cust_id, stakeholder, amount, stage, probability, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get('title'), data.get('cust_id'), data.get('stakeholder'), data.get('amount'), data.get('stage'),
-            data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id'),
+            data.get('probability'), data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id'),
             data.get('address'), data.get('customer_relation'), data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
             data.get('note')
         ))
@@ -258,13 +258,13 @@ def update_business(business_id):
         if can_change_owner and 'owner_id' in data:
             cursor.execute("""
                 UPDATE business SET
-                    title=?, cust_id=?, stakeholder=?, amount=?, stage=?, predict_date=?,
+                    title=?, cust_id=?, stakeholder=?, amount=?, stage=?, probability=?, predict_date=?,
                     source=?, industry=?, region=?, address=?, customer_relation=?,
                     weekly_plan=?, next_week_plan=?, plan_week=?, owner_id=?, note=?
                 WHERE id=?
             """, (
                 data.get('title'), data.get('cust_id'), data.get('stakeholder'),
-                data.get('amount'), data.get('stage'), data.get('predict_date'),
+                data.get('amount'), data.get('stage'), data.get('probability'), data.get('predict_date'),
                 data.get('source'), data.get('industry'), data.get('region'),
                 data.get('address'), data.get('customer_relation'),
                 data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
@@ -273,13 +273,13 @@ def update_business(business_id):
         else:
             cursor.execute("""
                 UPDATE business SET
-                    title=?, cust_id=?, stakeholder=?, amount=?, stage=?, predict_date=?,
+                    title=?, cust_id=?, stakeholder=?, amount=?, stage=?, probability=?, predict_date=?,
                     source=?, industry=?, region=?, address=?, customer_relation=?,
                     weekly_plan=?, next_week_plan=?, plan_week=?, note=?
                 WHERE id=?
             """, (
                 data.get('title'), data.get('cust_id'), data.get('stakeholder'),
-                data.get('amount'), data.get('stage'), data.get('predict_date'),
+                data.get('amount'), data.get('stage'), data.get('probability'), data.get('predict_date'),
                 data.get('source'), data.get('industry'), data.get('region'),
                 data.get('address'), data.get('customer_relation'),
                 data.get('weekly_plan'), data.get('next_week_plan'), plan_week,

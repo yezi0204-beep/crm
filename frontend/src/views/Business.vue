@@ -54,9 +54,14 @@
               {{ scope.row.next_week_plan || '暂无' }}
             </template>
           </el-table-column>
-          <el-table-column prop="stage" label="阶段" min-width="90" sortable>
+          <el-table-column prop="probability" label="项目落实概率" min-width="140" sortable>
             <template #default="scope">
-              <el-tag :type="getStageType(scope.row.stage)" size="small">{{ scope.row.stage }}</el-tag>
+              <div class="probability-cell">
+                <el-tag :type="getProbabilityType(scope.row.probability)" size="small">
+                  {{ getProbabilityLabel(scope.row.probability) }}
+                </el-tag>
+                <span class="probability-value">{{ scope.row.probability || 0 }}%</span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column prop="predict_date" label="预计成交" min-width="120" sortable />
@@ -96,13 +101,33 @@
         <el-form-item label="金额(万)" prop="amount">
           <el-input-number v-model="businessForm.amount" :min="0" :step="0.01" />
         </el-form-item>
-        <el-form-item label="阶段">
-          <el-select v-model="businessForm.stage">
-            <el-option label="初步接触" value="初步接触" />
-            <el-option label="需求确认" value="需求确认" />
-            <el-option label="方案报价" value="方案报价" />
-            <el-option label="商务谈判" value="商务谈判" />
-            <el-option label="赢单成交" value="赢单成交" />
+        <el-form-item label="项目落实概率">
+          <el-select v-model="businessForm.probability" @change="onProbabilityChange">
+            <el-option-group label="引导需求阶段 (0-30%)">
+              <el-option label="0% - 定位目标客户" :value="0" />
+              <el-option label="10% - 发现潜在客户" :value="10" />
+              <el-option label="20% - 意向客户" :value="20" />
+              <el-option label="30% - 引导客户立项" :value="30" />
+            </el-option-group>
+            <el-option-group label="能力展示阶段 (30-60%)">
+              <el-option label="40% - 获得初步认可" :value="40" />
+              <el-option label="50% - 方案交流" :value="50" />
+              <el-option label="60% - 沟通技术方案" :value="60" />
+            </el-option-group>
+            <el-option-group label="方案确定阶段 (60-80%)">
+              <el-option label="70% - 进入候选名单" :value="70" />
+              <el-option label="80% - 投标" :value="80" />
+            </el-option-group>
+            <el-option-group label="商务谈判阶段 (80-90%)">
+              <el-option label="85% - 成为候选人" :value="85" />
+              <el-option label="90% - 进行商务谈判" :value="90" />
+            </el-option-group>
+            <el-option-group label="合同签订阶段 (90-100%)">
+              <el-option label="95% - 办理合同签订手续" :value="95" />
+            </el-option-group>
+            <el-option-group label="销售实现 (100%)">
+              <el-option label="100% - 完成合同签订" :value="100" />
+            </el-option-group>
           </el-select>
         </el-form-item>
         <el-form-item label="预计成交日期">
@@ -293,13 +318,30 @@ const followRules = {
   content: [{ required: true, message: '请输入跟进内容', trigger: 'blur' }]
 }
 
+const PROBABILITY_STAGES = {
+  0: { label: '引导需求', type: 'info', stage: '引导需求阶段' },
+  10: { label: '引导需求', type: 'info', stage: '引导需求阶段' },
+  20: { label: '引导需求', type: 'info', stage: '引导需求阶段' },
+  30: { label: '引导需求', type: 'info', stage: '引导需求阶段' },
+  40: { label: '能力展示', type: 'primary', stage: '能力展示阶段' },
+  50: { label: '能力展示', type: 'primary', stage: '能力展示阶段' },
+  60: { label: '方案确定', type: 'warning', stage: '方案确定阶段' },
+  70: { label: '方案确定', type: 'warning', stage: '方案确定阶段' },
+  80: { label: '方案确定', type: 'warning', stage: '方案确定阶段' },
+  85: { label: '商务谈判', type: 'danger', stage: '商务谈判阶段' },
+  90: { label: '商务谈判', type: 'danger', stage: '商务谈判阶段' },
+  95: { label: '合同签订', type: 'success', stage: '合同签订阶段' },
+  100: { label: '销售实现', type: 'success', stage: '销售实现' }
+}
+
 const businessForm = reactive({
   id: null,
   title: '',
   cust_id: '',
   stakeholder: '',
   amount: 0,
-  stage: '初步接触',
+  probability: 0,
+  stage: '引导需求阶段',
   predict_date: '',
   industry: '',
   region: '',
@@ -333,19 +375,31 @@ const formatAmount = (value) => {
   return ((value || 0) / 10000).toFixed(2)
 }
 
+const getProbabilityType = (probability) => {
+  const stage = PROBABILITY_STAGES[probability]
+  return stage ? stage.type : 'info'
+}
+
+const getProbabilityLabel = (probability) => {
+  const stage = PROBABILITY_STAGES[probability]
+  return stage ? stage.label : '引导需求'
+}
+
+const onProbabilityChange = (probability) => {
+  const stage = PROBABILITY_STAGES[probability]
+  if (stage) {
+    businessForm.stage = stage.stage
+  }
+}
+
 const getStageType = (stage) => {
   const types = {
-    '初步接触': 'info',
-    '需求确认': 'primary',
-    '方案报价': 'warning',
-    '商务谈判': 'danger',
-    '赢单成交': 'success',
-    '需求确认中': 'primary',
-    '方案报价中': 'warning',
-    '合同签署': 'danger',
-    '项目启动': 'success',
-    '实施中': 'success',
-    '已完成': 'success'
+    '引导需求阶段': 'info',
+    '能力展示阶段': 'primary',
+    '方案确定阶段': 'warning',
+    '商务谈判阶段': 'danger',
+    '合同签订阶段': 'success',
+    '销售实现': 'success'
   }
   return types[stage] || 'info'
 }
@@ -421,7 +475,8 @@ const addBusiness = () => {
     cust_id: '',
     stakeholder: '',
     amount: 0,
-    stage: '初步接触',
+    probability: 0,
+    stage: '引导需求阶段',
     predict_date: '',
     industry: '',
     region: '',
@@ -444,13 +499,17 @@ const fetchPlanHistory = async (businessId) => {
 }
 
 const editBusiness = (row) => {
+  const probability = row.probability || 0
+  const stage = PROBABILITY_STAGES[probability]?.stage || '引导需求阶段'
+  
   Object.assign(businessForm, {
     id: row.id,
     title: row.title || '',
     cust_id: row.cust_id || '',
     stakeholder: row.stakeholder || '',
     amount: (row.amount || 0) / 10000,
-    stage: row.stage || '初步接触',
+    probability: probability,
+    stage: stage,
     predict_date: row.predict_date || '',
     industry: row.industry || '',
     region: row.region || '',
@@ -595,6 +654,7 @@ const exportBusiness = () => {
     { prop: 'customer_relation', label: '客情关系' },
     { prop: 'weekly_plan', label: '本周安排' },
     { prop: 'next_week_plan', label: '下周计划' },
+    { prop: 'probability', label: '项目落实概率(%)' },
     { prop: 'stage', label: '阶段' },
     { prop: 'predict_date', label: '预计成交日期' },
     { prop: 'owner_name', label: '负责人' },
@@ -648,6 +708,19 @@ onMounted(() => {
 <style scoped>
 .status-filter {
   width: 150px;
+}
+
+.probability-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.probability-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
 }
 
 .follow-container {
