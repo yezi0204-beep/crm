@@ -36,10 +36,11 @@
           <el-table-column prop="owner_name" label="负责人" min-width="90" sortable />
           <el-table-column prop="last_follow" label="最后跟进" min-width="120" sortable />
           <el-table-column prop="created_at" label="创建时间" min-width="140" sortable />
-          <el-table-column label="操作" min-width="200" fixed="right">
+          <el-table-column label="操作" min-width="260" fixed="right">
             <template #default="scope">
               <el-button size="small" @click="editCustomer(scope.row)">编辑</el-button>
               <el-button size="small" type="warning" @click="showFollow(scope.row)">跟进</el-button>
+              <el-button size="small" type="success" @click="showProfile(scope.row)">画像</el-button>
               <el-button size="small" type="primary" v-if="canEditOwner && scope.row.owner_id" @click="releaseToPool(scope.row)">释放</el-button>
               <el-button size="small" type="danger" @click="deleteCustomer(scope.row)">删除</el-button>
             </template>
@@ -58,6 +59,26 @@
         </el-form-item>
         <el-form-item label="公司名称" prop="company">
           <el-input v-model="customerForm.company" />
+        </el-form-item>
+        <el-form-item label="联系人姓名">
+          <el-input v-model="customerForm.contact_name" placeholder="客户方对接人姓名" />
+        </el-form-item>
+        <el-form-item label="邮箱">
+          <el-input v-model="customerForm.email" placeholder="example@company.com" />
+        </el-form-item>
+        <el-form-item label="行业">
+          <el-select v-model="customerForm.industry" placeholder="选择行业" filterable allow-create>
+            <el-option label="政府/军工" value="政府/军工" />
+            <el-option label="教育" value="教育" />
+            <el-option label="金融" value="金融" />
+            <el-option label="制造" value="制造" />
+            <el-option label="矿业" value="矿业" />
+            <el-option label="通信" value="通信" />
+            <el-option label="其它" value="其它" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="地区">
+          <el-input v-model="customerForm.region" placeholder="如：北京/上海/四川" />
         </el-form-item>
         <el-form-item label="客户等级">
           <el-select v-model="customerForm.level">
@@ -155,6 +176,82 @@
         <el-button type="primary" @click="saveFollow">保存跟进</el-button>
       </template>
     </el-dialog>
+
+    <el-drawer
+      v-model="showProfileDrawer"
+      :title="`客户3D画像 - ${profileData?.customer?.company || profileData?.customer?.name || ''}`"
+      size="55%"
+      direction="rtl"
+      destroy-on-close
+    >
+      <div v-loading="profileLoading" class="profile-container">
+        <template v-if="profileData">
+          <el-card class="profile-section">
+            <template #header><span class="section-title">📋 基本信息</span></template>
+            <el-descriptions :column="2" border>
+              <el-descriptions-item label="联系人">{{ profileData.customer.name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="公司">{{ profileData.customer.company || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="电话">{{ profileData.customer.phone || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="联系人姓名">{{ profileData.customer.contact_name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="邮箱">{{ profileData.customer.email || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="行业">{{ profileData.customer.industry || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="地区">{{ profileData.customer.region || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="等级">
+                <el-tag :type="getLevelType(profileData.customer.level)" size="small">{{ getLevelLabel(profileData.customer.level) }}</el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="来源">{{ profileData.customer.source || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="负责人">{{ profileData.customer.owner_name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="创建时间">{{ profileData.customer.created_at || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="最后跟进">{{ profileData.customer.last_follow || '-' }}</el-descriptions-item>
+            </el-descriptions>
+          </el-card>
+
+          <div class="stats-row">
+            <el-card class="stat-mini">
+              <div class="stat-val">{{ profileData.stats.business_count }}</div>
+              <div class="stat-lbl">商机数</div>
+            </el-card>
+            <el-card class="stat-mini">
+              <div class="stat-val">¥{{ formatAmount(profileData.stats.contract_total_amt) }}</div>
+              <div class="stat-lbl">合同总额(万)</div>
+            </el-card>
+            <el-card class="stat-mini">
+              <div class="stat-val">{{ profileData.stats.visit_count }}</div>
+              <div class="stat-lbl">拜访数</div>
+            </el-card>
+            <el-card class="stat-mini">
+              <div class="stat-val">{{ profileData.stats.follow_count }}</div>
+              <div class="stat-lbl">跟进数</div>
+            </el-card>
+          </div>
+
+          <el-card class="profile-section">
+            <template #header><span class="section-title">🕒 全生命周期轨迹</span></template>
+            <el-timeline v-if="timelineEvents.length > 0">
+              <el-timeline-item
+                v-for="(evt, idx) in timelineEvents"
+                :key="idx"
+                :timestamp="evt.time"
+                placement="top"
+                :type="evt.color"
+                :hollow="evt.hollow"
+              >
+                <el-card shadow="hover" class="event-card">
+                  <div class="event-header">
+                    <el-tag :type="evt.color" size="small" effect="dark">{{ evt.typeLabel }}</el-tag>
+                    <el-tag v-if="evt.badge" :type="evt.badge.type" size="small" effect="plain">{{ evt.badge.text }}</el-tag>
+                    <span class="event-title">{{ evt.title }}</span>
+                  </div>
+                  <div class="event-desc" v-if="evt.desc">{{ evt.desc }}</div>
+                  <div class="event-meta" v-if="evt.meta">{{ evt.meta }}</div>
+                </el-card>
+              </el-timeline-item>
+            </el-timeline>
+            <el-empty v-else description="暂无生命周期事件" />
+          </el-card>
+        </template>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -178,6 +275,11 @@ const followLogs = ref([])
 
 const followSearchKeyword = ref('')
 const searchKeyword = ref('')
+
+// 画像相关状态
+const showProfileDrawer = ref(false)
+const profileLoading = ref(false)
+const profileData = ref(null)
 
 const filteredCustomers = computed(() => {
   if (!searchKeyword.value) return customers.value
@@ -210,6 +312,10 @@ const customerForm = reactive({
   name: '',
   phone: '',
   company: '',
+  contact_name: '',
+  email: '',
+  industry: '',
+  region: '',
   level: 'B',
   source: '',
   owner_id: '',
@@ -383,7 +489,7 @@ const releaseToPool = async (row) => {
     await ElMessageBox.confirm('确定要将该客户释放到公海池吗？', '提示', {
       type: 'warning'
     })
-    
+
     const response = await api.post('/pool/release', { customer_ids: [row.id] })
     if (response.code === 200) {
       ElMessage.success(response.message)
@@ -395,6 +501,124 @@ const releaseToPool = async (row) => {
     ElMessage.info('已取消释放')
   }
 }
+
+// 金额格式化：元 → 万元（与 Dashboard.vue 一致）
+const formatAmount = (value) => {
+  return ((value || 0) / 10000).toFixed(2)
+}
+
+// 打开画像 Drawer
+const showProfile = async (row) => {
+  showProfileDrawer.value = true
+  profileLoading.value = true
+  profileData.value = null
+  try {
+    const response = await api.get(`/customers/${row.id}/profile`)
+    if (response.code === 200) {
+      profileData.value = response.data
+    } else {
+      ElMessage.error(response.message)
+      showProfileDrawer.value = false
+    }
+  } catch (error) {
+    ElMessage.error('加载画像失败')
+    showProfileDrawer.value = false
+  } finally {
+    profileLoading.value = false
+  }
+}
+
+// 全生命周期时间轴事件合并
+const timelineEvents = computed(() => {
+  if (!profileData.value) return []
+  const events = []
+  const d = profileData.value
+
+  // 跟进记录
+  d.follow_logs.forEach(log => {
+    events.push({
+      time: log.log_time || log.created_at,
+      typeLabel: '跟进',
+      color: 'primary',
+      hollow: false,
+      title: log.subject || '(无主题)',
+      desc: log.content,
+      meta: [log.user_name && `跟进人: ${log.user_name}`,
+             log.participants && `参与人: ${log.participants}`,
+             log.location && `地点: ${log.location}`,
+             log.next_plan && `下次计划: ${log.next_plan}`]
+            .filter(Boolean).join('  |  ')
+    })
+  })
+
+  // 商机（标注是否已签出合同，体现 商机→合同 关系链）
+  d.business.forEach(b => {
+    const linkedContracts = d.contracts.filter(c => c.b_id === b.id)
+    const contractInfo = linkedContracts.length > 0
+      ? `已签合同: ${linkedContracts.map(c => c.contract_name || c.contract_no).join('、')}`
+      : ''
+    events.push({
+      time: b.created_at,
+      typeLabel: '商机',
+      color: 'warning',
+      hollow: false,
+      title: b.title,
+      desc: `阶段: ${b.stage || '-'}  |  金额: ¥${formatAmount(b.amount)}万  |  概率: ${b.probability || 0}%`,
+      meta: [b.owner_name && `负责人: ${b.owner_name}`,
+             b.predict_date && `预计成交: ${b.predict_date}`,
+             contractInfo,
+             b.status === 'void' && '已作废']
+            .filter(Boolean).join('  |  ')
+    })
+  })
+
+  // 合同（linkage: precise=精确关联本客户；fuzzy=仅按公司名匹配，待精确关联；other=其它）
+  d.contracts.forEach(c => {
+    const linkage = c.linkage || 'other'
+    const linkageLabel = linkage === 'fuzzy' ? '待精确关联' : (linkage === 'precise' ? '已关联客户' : '')
+    events.push({
+      time: c.sign_date,
+      typeLabel: '合同',
+      color: 'success',
+      hollow: false,
+      title: c.contract_name || c.contract_no,
+      desc: `金额: ¥${formatAmount(c.total_amt)}万  |  状态: ${c.status || '-'}`,
+      badge: linkage === 'fuzzy' ? { text: '待关联', type: 'warning' } : (linkage === 'precise' ? { text: '已关联', type: 'success' } : null),
+      meta: [c.contract_no && `编号: ${c.contract_no}`,
+             c.customer_name && `客户: ${c.customer_name}`,
+             c.business_title && `源自商机: ${c.business_title}`,
+             linkageLabel && `关联: ${linkageLabel}`,
+             c.owner_name && `负责人: ${c.owner_name}`]
+            .filter(Boolean).join('  |  ')
+    })
+  })
+
+  // 拜访
+  d.visits.forEach(v => {
+    const visitTime = v.actual_date || v.plan_date
+    events.push({
+      time: visitTime + (v.actual_time || v.plan_time ? ' ' + (v.actual_time || v.plan_time) : ''),
+      typeLabel: v.status === 'completed' ? '拜访(完成)' : (v.status === 'cancelled' ? '拜访(取消)' : '拜访(计划)'),
+      color: v.status === 'completed' ? 'success' : (v.status === 'cancelled' ? 'info' : 'primary'),
+      hollow: v.status !== 'completed',
+      title: v.purpose || '(无拜访目的)',
+      desc: v.result || v.notes || '',
+      meta: [v.visitor_name && `拜访人: ${v.visitor_name}`,
+             v.location && `地点: ${v.location}`,
+             v.contact_person && `客户方: ${v.contact_person}`]
+            .filter(Boolean).join('  |  ')
+    })
+  })
+
+  // 按时间倒序
+  events.sort((a, b) => {
+    const ta = a.time || ''
+    const tb = b.time || ''
+    return tb.localeCompare(ta)
+  })
+
+  return events
+})
 
 onMounted(() => {
   fetchCustomers()
@@ -473,5 +697,68 @@ onMounted(() => {
 .follow-form {
   padding-top: 16px;
   border-top: 1px solid #e2e8f0;
+}
+
+.profile-container {
+  padding: 0 16px 16px;
+}
+
+.profile-section {
+  margin-bottom: 16px;
+}
+
+.section-title {
+  font-weight: 600;
+  color: #334155;
+}
+
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stat-mini {
+  text-align: center;
+}
+
+.stat-val {
+  font-size: 20px;
+  font-weight: 700;
+  color: #4ecdc4;
+}
+
+.stat-lbl {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+.event-card {
+  margin-bottom: 0;
+}
+
+.event-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.event-title {
+  font-weight: 600;
+  color: #334155;
+}
+
+.event-desc {
+  color: #64748b;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.event-meta {
+  font-size: 12px;
+  color: #94a3b8;
 }
 </style>

@@ -206,6 +206,47 @@
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="关联客户" prop="cust_id">
+              <el-select
+                v-model="contractForm.cust_id"
+                placeholder="请选择客户（必填）"
+                filterable
+                clearable
+                style="width: 100%;"
+                @change="onCustomerChange"
+              >
+                <el-option
+                  v-for="c in customers"
+                  :key="c.id"
+                  :label="c.company ? `${c.company}（${c.name || ''}）` : c.name"
+                  :value="c.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="关联商机">
+              <el-select
+                v-model="contractForm.b_id"
+                :placeholder="contractForm.cust_id ? '可选，选择该客户的商机' : '请先选择关联客户'"
+                filterable
+                clearable
+                :disabled="!contractForm.cust_id"
+                style="width: 100%;"
+              >
+                <el-option
+                  v-for="b in filteredBusiness"
+                  :key="b.id"
+                  :label="b.title + (b.status === 'void' ? '（已作废）' : '')"
+                  :value="b.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
         
         <el-row :gutter="20">
           <el-col :span="12">
@@ -458,6 +499,8 @@ const route = useRoute()
 const contracts = ref([])
 const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
 const users = ref([])
+const customers = ref([])
+const businessList = ref([])
 const searchKeyword = ref('')
 const showAddModal = ref(false)
 const showPreviewModal = ref(false)
@@ -518,6 +561,12 @@ const isAdminRole = computed(() => {
   return authStore.role === '主任' || authStore.role === '院长'
 })
 
+// 按已选客户联动过滤的商机列表
+const filteredBusiness = computed(() => {
+  if (!contractForm.cust_id) return []
+  return businessList.value.filter(b => b.cust_id === contractForm.cust_id)
+})
+
 const contractForm = reactive({
   id: null,
   contract_name: '',
@@ -530,6 +579,8 @@ const contractForm = reactive({
   classification: '',
   status: '执行中',
   owner_id: '',
+  cust_id: '',
+  b_id: '',
   acceptance_nodes: '',
   payment_nodes: '',
   note: '',
@@ -591,7 +642,8 @@ const rules = {
     { required: true, message: '请输入合同编号', trigger: 'blur' },
     { validator: validateContractNoRule, trigger: 'blur' }
   ],
-  total_amt: [{ required: true, message: '请输入合同总额', trigger: 'blur' }]
+  total_amt: [{ required: true, message: '请输入合同总额', trigger: 'blur' }],
+  cust_id: [{ required: true, message: '请选择关联客户', trigger: 'change' }]
 }
 
 const formatAmount = (value) => {
@@ -741,6 +793,31 @@ const fetchUsers = async () => {
   }
 }
 
+const fetchCustomers = async () => {
+  const response = await api.get('/customers')
+  if (response.code === 200) {
+    customers.value = response.data
+  }
+}
+
+const fetchBusinessList = async () => {
+  const response = await api.get('/business', { status: 'all' })
+  if (response.code === 200) {
+    businessList.value = response.data
+  }
+}
+
+// 切换关联客户：清空不属于该客户的商机，甲方为空时自动带出客户公司名
+const onCustomerChange = () => {
+  if (contractForm.b_id && !filteredBusiness.value.some(b => b.id === contractForm.b_id)) {
+    contractForm.b_id = ''
+  }
+  if (!contractForm.party_a) {
+    const c = customers.value.find(x => x.id === contractForm.cust_id)
+    if (c && c.company) contractForm.party_a = c.company
+  }
+}
+
 const saveContract = async () => {
   if (!formRef.value) return
   
@@ -835,6 +912,8 @@ const addContract = () => {
     classification: '',
     status: '执行中',
     owner_id: '',
+    cust_id: '',
+    b_id: '',
     acceptance_nodes: '',
     payment_nodes: '',
     contract_file_path: '',
@@ -1008,6 +1087,8 @@ const handleUploadError = () => {
 onMounted(() => {
   fetchContracts()
   fetchUsers()
+  fetchCustomers()
+  fetchBusinessList()
   const kw = route.query.keyword
   if (kw) {
     searchKeyword.value = kw
@@ -1048,6 +1129,7 @@ watch(showAddModal, (newVal) => {
         total_cost: 0,
         acceptance_nodes: '',
         payment_nodes: '',
+        cust_id: '',
         b_id: ''
       })
     }

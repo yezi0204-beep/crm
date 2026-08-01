@@ -30,38 +30,47 @@ def get_contracts():
     sort_direction = 'DESC' if sort_order.lower() in ['desc', 'descending'] else 'ASC'
     order_by_clause = sort_field + " " + sort_direction
 
+    # 关联名：customer_name（客户公司名）、business_title（关联商机标题）
     if role == '主任' or role == '院长':
         if sort_field == 'pending_amt':
             cursor.execute(
-                "SELECT c.*, u.name as owner_name, "
+                "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title, "
                 "(COALESCE(c.total_amt, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
+                "LEFT JOIN customers cu ON c.cust_id = cu.id "
+                "LEFT JOIN business b ON c.b_id = b.id "
                 "ORDER BY pending_amt " + sort_direction
             )
         else:
             cursor.execute(
-                "SELECT c.*, u.name as owner_name "
+                "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
+                "LEFT JOIN customers cu ON c.cust_id = cu.id "
+                "LEFT JOIN business b ON c.b_id = b.id "
                 "ORDER BY c." + order_by_clause
             )
     else:
         if sort_field == 'pending_amt':
             cursor.execute(
-                "SELECT c.*, u.name as owner_name, "
+                "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title, "
                 "(COALESCE(c.total_amt, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
+                "LEFT JOIN customers cu ON c.cust_id = cu.id "
+                "LEFT JOIN business b ON c.b_id = b.id "
                 "WHERE c.owner_id = ? "
                 "ORDER BY pending_amt " + sort_direction,
                 (username,)
             )
         else:
             cursor.execute(
-                "SELECT c.*, u.name as owner_name "
+                "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
+                "LEFT JOIN customers cu ON c.cust_id = cu.id "
+                "LEFT JOIN business b ON c.b_id = b.id "
                 "WHERE c.owner_id = ? "
                 "ORDER BY c." + order_by_clause,
                 (username,)
@@ -99,7 +108,15 @@ def check_contract_no():
 def get_contract(contract_id):
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,))
+    cursor.execute(
+        "SELECT ct.*, u.name as owner_name, cu.company as customer_name, b.title as business_title "
+        "FROM contracts ct "
+        "LEFT JOIN users u ON ct.owner_id = u.username "
+        "LEFT JOIN customers cu ON ct.cust_id = cu.id "
+        "LEFT JOIN business b ON ct.b_id = b.id "
+        "WHERE ct.id = ?",
+        (contract_id,)
+    )
     row = cursor.fetchone()
 
     if row:
@@ -128,15 +145,25 @@ def create_contract():
         if cursor.fetchone()[0] > 0:
             contract_no = f"HT{datetime.now().strftime('%Y%m%d%H%M%S')}{str(max_id + 1).zfill(3)}{str(uuid.uuid4().hex[:3])}"
 
+        # 关联客户/商机，并做一致性兜底：若传了 b_id，以商机的 cust_id 为准，防数据撕裂
+        b_id = data.get('b_id')
+        b_id = b_id if b_id else None  # 规范化空字符串为 None
+        cust_id = data.get('cust_id')
+        if b_id:
+            cursor.execute("SELECT cust_id FROM business WHERE id = ?", (b_id,))
+            brow = cursor.fetchone()
+            if brow and brow['cust_id']:
+                cust_id = brow['cust_id']
+
         cursor.execute("""
             INSERT INTO contracts
-            (b_id, contract_no, party_a, project_order_no, total_amt, paid_amt, sign_date, owner_id, status,
+            (b_id, cust_id, contract_no, party_a, project_order_no, total_amt, paid_amt, sign_date, owner_id, status,
              contract_name, classification, is_audit, pending_acceptance_amount,
              cost, gross_profit, acceptance_date, expected_income_date,
              expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
         """, (
-            data.get('b_id'), contract_no, data.get('party_a'), data.get('project_order_no'),
+            b_id, cust_id, contract_no, data.get('party_a'), data.get('project_order_no'),
             data.get('total_amt'), 0, data.get('sign_date'), data.get('owner_id'), '执行中',
             data.get('contract_name'), data.get('classification'), data.get('is_audit'), data.get('pending_acceptance_amount'),
             data.get('cost'), data.get('gross_profit'), data.get('acceptance_date'), data.get('expected_income_date'),
@@ -165,12 +192,23 @@ def update_contract(contract_id):
     cursor = db.cursor()
 
     try:
+        # 关联客户/商机，并做一致性兜底：若传了 b_id，以商机的 cust_id 为准，防数据撕裂
+        b_id = data.get('b_id')
+        b_id = b_id if b_id else None  # 规范化空字符串为 None
+        cust_id = data.get('cust_id')
+        if b_id:
+            cursor.execute("SELECT cust_id FROM business WHERE id = ?", (b_id,))
+            brow = cursor.fetchone()
+            if brow and brow['cust_id']:
+                cust_id = brow['cust_id']
+
         cursor.execute("""
             UPDATE contracts SET
                 contract_name=?, contract_no=?, party_a=?, project_order_no=?, total_amt=?, sign_date=?,
                 classification=?, is_audit=?, pending_acceptance_amount=?,
                 cost=?, gross_profit=?, acceptance_date=?, expected_income_date=?,
                 expected_income_year=?, business_type=?, status=?, owner_id=?,
+                cust_id=?, b_id=?,
                 acceptance_nodes=?, payment_nodes=?, note=?
             WHERE id=?
         """, (
@@ -179,6 +217,7 @@ def update_contract(contract_id):
             data.get('pending_acceptance_amount'), data.get('cost'), data.get('gross_profit'),
             data.get('acceptance_date'), data.get('expected_income_date'), data.get('expected_income_year'),
             data.get('business_type'), data.get('status'), data.get('owner_id'),
+            cust_id, b_id,
             data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'), contract_id
         ))
         db.commit()

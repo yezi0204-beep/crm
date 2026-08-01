@@ -48,6 +48,7 @@ def close_db(error=None):
 def _init_tables(db):
     cursor = db.cursor()
     _init_business_table(cursor)
+    _init_contracts_table(cursor)
     _init_operation_logs_table(cursor)
     _init_visits_table(cursor)
     _init_user_roles_table(cursor)
@@ -126,6 +127,14 @@ def _init_business_table(cursor):
                 FOREIGN KEY (business_id) REFERENCES business(id)
             )
         """)
+    except:
+        pass
+
+
+def _init_contracts_table(cursor):
+    """合同表迁移：新增 cust_id 字段，建立合同↔客户直接关联（与 business.cust_id 对齐）。"""
+    try:
+        cursor.execute("ALTER TABLE contracts ADD COLUMN cust_id INTEGER")
     except:
         pass
 

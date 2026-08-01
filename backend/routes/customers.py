@@ -116,6 +116,7 @@ def delete_customer(cust_id):
         customer_info = f"{row['name']}（{row['company']}）" if row else f"ID:{cust_id}"
 
         cursor.execute("UPDATE business SET cust_id = NULL WHERE cust_id = ?", (cust_id,))
+        cursor.execute("UPDATE contracts SET cust_id = NULL WHERE cust_id = ?", (cust_id,))
         cursor.execute("DELETE FROM customers WHERE id=?", (cust_id,))
         db.commit()
 
@@ -175,6 +176,124 @@ def update_customer(cust_id):
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@customers_bp.route('/api/customers/<int:cust_id>/profile', methods=['GET'])
+@token_required
+def get_customer_profile(cust_id):
+    """聚合返回客户 3D 画像：基本信息 + 跟进 + 商机 + 合同 + 拜访 + 统计汇总"""
+    payload = request.current_user
+    username = payload['username']
+    role = payload['role']
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # 1. 查询客户基本信息并做 404 + 权限校验
+    cursor.execute("""
+        SELECT c.*, u.name as owner_name
+        FROM customers c
+        LEFT JOIN users u ON c.owner_id = u.username
+        WHERE c.id = ?
+    """, (cust_id,))
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '客户不存在', 'data': None})
+    if role not in ('主任', '院长') and row['owner_id'] != username:
+        return jsonify({'code': 403, 'message': '权限不足，只能查看自己的客户', 'data': None})
+
+    customer = dict(row)
+    customer_company = customer.get('company') or ''
+
+    # 2. 跟进记录
+    cursor.execute("""
+        SELECT fl.*, u.name as user_name
+        FROM follow_logs fl
+        LEFT JOIN users u ON fl.user_id = u.username
+        WHERE fl.ref_type = 'customer' AND fl.ref_id = ?
+        ORDER BY fl.created_at DESC
+    """, (cust_id,))
+    follow_logs = [dict(r) for r in cursor.fetchall()]
+
+    # 3. 商机
+    cursor.execute("""
+        SELECT b.*, u.name as owner_name
+        FROM business b
+        LEFT JOIN users u ON b.owner_id = u.username
+        WHERE b.cust_id = ?
+        ORDER BY b.created_at DESC
+    """, (cust_id,))
+    business = [dict(r) for r in cursor.fetchall()]
+
+    # 4. 合同（cust_id 精确关联为主；历史无 cust_id 的按 party_a 模糊关联并标注 linkage）
+    #    linkage: precise=精确关联本客户；fuzzy=按公司名模糊关联(待精确指定)；other=其它
+    if customer_company:
+        cursor.execute("""
+            SELECT ct.*, u.name as owner_name, b.title as business_title,
+                   cu.company as customer_name,
+                   CASE
+                       WHEN ct.cust_id = ? THEN 'precise'
+                       WHEN ct.cust_id IS NULL AND ct.party_a = ? THEN 'fuzzy'
+                       ELSE 'other'
+                   END as linkage
+            FROM contracts ct
+            LEFT JOIN users u ON ct.owner_id = u.username
+            LEFT JOIN business b ON ct.b_id = b.id
+            LEFT JOIN customers cu ON ct.cust_id = cu.id
+            WHERE ct.cust_id = ?
+               OR (ct.cust_id IS NULL AND ct.party_a = ? AND ct.party_a != '')
+            ORDER BY ct.sign_date DESC
+        """, (cust_id, customer_company, cust_id, customer_company))
+    else:
+        cursor.execute("""
+            SELECT ct.*, u.name as owner_name, b.title as business_title,
+                   cu.company as customer_name,
+                   CASE WHEN ct.cust_id = ? THEN 'precise' ELSE 'other' END as linkage
+            FROM contracts ct
+            LEFT JOIN users u ON ct.owner_id = u.username
+            LEFT JOIN business b ON ct.b_id = b.id
+            LEFT JOIN customers cu ON ct.cust_id = cu.id
+            WHERE ct.cust_id = ?
+            ORDER BY ct.sign_date DESC
+        """, (cust_id, cust_id))
+    contracts = [dict(r) for r in cursor.fetchall()]
+    # 模糊关联(按公司名匹配)的合同无 cust_id，JOIN 得不到客户名，这里用画像客户公司名兜底，
+    # 使前端时间轴能正确展示"客户→商机→合同"关系链
+    for c in contracts:
+        if not c.get('customer_name'):
+            c['customer_name'] = customer_company
+
+    # 5. 拜访记录
+    cursor.execute("""
+        SELECT v.*, u.name as visitor_name
+        FROM visits v
+        LEFT JOIN users u ON v.visitor_id = u.username
+        WHERE v.cust_id = ?
+        ORDER BY v.plan_date DESC, v.plan_time DESC
+    """, (cust_id,))
+    visits = [dict(r) for r in cursor.fetchall()]
+
+    # 6. 统计汇总（total_amt 单位为元，前端再除 10000 转万元）
+    stats = {
+        'business_count': len(business),
+        'contract_count': len(contracts),
+        'contract_total_amt': sum(float(c.get('total_amt') or 0) for c in contracts),
+        'visit_count': len(visits),
+        'follow_count': len(follow_logs)
+    }
+
+    return jsonify({
+        'code': 200,
+        'message': 'success',
+        'data': {
+            'customer': customer,
+            'follow_logs': follow_logs,
+            'business': business,
+            'contracts': contracts,
+            'visits': visits,
+            'stats': stats
+        }
+    })
 
 
 def register_routes(app):
