@@ -270,13 +270,16 @@ def get_alerts():
 
     today = datetime.now().strftime('%Y-%m-%d')
     seven_days_later = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+    # 商机预计成交日期为年月（YYYY-MM）精度，按本月及下月预警
+    this_month = datetime.now().strftime('%Y-%m')
+    next_month = (datetime.now() + timedelta(days=32)).strftime('%Y-%m')
 
     if role == '主任' or role == '院长':
         cursor.execute("""
             SELECT id, contract_name, expected_income_date, total_amt, paid_amt, owner_id, u.name as owner_name
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
-            WHERE status = '执行中' AND expected_income_date IS NOT NULL AND expected_income_date != ''
+            WHERE c.status = '执行中' AND expected_income_date IS NOT NULL AND expected_income_date != ''
                 AND expected_income_date >= ? AND expected_income_date <= ?
             ORDER BY expected_income_date ASC
         """, (today, seven_days_later))
@@ -296,7 +299,7 @@ def get_alerts():
             SELECT id, contract_name, acceptance_date, owner_id, u.name as owner_name
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
-            WHERE status = '执行中' AND acceptance_date IS NOT NULL AND acceptance_date != ''
+            WHERE c.status = '执行中' AND acceptance_date IS NOT NULL AND acceptance_date != ''
                 AND acceptance_date >= ? AND acceptance_date <= ?
             ORDER BY acceptance_date ASC
         """, (today, seven_days_later))
@@ -316,10 +319,10 @@ def get_alerts():
             SELECT id, title, predict_date, owner_id, u.name as owner_name
             FROM business b
             LEFT JOIN users u ON b.owner_id = u.username
-            WHERE status = 'active' AND predict_date IS NOT NULL AND predict_date != ''
-                AND predict_date >= ? AND predict_date <= ?
+            WHERE b.status = 'active' AND predict_date IS NOT NULL AND predict_date != ''
+                AND substr(predict_date, 1, 7) IN (?, ?)
             ORDER BY predict_date ASC
-        """, (today, seven_days_later))
+        """, (this_month, next_month))
         rows = cursor.fetchall()
         for row in rows:
             alerts.append({
@@ -336,7 +339,7 @@ def get_alerts():
             SELECT id, contract_name, expected_income_date, total_amt, paid_amt, owner_id, u.name as owner_name
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
-            WHERE status = '执行中' AND owner_id = ?
+            WHERE c.status = '执行中' AND owner_id = ?
                 AND expected_income_date IS NOT NULL AND expected_income_date != ''
                 AND expected_income_date >= ? AND expected_income_date <= ?
             ORDER BY expected_income_date ASC
@@ -357,7 +360,7 @@ def get_alerts():
             SELECT id, contract_name, acceptance_date, owner_id, u.name as owner_name
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
-            WHERE status = '执行中' AND owner_id = ?
+            WHERE c.status = '执行中' AND owner_id = ?
                 AND acceptance_date IS NOT NULL AND acceptance_date != ''
                 AND acceptance_date >= ? AND acceptance_date <= ?
             ORDER BY acceptance_date ASC
@@ -378,11 +381,11 @@ def get_alerts():
             SELECT id, title, predict_date, owner_id, u.name as owner_name
             FROM business b
             LEFT JOIN users u ON b.owner_id = u.username
-            WHERE status = 'active' AND owner_id = ?
+            WHERE b.status = 'active' AND b.owner_id = ?
                 AND predict_date IS NOT NULL AND predict_date != ''
-                AND predict_date >= ? AND predict_date <= ?
+                AND substr(predict_date, 1, 7) IN (?, ?)
             ORDER BY predict_date ASC
-        """, (username, today, seven_days_later))
+        """, (username, this_month, next_month))
         rows = cursor.fetchall()
         for row in rows:
             alerts.append({

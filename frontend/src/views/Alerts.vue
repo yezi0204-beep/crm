@@ -45,7 +45,7 @@
                 <div class="alert-detail">{{ alert.detail }}</div>
                 <div class="alert-meta">
                   <span class="meta-item">负责人: {{ alert.owner }}</span>
-                  <span class="meta-item">到期日期: {{ alert.due_date }}</span>
+                  <span class="meta-item">到期日期: {{ formatDueDate(alert.due_date) }}</span>
                   <span class="meta-item" v-if="alert.amount > 0">待回款: {{ alert.amount }}万</span>
                 </div>
               </div>
@@ -72,7 +72,7 @@
                 <div class="alert-detail">{{ alert.detail }}</div>
                 <div class="alert-meta">
                   <span class="meta-item">负责人: {{ alert.owner }}</span>
-                  <span class="meta-item">到期日期: {{ alert.due_date }}</span>
+                  <span class="meta-item">到期日期: {{ formatDueDate(alert.due_date) }}</span>
                 </div>
               </div>
               <div class="alert-days">
@@ -98,7 +98,7 @@
                 <div class="alert-detail">{{ alert.detail }}</div>
                 <div class="alert-meta">
                   <span class="meta-item">负责人: {{ alert.owner }}</span>
-                  <span class="meta-item">到期日期: {{ alert.due_date }}</span>
+                  <span class="meta-item">到期日期: {{ formatDueDate(alert.due_date) }}</span>
                 </div>
               </div>
               <div class="alert-days">
@@ -124,7 +124,7 @@
                 <div class="alert-detail">{{ alert.detail }}</div>
                 <div class="alert-meta">
                   <span class="meta-item">负责人: {{ alert.owner }}</span>
-                  <span class="meta-item">到期日期: {{ alert.due_date }}</span>
+                  <span class="meta-item">到期日期: {{ formatDueDate(alert.due_date) }}</span>
                   <span class="meta-item">待回款: {{ alert.amount }}万</span>
                 </div>
               </div>
@@ -184,6 +184,12 @@ const getAlertIcon = (type) => {
     'payment': '💰'
   }
   return icons[type] || '🔔'
+}
+
+const formatDueDate = (dueDate) => {
+  if (!dueDate) return ''
+  // 截取前10位，兼容 YYYY-MM-DD 与 ISO datetime（含时分秒/时区）格式
+  return dueDate.length >= 10 ? dueDate.substring(0, 10) : dueDate
 }
 
 const getDaysLeft = (dueDate) => {

@@ -31,6 +31,14 @@
         <el-button @click="handleSearch" class="search-btn">搜索</el-button>
       </div>
     </div>
+
+    <div v-if="hasProbFilter" class="prob-filter-bar">
+      <el-tag type="warning" closable @close="clearProbFilter">
+        <el-icon style="vertical-align: middle; margin-right: 4px;"><Filter /></el-icon>
+        概率筛选：{{ probFilterLabel }}（共 {{ filteredBusiness.length }} 条商机）
+      </el-tag>
+      <el-button size="small" text type="primary" @click="clearProbFilter">清除筛选</el-button>
+    </div>
     
     <div class="table-container">
       <div class="table-wrapper">
@@ -272,12 +280,14 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { Plus, Download } from '@element-plus/icons-vue'
+import { Plus, Download, Filter } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
+import { useRoute } from 'vue-router'
 
 const authStore = useAuthStore()
+const route = useRoute()
 const businessList = ref([])
 const customers = ref([])
 const users = ref([])
@@ -292,17 +302,52 @@ const followLogs = ref([])
 const followSearchKeyword = ref('')
 const statusFilter = ref('active')
 const searchKeyword = ref('')
+const probMin = ref(null)
+const probMax = ref(null)
 
 const filteredBusiness = computed(() => {
-  if (!searchKeyword.value) return businessList.value
-  const keyword = searchKeyword.value.toLowerCase()
-  return businessList.value.filter(b => 
-    (b.title && b.title.toLowerCase().includes(keyword)) ||
-    (b.customer_name && b.customer_name.toLowerCase().includes(keyword))
-  )
+  let result = businessList.value
+
+  if (probMin.value !== null && probMax.value !== null) {
+    result = result.filter(b => {
+      const prob = b.probability || 0
+      return prob >= probMin.value && prob <= probMax.value
+    })
+  }
+
+  if (searchKeyword.value) {
+    const keyword = searchKeyword.value.toLowerCase()
+    result = result.filter(b =>
+      (b.title && b.title.toLowerCase().includes(keyword)) ||
+      (b.customer_name && b.customer_name.toLowerCase().includes(keyword))
+    )
+  }
+
+  return result
 })
 
 const handleSearch = () => {}
+
+const clearProbFilter = () => {
+  probMin.value = null
+  probMax.value = null
+}
+
+const hasProbFilter = computed(() => probMin.value !== null && probMax.value !== null)
+
+const probFilterLabel = computed(() => {
+  if (!hasProbFilter.value) return ''
+  const stageMap = [
+    { min: 0, max: 29, label: '引导需求阶段' },
+    { min: 30, max: 59, label: '能力展示阶段' },
+    { min: 60, max: 79, label: '方案确定阶段' },
+    { min: 80, max: 89, label: '商务谈判阶段' },
+    { min: 90, max: 99, label: '合同签订阶段' },
+    { min: 100, max: 100, label: '销售实现' }
+  ]
+  const stage = stageMap.find(s => s.min === probMin.value && s.max === probMax.value)
+  return stage ? `${stage.label}（${probMin.value}%-${probMax.value}%）` : `概率${probMin.value}%-${probMax.value}%`
+})
 
 const followForm = reactive({
   subject: '',
@@ -705,6 +750,13 @@ const exportBusiness = () => {
 }
 
 onMounted(() => {
+  // 从URL参数获取概率筛选条件（销售漏斗点击跳转）
+  const { prob_min, prob_max } = route.query
+  if (prob_min !== undefined && prob_max !== undefined) {
+    probMin.value = Number(prob_min)
+    probMax.value = Number(prob_max)
+    statusFilter.value = 'active'
+  }
   fetchBusiness()
   fetchCustomers()
   fetchUsers()
@@ -714,6 +766,17 @@ onMounted(() => {
 <style scoped>
 .status-filter {
   width: 150px;
+}
+
+.prob-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: #fdf6ec;
+  border: 1px solid #f5dab1;
+  border-radius: 6px;
 }
 
 .probability-cell {

@@ -6,7 +6,7 @@ from extensions import get_db, token_required
 from . import dashboard_bp
 
 
-def build_date_filter(time_range):
+def build_date_filter(time_range, year=None):
     if time_range not in ('all', 'month', 'quarter', 'year'):
         time_range = 'all'
 
@@ -23,7 +23,7 @@ def build_date_filter(time_range):
         return ("AND created_at >= ?", "AND sign_date >= ?", "AND payment_date >= ?",
                 [start_date], [start_date], [start_date])
     elif time_range == 'year':
-        year_str = str(now.year)
+        year_str = str(year if year else now.year)
         return ("AND strftime('%Y', created_at) = ?",
                 "AND strftime('%Y', sign_date) = ?",
                 "AND strftime('%Y', payment_date) = ?",
@@ -39,6 +39,7 @@ def get_dashboard():
     username = payload['username']
     role = payload['role']
     time_range = request.args.get('time_range', 'all')
+    year = request.args.get('year', type=int)
 
     db = get_db()
     cursor = db.cursor()
@@ -46,7 +47,7 @@ def get_dashboard():
     result = {}
     now = datetime.now()
 
-    date_cond, contract_cond, payment_cond, date_params, contract_params, payment_params = build_date_filter(time_range)
+    date_cond, contract_cond, payment_cond, date_params, contract_params, payment_params = build_date_filter(time_range, year)
 
     if role == '主任' or role == '院长':
         cursor.execute("SELECT COUNT(*) as total FROM customers WHERE 1=1 " + date_cond, date_params)
@@ -165,31 +166,33 @@ def get_dashboard():
             business_data.append(business_monthly.get(month_str, 0))
             contract_data.append(contract_monthly.get(month_str, 0))
     else:
+        chart_year = year if year else now.year
+
         cursor.execute("""
-            SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
+            SELECT strftime('%m', created_at) as month, COUNT(*) as count
             FROM customers
-            WHERE created_at >= DATE('now', '-12 months')
-            GROUP BY strftime('%Y-%m', created_at)
+            WHERE strftime('%Y', created_at) = ?
+            GROUP BY strftime('%m', created_at)
             ORDER BY month
-        """)
+        """, (str(chart_year),))
         customer_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
 
         cursor.execute("""
-            SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
+            SELECT strftime('%m', created_at) as month, COUNT(*) as count
             FROM business
-            WHERE status = 'active' AND created_at >= DATE('now', '-12 months')
-            GROUP BY strftime('%Y-%m', created_at)
+            WHERE status = 'active' AND strftime('%Y', created_at) = ?
+            GROUP BY strftime('%m', created_at)
             ORDER BY month
-        """)
+        """, (str(chart_year),))
         business_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
 
         cursor.execute("""
-            SELECT strftime('%Y-%m', sign_date) as month, COUNT(*) as count
+            SELECT strftime('%m', sign_date) as month, COUNT(*) as count
             FROM contracts
-            WHERE sign_date >= DATE('now', '-12 months')
-            GROUP BY strftime('%Y-%m', sign_date)
+            WHERE strftime('%Y', sign_date) = ?
+            GROUP BY strftime('%m', sign_date)
             ORDER BY month
-        """)
+        """, (str(chart_year),))
         contract_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
 
         months = []
@@ -197,13 +200,12 @@ def get_dashboard():
         business_data = []
         contract_data = []
 
-        for i in range(12):
-            date = now - timedelta(days=i*30)
-            month_str = date.strftime('%Y-%m')
-            months.insert(0, date.strftime('%m月'))
-            customer_data.insert(0, customer_monthly.get(month_str, 0))
-            business_data.insert(0, business_monthly.get(month_str, 0))
-            contract_data.insert(0, contract_monthly.get(month_str, 0))
+        for m in range(1, 13):
+            month_str = f"{m:02d}"
+            months.append(f"{m}月")
+            customer_data.append(customer_monthly.get(month_str, 0))
+            business_data.append(business_monthly.get(month_str, 0))
+            contract_data.append(contract_monthly.get(month_str, 0))
 
     result['chart_data'] = {
         'months': months,

@@ -59,6 +59,9 @@
                   <el-radio-button label="quarter">本季度</el-radio-button>
                   <el-radio-button label="year">本年</el-radio-button>
                 </el-radio-group>
+                <el-select v-model="selectedYear" size="small" style="width: 100px; margin-left: 12px;" @change="onYearChange">
+                  <el-option v-for="y in availableYears" :key="y" :label="y + '年'" :value="y" />
+                </el-select>
               </div>
             </div>
           </template>
@@ -93,12 +96,20 @@
         <el-card class="recent-card">
           <template #header>
             <span>📋 近期合同</span>
-            <el-button size="small" type="text">查看全部 →</el-button>
+            <el-button size="small" type="text" @click="router.push('/contracts')">查看全部 →</el-button>
           </template>
           <el-table :data="recentContracts" stripe size="small">
-            <el-table-column prop="contract_name" label="合同名称" min-width="150" />
-            <el-table-column prop="total_amt" label="金额(万)" width="100" :formatter="formatAmount" />
-            <el-table-column prop="sign_date" label="签约日期" width="100" />
+            <el-table-column prop="contract_name" label="合同名称" min-width="150">
+              <template #default="scope">
+                <span class="contract-link" @click="router.push('/contracts')">{{ scope.row.contract_name }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="total_amt" label="金额(万)" width="100" :formatter="(row, column, cellValue) => formatAmount(cellValue)" />
+            <el-table-column prop="sign_date" label="签约日期" width="110">
+              <template #default="scope">
+                {{ formatDate(scope.row.sign_date) }}
+              </template>
+            </el-table-column>
             <el-table-column prop="status" label="状态" width="80">
               <template #default="scope">
                 <el-tag :type="getStatusType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag>
@@ -125,10 +136,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '../api'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
+
+const router = useRouter()
 
 const dashboardData = ref({
   total_customers: 0,
@@ -149,6 +163,16 @@ const alerts = ref([
 ])
 
 const timeRange = ref('month')
+const currentYear = new Date().getFullYear()
+const selectedYear = ref(currentYear)
+const availableYears = computed(() => {
+  const years = []
+  for (let y = currentYear; y >= 2019; y--) {
+    years.push(y)
+  }
+  return years
+})
+
 const trendChart = ref(null)
 const funnelChart = ref(null)
 let chart1 = null
@@ -158,8 +182,22 @@ const formatAmount = (value) => {
   return ((value || 0) / 10000).toFixed(1)
 }
 
+const formatDate = (dateStr) => {
+  if (!dateStr) return ''
+  return dateStr.substring(0, 10)
+}
+
+const onYearChange = () => {
+  timeRange.value = 'year'
+  fetchDashboardData()
+}
+
 const fetchDashboardData = async () => {
-  const response = await api.get('/dashboard', { time_range: timeRange.value })
+  const params = { time_range: timeRange.value }
+  if (timeRange.value === 'year') {
+    params.year = selectedYear.value
+  }
+  const response = await api.get('/dashboard', params)
   if (response.code === 200) {
     dashboardData.value = response.data
     salesRanking.value = response.data.sales_ranking || []
@@ -201,19 +239,21 @@ const fetchBusinessStats = async () => {
 
 const updateFunnelChart = async () => {
   if (!chart2) return
-  
+
   const stats = await fetchBusinessStats()
   if (!stats) return
-  
+
   chart2.setOption({
-    data: [
-      { value: stats['引导需求阶段'], name: '引导需求阶段', itemStyle: { color: '#91cc75' } },
-      { value: stats['能力展示阶段'], name: '能力展示阶段', itemStyle: { color: '#5470c6' } },
-      { value: stats['方案确定阶段'], name: '方案确定阶段', itemStyle: { color: '#fac858' } },
-      { value: stats['商务谈判阶段'], name: '商务谈判阶段', itemStyle: { color: '#ee6666' } },
-      { value: stats['合同签订阶段'], name: '合同签订阶段', itemStyle: { color: '#73c0de' } },
-      { value: stats['销售实现'], name: '销售实现', itemStyle: { color: '#9a60b4' } }
-    ]
+    series: [{
+      data: [
+        { value: stats['引导需求阶段'], name: '引导需求阶段', itemStyle: { color: '#91cc75' } },
+        { value: stats['能力展示阶段'], name: '能力展示阶段', itemStyle: { color: '#5470c6' } },
+        { value: stats['方案确定阶段'], name: '方案确定阶段', itemStyle: { color: '#fac858' } },
+        { value: stats['商务谈判阶段'], name: '商务谈判阶段', itemStyle: { color: '#ee6666' } },
+        { value: stats['合同签订阶段'], name: '合同签订阶段', itemStyle: { color: '#73c0de' } },
+        { value: stats['销售实现'], name: '销售实现', itemStyle: { color: '#9a60b4' } }
+      ]
+    }]
   })
 }
 
@@ -243,7 +283,7 @@ const initCharts = () => {
   if (funnelChart.value) {
     chart2 = echarts.init(funnelChart.value)
     chart2.setOption({
-      tooltip: { trigger: 'item', formatter: '{b}: {c}%' },
+      tooltip: { trigger: 'item', formatter: '{b}: {c}个商机' },
       series: [{
         name: '商机漏斗',
         type: 'funnel',
@@ -270,6 +310,21 @@ const initCharts = () => {
           { value: 5, name: '销售实现', itemStyle: { color: '#9a60b4' } }
         ]
       }]
+    })
+
+    chart2.on('click', (params) => {
+      const stageMap = {
+        '引导需求阶段': { min: 0, max: 29 },
+        '能力展示阶段': { min: 30, max: 59 },
+        '方案确定阶段': { min: 60, max: 79 },
+        '商务谈判阶段': { min: 80, max: 89 },
+        '合同签订阶段': { min: 90, max: 99 },
+        '销售实现': { min: 100, max: 100 }
+      }
+      const range = stageMap[params.name]
+      if (range) {
+        router.push({ path: '/business', query: { prob_min: range.min, prob_max: range.max } })
+      }
     })
   }
 }
@@ -491,6 +546,15 @@ onUnmounted(() => {
   background: white;
   border-radius: 16px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.contract-link {
+  color: #5470c6;
+  cursor: pointer;
+}
+
+.contract-link:hover {
+  text-decoration: underline;
 }
 
 .alert-card {
