@@ -49,7 +49,43 @@ def _init_tables(db):
     cursor = db.cursor()
     _init_business_table(cursor)
     _init_operation_logs_table(cursor)
+    _init_visits_table(cursor)
+    _init_user_roles_table(cursor)
     db.commit()
+
+
+def _init_user_roles_table(cursor):
+    try:
+        cursor.execute("""
+            CREATE TABLE user_roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                role TEXT NOT NULL,
+                UNIQUE(username, role)
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("""
+            INSERT OR IGNORE INTO user_roles (username, role)
+            SELECT username, role FROM users
+            WHERE role IS NOT NULL AND role != ''
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT '在职'")
+    except:
+        pass
+    try:
+        cursor.execute("UPDATE users SET status = '在职' WHERE status IS NULL OR status = ''")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN department TEXT DEFAULT ''")
+    except:
+        pass
 
 
 def _init_business_table(cursor):
@@ -112,6 +148,54 @@ def _init_operation_logs_table(cursor):
         pass
     try:
         cursor.execute("ALTER TABLE operation_logs ADD COLUMN is_read INTEGER DEFAULT 0")
+    except:
+        pass
+
+
+def _init_visits_table(cursor):
+    try:
+        cursor.execute("""
+            CREATE TABLE visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cust_id INTEGER,
+                visitor_id TEXT,
+                plan_date TEXT NOT NULL,
+                plan_time TEXT,
+                actual_date TEXT,
+                actual_time TEXT,
+                purpose TEXT,
+                status TEXT DEFAULT 'planned',
+                result TEXT,
+                location TEXT,
+                contact_person TEXT,
+                notes TEXT,
+                work_type TEXT DEFAULT 'visit',
+                work_content TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cust_id) REFERENCES customers(id)
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE visits ADD COLUMN location TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE visits ADD COLUMN contact_person TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE visits ADD COLUMN notes TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE visits ADD COLUMN work_type TEXT DEFAULT 'visit'")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE visits ADD COLUMN work_content TEXT")
     except:
         pass
 

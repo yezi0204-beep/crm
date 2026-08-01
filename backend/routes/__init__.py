@@ -8,6 +8,7 @@ finance_bp = Blueprint('finance', __name__)
 dashboard_bp = Blueprint('dashboard', __name__)
 system_bp = Blueprint('system', __name__)
 misc_bp = Blueprint('misc', __name__)
+visits_bp = Blueprint('visits', __name__)
 
 def register_blueprints(app):
     from .auth import register_routes as register_auth
@@ -18,6 +19,7 @@ def register_blueprints(app):
     from .dashboard import register_routes as register_dashboard
     from .system import register_routes as register_system
     from .misc import register_routes as register_misc
+    from .visits import register_routes as register_visits
 
     register_auth(app)
     register_customers(app)
@@ -27,3 +29,4 @@ def register_blueprints(app):
     register_dashboard(app)
     register_system(app)
     register_misc(app)
+    register_visits(app)

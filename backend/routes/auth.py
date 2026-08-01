@@ -32,10 +32,13 @@ def login():
 
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("SELECT username, password_hash, name, role FROM users WHERE username = ?", (username,))
+    cursor.execute("SELECT username, password_hash, name, role, status, department FROM users WHERE username = ?", (username,))
     row = cursor.fetchone()
 
     if row and check_password(password, row['password_hash']):
+        if row['status'] == '离职':
+            return jsonify({'code': 403, 'message': '该账号已离职，无法登录系统', 'data': None})
+
         LOGIN_ATTEMPTS.pop(ip_address, None)
         token = create_token(row['username'], row['name'], row['role'])
         record_operation_log(row['username'], '登录', '系统', f'用户 {row["name"]} 登录系统')
@@ -46,7 +49,8 @@ def login():
                 'token': token,
                 'username': row['username'],
                 'name': row['name'],
-                'role': row['role']
+                'role': row['role'],
+                'department': row['department'] or ''
             }
         })
 
@@ -71,6 +75,10 @@ def get_user_info():
     rows = cursor.fetchall()
     roles = [r['role'] for r in rows] if rows else [payload['role']]
 
+    cursor.execute("SELECT department FROM users WHERE username = ?", (payload['username'],))
+    dept_row = cursor.fetchone()
+    department = dept_row['department'] if dept_row else ''
+
     return jsonify({
         'code': 200,
         'message': 'success',
@@ -78,7 +86,8 @@ def get_user_info():
             'username': payload['username'],
             'name': payload['name'],
             'role': payload['role'],
-            'roles': roles
+            'roles': roles,
+            'department': department or ''
         }
     })
 

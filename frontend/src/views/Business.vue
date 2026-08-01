@@ -64,7 +64,7 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="predict_date" label="预计成交" min-width="120" sortable />
+          <el-table-column prop="predict_date" label="预计成交" min-width="120" sortable :formatter="formatPredictDate" />
           <el-table-column prop="owner_name" label="负责人" min-width="80" sortable />
           <el-table-column prop="created_at" label="创建时间" min-width="130" sortable />
           <el-table-column label="操作" min-width="180" fixed="right">
@@ -131,7 +131,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="预计成交日期">
-          <el-date-picker v-model="businessForm.predict_date" type="date" />
+          <el-date-picker v-model="businessForm.predict_date" type="month" value-format="YYYY-MM" placeholder="选择年月" />
         </el-form-item>
         <el-form-item label="行业">
           <el-input v-model="businessForm.industry" />
@@ -362,6 +362,12 @@ const rules = {
 
 const canEditOwner = () => {
   return authStore.role === '主任' || authStore.role === '院长'
+}
+
+const formatPredictDate = (row) => {
+  const date = row.predict_date
+  if (!date) return ''
+  return date.substring(0, 7)
 }
 
 const fetchUsers = async () => {

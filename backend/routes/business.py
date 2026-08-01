@@ -1,11 +1,64 @@
-from flask import request, jsonify
+from flask import request, jsonify, g
 from extensions import (
     get_db, verify_token, record_operation_log,
     token_required, admin_required,
 )
 from datetime import datetime
+import logging
 
 from . import business_bp
+
+logger = logging.getLogger(__name__)
+
+
+def auto_roll_over_plans(db):
+    """自动滚动更新过期的商机周计划"""
+    if getattr(g, '_plans_rolled_over', False):
+        return
+    
+    today = datetime.now()
+    current_week_num = int(today.strftime('%W'))
+    current_week_str = today.strftime('%Y-W%W')
+    
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
+            SELECT id, 'weekly', plan_week, weekly_plan, CURRENT_TIMESTAMP
+            FROM business
+            WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
+                AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
+                AND weekly_plan IS NOT NULL AND weekly_plan != ''
+        """, (current_week_num,))
+        
+        cursor.execute("""
+            INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
+            SELECT id, 'next_week', plan_week, next_week_plan, CURRENT_TIMESTAMP
+            FROM business
+            WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
+                AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
+                AND next_week_plan IS NOT NULL AND next_week_plan != ''
+        """, (current_week_num,))
+        
+        cursor.execute("""
+            UPDATE business SET
+                weekly_plan = COALESCE(NULLIF(next_week_plan, ''), ''),
+                next_week_plan = '',
+                plan_week = ?
+            WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
+                AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
+        """, (current_week_str, current_week_num))
+        
+        db.commit()
+        g._plans_rolled_over = True
+        
+        updated_count = cursor.rowcount
+        if updated_count > 0:
+            logger.info(f"自动滚动更新了 {updated_count} 个商机的周计划")
+    except Exception as e:
+        logger.error(f"自动滚动更新周计划失败: {e}")
+        db.rollback()
 
 
 @business_bp.route('/api/business/roll_over_plans', methods=['POST'])
@@ -14,40 +67,7 @@ def roll_over_business_plans():
     payload = request.current_user
 
     db = get_db()
-    cursor = db.cursor()
-
-    today = datetime.now()
-    current_week_num = int(today.strftime('%W'))
-
-    cursor.execute("""
-        INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
-        SELECT id, 'weekly', plan_week, weekly_plan, CURRENT_TIMESTAMP
-        FROM business
-        WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
-            AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
-            AND next_week_plan IS NOT NULL AND next_week_plan != ''
-            AND weekly_plan IS NOT NULL AND weekly_plan != ''
-    """, (current_week_num,))
-
-    cursor.execute("""
-        INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
-        SELECT id, 'next_week', plan_week, next_week_plan, CURRENT_TIMESTAMP
-        FROM business
-        WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
-            AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
-            AND next_week_plan IS NOT NULL AND next_week_plan != ''
-    """, (current_week_num,))
-
-    cursor.execute("""
-        UPDATE business SET
-            weekly_plan = next_week_plan,
-            next_week_plan = '',
-            plan_week = ?
-        WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
-            AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
-            AND next_week_plan IS NOT NULL AND next_week_plan != ''
-    """, (today.strftime('%Y-W%W'), current_week_num))
-    db.commit()
+    auto_roll_over_plans(db)
 
     record_operation_log(payload['username'], '执行', '商机', '滚动更新商机周计划')
     return jsonify({'code': 200, 'message': '周计划滚动更新成功', 'data': None})
@@ -62,6 +82,7 @@ def get_business():
     status = request.args.get('status', 'active')
 
     db = get_db()
+    auto_roll_over_plans(db)
     cursor = db.cursor()
 
     if status == 'deleted':

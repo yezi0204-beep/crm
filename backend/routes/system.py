@@ -12,14 +12,33 @@ from . import system_bp
 @system_bp.route('/api/users', methods=['GET'])
 @token_required
 def get_users():
+    role_filter = request.args.get('role', '')
+
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("SELECT username, name, role FROM users ORDER BY name")
+
+    if role_filter:
+        cursor.execute("""
+            SELECT u.username, u.name, u.role, u.status, u.department
+            FROM users u
+            INNER JOIN user_roles ur ON u.username = ur.username
+            WHERE ur.role = ? AND (u.status IS NULL OR u.status != '离职')
+            GROUP BY u.username, u.name, u.role, u.status, u.department
+            ORDER BY u.name
+        """, (role_filter,))
+    else:
+        cursor.execute("SELECT username, name, role, status, department FROM users ORDER BY name")
 
     rows = cursor.fetchall()
     users = []
     for row in rows:
-        users.append(dict(row))
+        user = dict(row)
+        user['status'] = user.get('status') or '在职'
+        user['department'] = user.get('department') or ''
+        cursor.execute("SELECT role FROM user_roles WHERE username = ?", (user['username'],))
+        role_rows = cursor.fetchall()
+        user['roles'] = [r['role'] for r in role_rows] if role_rows else [user['role']]
+        users.append(user)
 
     return jsonify({'code': 200, 'message': 'success', 'data': users})
 
@@ -37,14 +56,99 @@ def create_user():
         if cursor.fetchone():
             return jsonify({'code': 400, 'message': '用户名已存在', 'data': None})
 
+        roles = data.get('roles', [])
+        if not roles and data.get('role'):
+            roles = [data.get('role')]
+        if not roles:
+            roles = ['销售']
+
+        primary_role = '主任' if '主任' in roles else ('院长' if '院长' in roles else roles[0])
+
         hashed_pwd = hash_password(data.get('password'))
         cursor.execute("""
-            INSERT INTO users (username, password_hash, name, role)
-            VALUES (?, ?, ?, ?)
-        """, (data.get('username'), hashed_pwd, data.get('name'), data.get('role')))
+            INSERT INTO users (username, password_hash, name, role, department)
+            VALUES (?, ?, ?, ?, ?)
+        """, (data.get('username'), hashed_pwd, data.get('name'), primary_role, data.get('department', '')))
+
+        for r in roles:
+            cursor.execute("INSERT OR IGNORE INTO user_roles (username, role) VALUES (?, ?)",
+                           (data.get('username'), r))
+
         db.commit()
 
         return jsonify({'code': 200, 'message': '用户创建成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@system_bp.route('/api/users/<username>', methods=['PUT'])
+@admin_required
+def update_user(username):
+    data = request.get_json(silent=True) or {}
+
+    db = get_db()
+    cursor = db.cursor()
+
+    try:
+        cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
+        if not cursor.fetchone():
+            return jsonify({'code': 404, 'message': '用户不存在', 'data': None})
+
+        if data.get('name'):
+            cursor.execute("UPDATE users SET name = ? WHERE username = ?", (data.get('name'), username))
+
+        if 'department' in data:
+            cursor.execute("UPDATE users SET department = ? WHERE username = ?", (data.get('department', ''), username))
+
+        roles = data.get('roles')
+        if roles is not None:
+            if not roles:
+                roles = ['销售']
+            primary_role = '主任' if '主任' in roles else ('院长' if '院长' in roles else roles[0])
+            cursor.execute("UPDATE users SET role = ? WHERE username = ?", (primary_role, username))
+            cursor.execute("DELETE FROM user_roles WHERE username = ?", (username,))
+            for r in roles:
+                cursor.execute("INSERT OR IGNORE INTO user_roles (username, role) VALUES (?, ?)",
+                               (username, r))
+
+        if data.get('password'):
+            hashed_pwd = hash_password(data.get('password'))
+            cursor.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hashed_pwd, username))
+
+        db.commit()
+
+        return jsonify({'code': 200, 'message': '用户更新成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@system_bp.route('/api/users/<username>/status', methods=['PUT'])
+@admin_required
+def toggle_user_status(username):
+    data = request.get_json(silent=True) or {}
+    new_status = data.get('status')
+
+    if new_status not in ('在职', '离职'):
+        return jsonify({'code': 400, 'message': '无效的状态值', 'data': None})
+
+    db = get_db()
+    cursor = db.cursor()
+
+    try:
+        cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
+        if not cursor.fetchone():
+            return jsonify({'code': 404, 'message': '用户不存在', 'data': None})
+
+        cursor.execute("UPDATE users SET status = ? WHERE username = ?", (new_status, username))
+        db.commit()
+
+        action = '标记离职' if new_status == '离职' else '恢复在职'
+        record_operation_log(request.current_user['username'], '状态变更', '用户管理',
+                             f'{action}：{username}')
+
+        return jsonify({'code': 200, 'message': f'{action}成功', 'data': None})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
@@ -57,6 +161,7 @@ def delete_user(username):
     cursor = db.cursor()
 
     try:
+        cursor.execute("DELETE FROM user_roles WHERE username = ?", (username,))
         cursor.execute("DELETE FROM users WHERE username = ?", (username,))
         db.commit()
 

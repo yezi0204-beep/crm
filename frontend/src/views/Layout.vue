@@ -54,6 +54,10 @@
             <span class="menu-icon">💰</span>
             <span>回款管理</span>
           </el-menu-item>
+          <el-menu-item index="/visits">
+            <span class="menu-icon">📅</span>
+            <span>拜访排班</span>
+          </el-menu-item>
         </div>
         
         <div class="menu-group">
@@ -78,7 +82,7 @@
         
         <div class="menu-group">
           <div class="menu-group-title">🔧 系统管理</div>
-          <el-menu-item index="/users">
+          <el-menu-item index="/users" v-if="authStore.department === '应用中心' && authStore.role === '主任'">
             <span class="menu-icon">👥</span>
             <span>用户管理</span>
           </el-menu-item>
@@ -166,6 +170,7 @@ const pageTitleMap = {
   '/business': '商机看板',
   '/contracts': '合同管理',
   '/payments': '回款管理',
+  '/visits': '拜访排班',
   '/pool': '公海池',
   '/workhours': '工时管理',
   '/projects': '项目分配',

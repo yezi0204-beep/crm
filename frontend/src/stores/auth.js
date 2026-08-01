@@ -8,6 +8,7 @@ export const useAuthStore = defineStore('auth', () => {
   const name = ref('')
   const role = ref('')
   const roles = ref([])
+  const department = ref(localStorage.getItem('crm_department') || '')
   const isLoggedIn = ref(false)
 
   const login = async (usernameInput, password) => {
@@ -16,21 +17,21 @@ export const useAuthStore = defineStore('auth', () => {
         username: usernameInput,
         password
       })
-      
+
       if (response.code === 200) {
         token.value = response.data.token
         username.value = response.data.username
         name.value = response.data.name
         role.value = response.data.role
         isLoggedIn.value = true
-        
+
         localStorage.setItem('crm_token', token.value)
         localStorage.setItem('crm_username', username.value)
         localStorage.setItem('crm_name', name.value)
         localStorage.setItem('crm_role', role.value)
-        
+
         await getUserInfo()
-        
+
         return { success: true }
       }
       return { success: false, message: response.message || '登录失败' }
@@ -53,7 +54,9 @@ export const useAuthStore = defineStore('auth', () => {
         name.value = response.data.name
         role.value = response.data.role
         roles.value = response.data.roles
+        department.value = response.data.department || ''
         isLoggedIn.value = true
+        localStorage.setItem('crm_department', department.value)
       }
     } catch (error) {
       logout()
@@ -82,12 +85,14 @@ export const useAuthStore = defineStore('auth', () => {
     name.value = ''
     role.value = ''
     roles.value = []
+    department.value = ''
     isLoggedIn.value = false
-    
+
     localStorage.removeItem('crm_token')
     localStorage.removeItem('crm_username')
     localStorage.removeItem('crm_name')
     localStorage.removeItem('crm_role')
+    localStorage.removeItem('crm_department')
   }
 
   return {
@@ -96,6 +101,7 @@ export const useAuthStore = defineStore('auth', () => {
     name,
     role,
     roles,
+    department,
     isLoggedIn,
     login,
     getUserInfo,
