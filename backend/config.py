@@ -2,7 +2,7 @@ import os
 
 LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
 LLM_API_BASE = os.environ.get('LLM_API_BASE', 'https://api.deepseek.com/v1')
-LLM_MODEL = os.environ.get('LLM_MODEL', 'deepseek-v4-flash')
+LLM_MODEL = os.environ.get('LLM_MODEL', 'deepseek-chat')
 
 USE_LLM = bool(LLM_API_KEY)
 

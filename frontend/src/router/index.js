@@ -79,6 +79,11 @@ const routes = [
         component: () => import('../views/Knowledge.vue')
       },
       {
+        path: 'leads',
+        name: 'Leads',
+        component: () => import('../views/Leads.vue')
+      },
+      {
         path: 'alerts',
         name: 'Alerts',
         component: () => import('../views/Alerts.vue')
@@ -125,6 +130,11 @@ router.beforeEach(async (to, from, next) => {
   }
 
   if (to.path === '/users' && !(authStore.department === '应用中心' && authStore.role === '主任')) {
+    next('/dashboard')
+    return
+  }
+
+  if (to.path === '/leads' && !['主任', '院长'].includes(authStore.role)) {
     next('/dashboard')
     return
   }

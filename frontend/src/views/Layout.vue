@@ -70,6 +70,10 @@
             <span class="menu-icon">🌊</span>
             <span>公海池</span>
           </el-menu-item>
+          <el-menu-item index="/leads" v-if="['主任','院长'].includes(authStore.role)">
+            <span class="menu-icon">📡</span>
+            <span>智能线索</span>
+          </el-menu-item>
         </div>
         
         <div class="menu-group">
@@ -181,6 +185,7 @@ const pageTitleMap = {
   '/payments': '回款管理',
   '/visits': '拜访排班',
   '/pool': '公海池',
+  '/leads': '智能线索',
   '/workhours': '工时管理',
   '/projects': '项目分配',
   '/users': '用户管理',

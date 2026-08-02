@@ -8,7 +8,7 @@ import logging
 
 from extensions import (
     SECRET_KEY, DB_PATH, BASE_DIR, UPLOAD_DIR,
-    setup_extensions, get_db, record_operation_log
+    setup_extensions, get_db, record_operation_log, ensure_tables
 )
 from routes import register_blueprints
 from scheduler import start_scheduler, stop_scheduler, run_cleanup_now
@@ -36,6 +36,10 @@ def init_llm():
         USE_LLM = False
 
 init_llm()
+
+# 应用启动时预建所有表，确保调度器在请求上下文外运行时表已就绪
+# （lead_sources/scraped_leads 等表在 get_db() 首次请求时才创建，调度器会先用到）
+ensure_tables()
 
 start_scheduler()
 

@@ -12,6 +12,7 @@ visits_bp = Blueprint('visits', __name__)
 reports_bp = Blueprint('reports', __name__)
 ai_agent_bp = Blueprint('ai_agent', __name__)
 knowledge_bp = Blueprint('knowledge', __name__)
+leads_bp = Blueprint('leads', __name__)
 
 def register_blueprints(app):
     from .auth import register_routes as register_auth
@@ -26,6 +27,7 @@ def register_blueprints(app):
     from .reports import register_routes as register_reports
     from .ai_agent import register_routes as register_ai_agent
     from .knowledge import register_routes as register_knowledge
+    from .leads import register_routes as register_leads
 
     register_auth(app)
     register_customers(app)
@@ -39,3 +41,4 @@ def register_blueprints(app):
     register_reports(app)
     register_ai_agent(app)
     register_knowledge(app)
+    register_leads(app)

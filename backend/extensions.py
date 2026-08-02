@@ -45,6 +45,25 @@ def close_db(error=None):
         g.db.close()
 
 
+def ensure_tables():
+    """应用启动时预建表（请求上下文外，供调度器等提前使用）。
+
+    get_db() 在首次请求时才建表，调度器在启动即运行会因表缺失报错，
+    因此在 start_scheduler() 之前调用本函数确保所有表已就绪。
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        _init_tables(conn)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[ensure_tables] 初始化表失败: {e}")
+
+
 def _init_tables(db):
     cursor = db.cursor()
     _init_business_table(cursor)
@@ -53,6 +72,7 @@ def _init_tables(db):
     _init_visits_table(cursor)
     _init_user_roles_table(cursor)
     _init_knowledge_base_table(cursor)
+    _init_lead_tables(cursor)
     db.commit()
 
 
@@ -76,6 +96,236 @@ def _init_knowledge_base_table(cursor):
             )
         """)
     except:
+        pass
+
+
+def _init_lead_tables(cursor):
+    """智能线索管理：多渠道线索源配置 + 抓取线索队列。"""
+    # 线索源：可配置的外部抓取渠道（RSS/API/示例/手动导入）
+    try:
+        cursor.execute("""
+            CREATE TABLE lead_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                source_type TEXT NOT NULL DEFAULT 'sample',
+                url TEXT,
+                config TEXT,
+                keywords TEXT,
+                industry TEXT,
+                region TEXT,
+                enabled INTEGER DEFAULT 1,
+                interval_hours INTEGER DEFAULT 24,
+                last_scraped_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+    # 抓取线索队列：经 AI 评估意向后精准分配
+    try:
+        cursor.execute("""
+            CREATE TABLE scraped_leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id INTEGER,
+                company TEXT,
+                opportunity_name TEXT,
+                contact_name TEXT,
+                phone TEXT,
+                email TEXT,
+                industry TEXT,
+                region TEXT,
+                source TEXT,
+                link TEXT,
+                remark TEXT,
+                raw_data TEXT,
+                intent_score INTEGER,
+                eval_reason TEXT,
+                assigned_to TEXT,
+                status TEXT DEFAULT 'pending',
+                scraped_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                evaluated_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (source_id) REFERENCES lead_sources(id)
+            )
+        """)
+    except:
+        pass
+    # 兼容已部署环境：为 scraped_leads 幂等新增 opportunity_name（商机名称）/ link（获取链接）字段
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN opportunity_name TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN link TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN category TEXT")
+    except:
+        pass
+    # lead_sources 幂等新增 category（能力域：招投标监控/电商商机/企业客源/竞品情报/舆情痛点/RSS订阅）
+    try:
+        cursor.execute("ALTER TABLE lead_sources ADD COLUMN category TEXT")
+    except:
+        pass
+    # 回填已有源/线索的 category（旧 RSS 源归入招投标监控）
+    try:
+        cursor.execute("UPDATE lead_sources SET category='招投标监控' WHERE (category IS NULL OR category='') AND source_type='rss'")
+    except:
+        pass
+    try:
+        cursor.execute("UPDATE scraped_leads SET category='招投标监控' WHERE (category IS NULL OR category='')")
+    except:
+        pass
+    # 历史线索回填：opportunity_name 取 remark 兜底 company（link 不造假，留空）
+    try:
+        cursor.execute("""
+            UPDATE scraped_leads
+            SET opportunity_name = COALESCE(NULLIF(remark, ''), company)
+            WHERE (opportunity_name IS NULL OR opportunity_name = '') AND company IS NOT NULL AND company != ''
+        """)
+    except:
+        pass
+    # 一次性迁移：移除旧的演示型 sample 源及其造假线索，替换为真实 RSS 源
+    _migrate_to_real_sources(cursor)
+    # 预置真实线索源（按 name 幂等插入，新增源不影响已有源配置）
+    _seed_lead_sources(cursor)
+
+
+def _migrate_to_real_sources(cursor):
+    """一次性迁移：移除演示型 sample 源及百度搜索链接线索，改用真实 RSS 源。
+
+    仅在检测到旧的 sample 预置源（如"卫星遥感需求"）存在时执行，执行后幂等。
+    """
+    try:
+        cursor.execute("SELECT id FROM lead_sources WHERE name='卫星遥感需求' AND source_type='sample' LIMIT 1")
+        if not cursor.fetchone():
+            return  # 无旧 sample 源，跳过
+        # 1. 删除 sample 源及无 URL 的 api 源的非已分配线索（已分配线索已转为客户，保留审计）
+        cursor.execute("""
+            DELETE FROM scraped_leads
+            WHERE status != 'imported'
+            AND source_id IN (
+                SELECT id FROM lead_sources
+                WHERE source_type='sample' OR (source_type='api' AND (url IS NULL OR url=''))
+            )
+        """)
+        # 2. 已分配线索解除外键关联后保留
+        cursor.execute("""
+            UPDATE scraped_leads SET source_id=NULL
+            WHERE source_id IN (
+                SELECT id FROM lead_sources
+                WHERE source_type='sample' OR (source_type='api' AND (url IS NULL OR url=''))
+            )
+        """)
+        # 3. 删除旧的演示源
+        cursor.execute("""
+            DELETE FROM lead_sources
+            WHERE source_type='sample' OR (source_type='api' AND (url IS NULL OR url=''))
+        """)
+    except Exception:
+        pass
+    # 清理含百度搜索链接的造假线索（非已分配）
+    try:
+        cursor.execute("DELETE FROM scraped_leads WHERE link LIKE '%baidu.com%' AND status != 'imported'")
+    except Exception:
+        pass
+    # 已分配线索若含百度链接，清空 link（不保留造假链接）
+    try:
+        cursor.execute("UPDATE scraped_leads SET link=NULL WHERE link LIKE '%baidu.com%'")
+    except Exception:
+        pass
+
+
+def _seed_lead_sources(cursor):
+    """预置五大能力域真实线索源（按名称幂等插入）。
+
+    五大能力域：
+      1. 招投标监控——真实采购网 RSS（link 取自 RSS item 真实公告链接）
+      2. 电商商机——电商榜单/热搜 HTML（需动态渲染，playwright 缺失时降级返回空）
+      3. 企业客源——企业信用公示系统 HTML（需动态渲染）
+      4. 竞品情报——用户自配竞品官网 URL（不预置，避免无目标抓取）
+      5. 舆情痛点——知乎/贴吧等垂直社区 HTML（需动态渲染）
+
+    通过 keywords 过滤本公司关注领域（卫星遥感/卫星通信/AI智能体/军工装备），
+    industry 由 leads.py _detect_industry 自动分类。
+    不预置任何 sample 演示源（不生成造假数据）；html 源抓取失败返回空列表，不造假。
+    """
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # 清理与新源重复的旧版预置源（同名或同 URL 不同名，避免重复抓取产生重复线索）
+    try:
+        cursor.execute("DELETE FROM scraped_leads WHERE source_id IN (SELECT id FROM lead_sources WHERE name='政府采购招标信息')")
+        cursor.execute("DELETE FROM lead_sources WHERE name='政府采购招标信息'")
+    except Exception:
+        pass
+    # 覆盖本公司关注领域的关键词（用于过滤真实采购公告）
+    domain_kw = '卫星,遥感,卫星通信,通信终端,VSAT,智能体,人工智能,大模型,AI,装备,武器,军用,军采,国防,遥感数据,遥感影像,信息化'
+    # (name, source_type, url, config, keywords, industry, region, enabled, interval_hours, category)
+    sources = [
+        # ========== 1. 招投标监控（真实采购网 RSS）==========
+        ('中国政府采购网-招标公告', 'rss', 'http://www.ccgp.gov.cn/cggg/zygg/gkzb/rss.xml',
+         '{"max_items": 30}', domain_kw, '信息技术', '全国', 1, 12, '招投标监控'),
+        ('中国政府采购网-中标公告', 'rss', 'http://www.ccgp.gov.cn/cggg/zygg/zbgg/rss.xml',
+         '{"max_items": 30}', domain_kw, '信息技术', '全国', 1, 12, '招投标监控'),
+        ('全军武器装备采购信息网', 'rss', 'http://www.plap.cn/',
+         '{"max_items": 30}', '装备,武器,军用,军采,国防,采购', '军工装备', '全国', 1, 12, '招投标监控'),
+        ('全国公共资源交易平台', 'rss', 'https://www.ggzy.gov.cn/',
+         '{"max_items": 30}', domain_kw, '信息技术', '全国', 1, 12, '招投标监控'),
+        ('中国招标投标公共服务平台', 'rss', 'http://bulletin.cebpubservice.com/',
+         '{"max_items": 30}', domain_kw, '信息技术', '全国', 1, 12, '招投标监控'),
+        # ========== 2. 电商商机（电商榜单 HTML，需动态渲染）==========
+        # Amazon Best Sellers 真实榜单页，需 playwright 动态加载；抓取商品名/价格/排名
+        ('亚马逊热销榜-电子办公', 'html', 'https://www.amazon.com/Best-Sellers/zgbs/electronics',
+         '{"dynamic": true, "max_items": 20}', '卫星通信,遥感,通信终端,办公,电子', '信息技术', '海外', 0, 24, '电商商机'),
+        # ========== 3. 企业客源（企业信用公示 HTML，需动态渲染）==========
+        # 国家企业信用信息公示系统真实入口，需 playwright 模拟搜索；按关键词检索新注册企业
+        ('国家企业信用公示-新注册企业', 'html', 'https://www.gsxt.gov.cn/',
+         '{"dynamic": true, "max_items": 20, "search_type": "enterprise"}',
+         '卫星,遥感,通信,智能体,科技', '信息技术', '全国', 0, 48, '企业客源'),
+        # ========== 5. 舆情痛点（垂直社区 HTML，需动态渲染）==========
+        # 知乎热榜真实页面，需 playwright 动态渲染；抓取用户讨论中的需求痛点
+        ('知乎热榜-需求痛点', 'html', 'https://www.zhihu.com/hot',
+         '{"dynamic": true, "max_items": 20}', '卫星,遥感,通信,智能体,采购,招标', '信息技术', '全国', 0, 12, '舆情痛点'),
+        # 百度贴吧真实搜索页，按关键词抓取用户吐槽
+        ('百度贴吧-行业痛点', 'html', 'https://tieba.baidu.com/f?kw=%CE%C0%D0%C7%B5%D8%C7%F2',
+         '{"dynamic": false, "max_items": 15}', '卫星,遥感,通信,智能体', '信息技术', '全国', 0, 24, '舆情痛点'),
+        # ========== AI 智能体互联网搜索（五大能力域，默认启用，无需 playwright）==========
+        # AI 搜索用 DuckDuckGo 搜索引擎 + LLM 提取结构化线索，仅需网络无需动态渲染
+        ('AI搜索-招投标监控', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', domain_kw, '信息技术', '全国', 1, 12, '招投标监控'),
+        ('AI搜索-电商商机', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '卫星通信,通信终端,智能体,遥感', '信息技术', '全国', 1, 24, '电商商机'),
+        ('AI搜索-企业客源', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '卫星,遥感,通信,智能体,科技', '信息技术', '全国', 1, 48, '企业客源'),
+        ('AI搜索-竞品情报', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '卫星通信,通信终端,智能体,遥感', '信息技术', '全国', 1, 24, '竞品情报'),
+        ('AI搜索-舆情痛点', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '卫星,遥感,通信,智能体,采购,招标', '信息技术', '全国', 1, 24, '舆情痛点'),
+    ]
+    for s in sources:
+        try:
+            cursor.execute("SELECT id FROM lead_sources WHERE name=?", (s[0],))
+            if cursor.fetchone():
+                # 已存在则补全 category（兼容旧源）
+                if len(s) >= 10:
+                    cursor.execute("UPDATE lead_sources SET category=? WHERE name=? AND (category IS NULL OR category='')", (s[9], s[0]))
+                continue
+            cursor.execute("""
+                INSERT INTO lead_sources (name, source_type, url, config, keywords, industry,
+                                          region, enabled, interval_hours, last_scraped_at, created_at, category)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            """, (s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], now, s[9]))
+        except:
+            pass
+    # 停用 URL 为网站首页（非真正 RSS 订阅地址）的旧 RSS 源，避免抓不到数据
+    # AI 搜索源（ai_search）已替代这些源，无需 playwright 即可搜到真实数据
+    try:
+        cursor.execute("""
+            UPDATE lead_sources SET enabled=0
+            WHERE source_type='rss' AND category='招投标监控'
+            AND url IN ('http://www.plap.cn/', 'https://www.ggzy.gov.cn/', 'http://bulletin.cebpubservice.com/')
+        """)
+    except Exception:
         pass
 
 
