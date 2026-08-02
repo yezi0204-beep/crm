@@ -165,12 +165,20 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="240" fixed="right">
+            <el-table-column label="操作" width="300" fixed="right">
               <template #default="{ row }">
-                <el-button 
-                  v-if="row.status === 'planned'" 
-                  type="success" 
-                  size="small" 
+                <el-button
+                  v-if="row.status === 'completed' && row.work_type === 'visit'"
+                  type="primary"
+                  size="small"
+                  @click="generateReview(row)"
+                >
+                  AI复盘
+                </el-button>
+                <el-button
+                  v-if="row.status === 'planned'"
+                  type="success"
+                  size="small"
                   @click="openCompleteDialog(row)"
                 >
                   完成
@@ -418,6 +426,13 @@
         <el-button v-if="currentVisit?.status === 'planned'" @click="openEditDialog(currentVisit)">
           编辑
         </el-button>
+        <el-button
+          v-if="currentVisit?.status === 'completed' && currentVisit?.work_type === 'visit'"
+          type="primary"
+          @click="generateReview(currentVisit)"
+        >
+          🤖 AI 复盘
+        </el-button>
         <el-button @click="detailDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
@@ -453,6 +468,45 @@
         <el-button type="primary" @click="handleComplete">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- AI 复盘对话框 -->
+    <el-dialog v-model="reviewDialogVisible" title="🤖 AI 拜访复盘" width="680px" top="6vh">
+      <div v-loading="reviewLoading" element-loading-text="AI 正在生成结构化复盘摘要...">
+        <div v-if="reviewData" class="review-content">
+          <div class="review-title">{{ reviewData.title }}</div>
+          <div class="review-summary">{{ reviewData.summary }}</div>
+          <div class="review-section" v-if="reviewData.key_findings && reviewData.key_findings.length">
+            <div class="review-section-title">🔍 关键发现</div>
+            <ul><li v-for="(f, i) in reviewData.key_findings" :key="i">{{ f }}</li></ul>
+          </div>
+          <div class="review-section" v-if="reviewData.customer_needs && reviewData.customer_needs.length">
+            <div class="review-section-title">💡 客户需求</div>
+            <ul><li v-for="(f, i) in reviewData.customer_needs" :key="i">{{ f }}</li></ul>
+          </div>
+          <div class="review-section" v-if="reviewData.next_actions && reviewData.next_actions.length">
+            <div class="review-section-title">📌 下一步行动</div>
+            <ul><li v-for="(f, i) in reviewData.next_actions" :key="i">{{ f }}</li></ul>
+          </div>
+          <div class="review-section" v-if="reviewData.risk_warnings && reviewData.risk_warnings.length">
+            <div class="review-section-title">⚠️ 风险提示</div>
+            <ul><li v-for="(f, i) in reviewData.risk_warnings" :key="i">{{ f }}</li></ul>
+          </div>
+          <div class="review-section" v-if="reviewData.deal_signals">
+            <div class="review-section-title">🎯 成交信号</div>
+            <div class="review-deal">{{ reviewData.deal_signals }}</div>
+          </div>
+          <div class="review-tip" v-if="reviewData._fallback">
+            <span>ℹ️ 当前未启用大语言模型，以上为基于拜访记录的模板摘要。配置 LLM_API_KEY 后可获得更深入的智能分析。</span>
+          </div>
+          <div class="review-saved" v-if="reviewKnowledgeId">
+            ✅ 复盘摘要已自动沉淀至<a href="#/knowledge" target="_blank">企业知识库</a>（ID: {{ reviewKnowledgeId }}）
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="reviewDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -484,6 +538,12 @@ const addDialogVisible = ref(false)
 const detailDialogVisible = ref(false)
 const completeDialogVisible = ref(false)
 const visitFormRef = ref(null)
+
+// AI 复盘相关状态
+const reviewDialogVisible = ref(false)
+const reviewLoading = ref(false)
+const reviewData = ref(null)
+const reviewKnowledgeId = ref(null)
 
 const activePersonnelTab = ref('')
 
@@ -767,13 +827,13 @@ const handleSave = async () => {
 
 const handleComplete = async () => {
   if (!currentVisit.value) return
-  
+
   try {
     const res = await fetch(`/api/visits/${currentVisit.value.id}/complete`, {
       method: 'POST',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token.value}` 
+        'Authorization': `Bearer ${token.value}`
       },
       body: JSON.stringify(completeForm)
     })
@@ -789,6 +849,38 @@ const handleComplete = async () => {
     }
   } catch (error) {
     ElMessage.error('操作失败')
+  }
+}
+
+// AI 复盘：调用智能体生成结构化拜访摘要并沉淀至知识库
+const generateReview = async (visit) => {
+  if (!visit || !visit.id) return
+  reviewDialogVisible.value = true
+  reviewLoading.value = true
+  reviewData.value = null
+  reviewKnowledgeId.value = null
+  try {
+    const res = await fetch('/api/ai/visit-summary', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token.value}`
+      },
+      body: JSON.stringify({ visit_id: visit.id, save_to_knowledge: true })
+    })
+    const data = await res.json()
+    if (data.code === 200) {
+      reviewData.value = data.data.summary
+      reviewKnowledgeId.value = data.data.knowledge_id
+    } else {
+      ElMessage.error(data.message || '复盘生成失败')
+      reviewDialogVisible.value = false
+    }
+  } catch (error) {
+    ElMessage.error('请求失败，请稍后重试')
+    reviewDialogVisible.value = false
+  } finally {
+    reviewLoading.value = false
   }
 }
 
@@ -1040,4 +1132,21 @@ onMounted(async () => {
   background: #e6f7ff;
   color: #1890ff;
 }
+
+/* AI 复盘对话框 */
+.review-content { padding: 0 8px; }
+.review-title { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 12px; }
+.review-summary {
+  background: linear-gradient(135deg, #f0f4ff 0%, #ede9fe 100%);
+  padding: 12px 16px; border-radius: 8px; font-size: 14px; color: #334155;
+  line-height: 1.6; margin-bottom: 16px; border-left: 3px solid #667eea;
+}
+.review-section { margin-bottom: 16px; }
+.review-section-title { font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 8px; }
+.review-section ul { margin: 0; padding-left: 20px; }
+.review-section li { font-size: 13px; color: #475569; line-height: 1.7; margin-bottom: 4px; }
+.review-deal { font-size: 13px; color: #475569; padding: 8px 12px; background: #f8fafc; border-radius: 6px; }
+.review-tip { font-size: 12px; color: #94a3b8; margin-top: 16px; padding: 10px 12px; background: #fffbeb; border-radius: 6px; }
+.review-saved { font-size: 13px; color: #059669; margin-top: 12px; padding: 10px 12px; background: #d1fae5; border-radius: 6px; }
+.review-saved a { color: #059669; font-weight: 600; }
 </style>

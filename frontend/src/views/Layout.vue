@@ -38,6 +38,10 @@
             <span class="menu-icon">📊</span>
             <span>驾驶舱</span>
           </el-menu-item>
+          <el-menu-item index="/reports">
+            <span class="menu-icon">📈</span>
+            <span>业绩报表</span>
+          </el-menu-item>
           <el-menu-item index="/customers">
             <span class="menu-icon">👥</span>
             <span>客户管理</span>
@@ -98,6 +102,10 @@
           <el-menu-item index="/qa">
             <span class="menu-icon">🤖</span>
             <span>智能助手</span>
+          </el-menu-item>
+          <el-menu-item index="/knowledge">
+            <span class="menu-icon">📚</span>
+            <span>知识库</span>
           </el-menu-item>
           <el-menu-item index="/operation-logs" v-if="authStore.role === '主任'">
             <span class="menu-icon">📝</span>
@@ -166,6 +174,7 @@ const activeMenu = computed(() => route.path)
 
 const pageTitleMap = {
   '/dashboard': '销售驾驶舱',
+  '/reports': '业绩报表',
   '/customers': '客户管理',
   '/business': '商机看板',
   '/contracts': '合同管理',
@@ -178,6 +187,7 @@ const pageTitleMap = {
   '/alerts': '预警通知',
   '/search': '全局搜索',
   '/qa': '智能助手',
+  '/knowledge': '企业知识库',
   '/operation-logs': '操作日志'
 }
 

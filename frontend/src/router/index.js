@@ -19,6 +19,11 @@ const routes = [
         component: () => import('../views/Dashboard.vue')
       },
       {
+        path: 'reports',
+        name: 'Reports',
+        component: () => import('../views/Reports.vue')
+      },
+      {
         path: 'customers',
         name: 'Customers',
         component: () => import('../views/Customers.vue')
@@ -67,6 +72,11 @@ const routes = [
         path: 'qa',
         name: 'Qa',
         component: () => import('../views/Qa.vue')
+      },
+      {
+        path: 'knowledge',
+        name: 'Knowledge',
+        component: () => import('../views/Knowledge.vue')
       },
       {
         path: 'alerts',

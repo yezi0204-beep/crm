@@ -9,6 +9,9 @@ dashboard_bp = Blueprint('dashboard', __name__)
 system_bp = Blueprint('system', __name__)
 misc_bp = Blueprint('misc', __name__)
 visits_bp = Blueprint('visits', __name__)
+reports_bp = Blueprint('reports', __name__)
+ai_agent_bp = Blueprint('ai_agent', __name__)
+knowledge_bp = Blueprint('knowledge', __name__)
 
 def register_blueprints(app):
     from .auth import register_routes as register_auth
@@ -20,6 +23,9 @@ def register_blueprints(app):
     from .system import register_routes as register_system
     from .misc import register_routes as register_misc
     from .visits import register_routes as register_visits
+    from .reports import register_routes as register_reports
+    from .ai_agent import register_routes as register_ai_agent
+    from .knowledge import register_routes as register_knowledge
 
     register_auth(app)
     register_customers(app)
@@ -30,3 +36,6 @@ def register_blueprints(app):
     register_system(app)
     register_misc(app)
     register_visits(app)
+    register_reports(app)
+    register_ai_agent(app)
+    register_knowledge(app)

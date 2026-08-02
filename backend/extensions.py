@@ -52,7 +52,31 @@ def _init_tables(db):
     _init_operation_logs_table(cursor)
     _init_visits_table(cursor)
     _init_user_roles_table(cursor)
+    _init_knowledge_base_table(cursor)
     db.commit()
+
+
+def _init_knowledge_base_table(cursor):
+    """知识库表：存储 AI 拜访复盘摘要、跟进洞察、销售技巧等企业知识资产。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE knowledge_base (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                category TEXT DEFAULT 'visit_summary',
+                cust_id INTEGER,
+                visit_id INTEGER,
+                owner_id TEXT,
+                tags TEXT,
+                summary TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cust_id) REFERENCES customers(id),
+                FOREIGN KEY (visit_id) REFERENCES visits(id)
+            )
+        """)
+    except:
+        pass
 
 
 def _init_user_roles_table(cursor):

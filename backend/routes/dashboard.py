@@ -231,6 +231,15 @@ def get_dashboard():
         })
     result['sales_ranking'] = sales_ranking
 
+    # 真实环比趋势：复用 reports.py 的 _compute_trend_comparison
+    try:
+        from .reports import _compute_trend_comparison
+        trend_time_range = 'year' if time_range == 'year' else 'month'
+        result['trends'] = _compute_trend_comparison(db, cursor, role, username, trend_time_range, year)
+    except Exception as e:
+        # 趋势计算失败不影响主流程
+        result['trends'] = None
+
     return jsonify({'code': 200, 'message': 'success', 'data': result})
 
 

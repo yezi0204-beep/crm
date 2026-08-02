@@ -6,43 +6,53 @@
         <div class="stat-content">
           <div class="stat-value">{{ dashboardData.total_customers }}</div>
           <div class="stat-label">客户总数</div>
-          <div class="stat-trend up">↑ 12% 本月</div>
+          <div class="stat-trend" :class="getTrendClass(dashboardData.trends?.total_customers)">
+            {{ formatTrend(dashboardData.trends?.total_customers) }}
+          </div>
         </div>
       </el-card>
-      
+
       <el-card class="stat-card">
         <div class="stat-icon green">🎯</div>
         <div class="stat-content">
           <div class="stat-value">{{ dashboardData.total_business }}</div>
           <div class="stat-label">商机总数</div>
-          <div class="stat-trend up">↑ 8% 本月</div>
+          <div class="stat-trend" :class="getTrendClass(dashboardData.trends?.total_business)">
+            {{ formatTrend(dashboardData.trends?.total_business) }}
+          </div>
         </div>
       </el-card>
-      
+
       <el-card class="stat-card">
         <div class="stat-icon purple">📜</div>
         <div class="stat-content">
           <div class="stat-value">{{ dashboardData.total_contracts }}</div>
           <div class="stat-label">合同总数</div>
-          <div class="stat-trend up">↑ 15% 本月</div>
+          <div class="stat-trend" :class="getTrendClass(dashboardData.trends?.total_contracts)">
+            {{ formatTrend(dashboardData.trends?.total_contracts) }}
+          </div>
         </div>
       </el-card>
-      
+
       <el-card class="stat-card">
         <div class="stat-icon orange">💰</div>
         <div class="stat-content">
           <div class="stat-value">{{ formatAmount(dashboardData.contracts_amount) }}</div>
           <div class="stat-label">合同总额(万)</div>
-          <div class="stat-trend up">↑ 23% 本月</div>
+          <div class="stat-trend" :class="getTrendClass(dashboardData.trends?.contracts_amount)">
+            {{ formatTrend(dashboardData.trends?.contracts_amount) }}
+          </div>
         </div>
       </el-card>
-      
+
       <el-card class="stat-card">
         <div class="stat-icon red">💵</div>
         <div class="stat-content">
           <div class="stat-value">{{ formatAmount(dashboardData.total_payments) }}</div>
           <div class="stat-label">累计回款(万)</div>
-          <div class="stat-trend down">↓ 3% 本月</div>
+          <div class="stat-trend" :class="getTrendClass(dashboardData.trends?.total_payments)">
+            {{ formatTrend(dashboardData.trends?.total_payments) }}
+          </div>
         </div>
       </el-card>
     </div>
@@ -120,13 +130,19 @@
         
         <el-card class="alert-card">
           <template #header>
-            <span>⚠️ 待办提醒</span>
+            <div class="card-header">
+              <span>⚠️ 待办提醒</span>
+              <el-button v-if="alerts.length > 0" size="small" type="text" @click="router.push('/alerts')">查看全部 →</el-button>
+            </div>
           </template>
           <div class="alert-list">
-            <div v-for="alert in alerts" :key="alert.id" class="alert-item">
-              <span class="alert-icon">{{ alert.icon }}</span>
-              <span class="alert-text">{{ alert.message }}</span>
-              <span class="alert-time">{{ alert.time }}</span>
+            <div v-for="alert in alerts" :key="alert.id || alert.due_date + alert.title" class="alert-item">
+              <span class="alert-icon">{{ getAlertIcon(alert.type) }}</span>
+              <span class="alert-text">{{ alert.detail }}</span>
+              <span class="alert-time">{{ formatDueDate(alert.due_date) }}</span>
+            </div>
+            <div v-if="alerts.length === 0" class="alert-empty">
+              ✅ 暂无待办提醒
             </div>
           </div>
         </el-card>
@@ -155,12 +171,7 @@ const dashboardData = ref({
 const recentContracts = ref([])
 const salesRanking = ref([])
 
-const alerts = ref([
-  { id: 1, icon: '📅', message: '3份合同即将到期', time: '2天后' },
-  { id: 2, icon: '💸', message: '5笔回款逾期未收', time: '已逾期' },
-  { id: 3, icon: '📋', message: '8条商机待跟进', time: '本周' },
-  { id: 4, icon: '✅', message: '2份合同待审批', time: '今日' }
-])
+const alerts = ref([])
 
 const timeRange = ref('month')
 const currentYear = new Date().getFullYear()
@@ -185,6 +196,46 @@ const formatAmount = (value) => {
 const formatDate = (dateStr) => {
   if (!dateStr) return ''
   return dateStr.substring(0, 10)
+}
+
+// 真实趋势百分比：基于后端 trends 字段的 growth_rate
+const formatTrend = (trend) => {
+  if (!trend || trend.growth_rate === null || trend.growth_rate === undefined) return '— 环比'
+  const rate = trend.growth_rate
+  if (rate > 0) return `↑ ${rate}% 环比`
+  if (rate < 0) return `↓ ${Math.abs(rate)}% 环比`
+  return '持平 环比'
+}
+
+const getTrendClass = (trend) => {
+  if (!trend || trend.growth_rate === null || trend.growth_rate === undefined) return 'flat'
+  if (trend.growth_rate > 0) return 'up'
+  if (trend.growth_rate < 0) return 'down'
+  return 'flat'
+}
+
+// 预警图标映射
+const getAlertIcon = (type) => {
+  const map = { payment: '💸', acceptance: '✅', business: '📋' }
+  return map[type] || '⚠️'
+}
+
+// 预警日期截断到 YYYY-MM-DD
+const formatDueDate = (dateStr) => {
+  if (!dateStr) return ''
+  return dateStr.substring(0, 10)
+}
+
+// 真实预警：取前 5 条
+const fetchAlerts = async () => {
+  try {
+    const response = await api.get('/alerts')
+    if (response.code === 200 && response.data) {
+      alerts.value = (response.data.alerts || []).slice(0, 5)
+    }
+  } catch (e) {
+    console.error('获取预警失败', e)
+  }
 }
 
 const onYearChange = () => {
@@ -365,6 +416,7 @@ watch(timeRange, () => {
 onMounted(() => {
   fetchDashboardData()
   fetchRecentContracts()
+  fetchAlerts()
   initCharts()
   window.addEventListener('resize', handleResize)
 })
@@ -443,6 +495,14 @@ onUnmounted(() => {
 
 .stat-trend.up { color: #4ecdc4; }
 .stat-trend.down { color: #ff6b6b; }
+.stat-trend.flat { color: #999; }
+
+.alert-empty {
+  text-align: center;
+  padding: 24px;
+  color: #999;
+  font-size: 13px;
+}
 
 .main-row {
   display: flex;
