@@ -384,28 +384,98 @@ _BIDDING_SITES = [
     'bidcenter.com.cn',      # 中国采招网
 ]
 
-# 非商机网站黑名单（百科/地图/导航等通用页面，不应作为线索）
+# 军采监控：军队采购/武器装备采购网站域名
+_MILITARY_SITES = [
+    'plap.cn',               # 全军武器装备采购信息网
+    'weain.mil.cn',           # 军队采购网
+    'ccgp.gov.cn',            # 中国政府采购网（含军采板块）
+    'ein.mil.cn',             # 军队物资采购网
+]
+
+# 军工企业9大业务领域关键词（用户明确关注：采购站/装备健康/模拟器/雷达/卫通/智能体/仿真/软件/卫星/靶场/对抗）
+# 用于搜索查询构建 + 领域匹配加分 + 行业识别
+MILITARY_DOMAIN_KEYWORDS = {
+    '装备健康': ['装备健康', '健康管理', 'PHM', '状态监测', '故障预测', '维修保障', '装备保障', '预测性维护'],
+    '模拟器': ['模拟器', '训练模拟器', '虚拟训练', '模拟训练', '驾驶模拟器', '操作模拟器'],
+    '雷达': ['雷达', '相控阵', '合成孔径', '雷达系统', '雷达探测', '毫米波雷达', '机载雷达'],
+    '卫通': ['卫通', '卫星通信', '通信终端', 'VSAT', '卫星终端', '卫星电话', '动中通', '卫星通信终端'],
+    '智能体': ['智能体', '人工智能', '大模型', 'AI', 'AIGC', '智能决策', 'AI开发'],
+    '仿真': ['仿真', '半实物仿真', '虚拟仿真', '作战仿真', '仿真系统', '仿真平台', '仿真测试'],
+    '软件': ['软件', '信息系统', '信息化', '软件定制', '指挥控制', 'C4ISR', '软件研发'],
+    '卫星': ['卫星', '遥感', '遥感数据', '遥感影像', '卫星遥感', '卫星导航', '北斗', '卫星终端'],
+    '靶场': ['靶场', '试验场', '武器试验', '作战试验', '试验鉴定', '靶标', '外场试验'],
+    '对抗': ['对抗', '电子战', '电子对抗', '电磁对抗', '干扰机', '电磁干扰', '雷达对抗', '电磁脉冲'],
+}
+
+# 军采链接白名单（这些域名的链接优先级最高，是真实军采公告）
+_MILITARY_WHITELIST = {
+    'plap.cn', 'weain.mil.cn', 'ein.mil.cn', 'ccgp.gov.cn',
+    'ggzy.gov.cn', 'cebpubservice.com', 'chinabidding.com.cn', 'bidcenter.com.cn',
+}
+
+# 非商机网站黑名单（百科/词典/问答/新闻/地图/导航/文档库/社交等通用页面）
+# 这些页面绝不是采购公告，必须在抓取阶段直接丢弃
 _JUNK_DOMAINS = {
-    'baike.baidu.com', 'zhuanlan.zhihu.com', 'baijiahao.baidu.com',
-    'map.baidu.com', 'map.bmcx.com', 'earthol.com', '17ditu.com',
-    'bajiu.cn', 'earth.google.com', 'ditu.baidu.com',
-    'wikipedia.org', 'zh.wikipedia.org',
-    'wenku.baidu.com', 'docin.com', 'doc88.com',
+    # 百度系
+    'baike.baidu.com', 'baijiahao.baidu.com', 'jingyan.baidu.com',
+    'zhidao.baidu.com', 'wenku.baidu.com', 'tieba.baidu.com',
+    'map.baidu.com', 'ditu.baidu.com', 'news.baidu.com', 'cp.baidu.com',
+    # 知乎/豆瓣/微博/微信
+    'zhihu.com', 'douban.com', 'weibo.com', 'mp.weixin.qq.com',
+    # 搜狗百科/360百科
+    'baike.sogou.com', 'baike.so.com',
+    # 维基/镜像
+    'wikipedia.org', 'wikiwand.com',
+    # 新闻门户（非政府采购公告）
+    'news.sina.com.cn', 'news.sohu.com', 'news.163.com', 'news.qq.com',
+    '163.com', 'sina.com.cn', 'sohu.com', 'qq.com', 'toutiao.com',
+    # 文档库
+    'docin.com', 'doc88.com',
+    # 地图
+    'map.bmcx.com', 'earthol.com', '17ditu.com', 'bajiu.cn', 'earth.google.com',
+    # 设计/图片
+    'zcool.com.cn', 'huaban.com', 'pixiv.net',
+    # 词典/翻译/国学/古籍（"人工""装备""武器"等词被搜索到词典解释）
+    'iciba.com', 'chazidian.com', 'gushici.net', 'hgcha.com',
+    'hanyuguoxue.com', 'shidianguji.com', 'hanziguoxue.com',
+    'dict.revised.moe.edu.tw', 'zidian.gushici.net',
+    # 百科类
+    'huoqibaike.club',
+    # 本地宝/生活
+    'bendibao.com',
+    # 军事资讯（非采购公告）
+    'military.china.com.cn',
 }
 
 
 def _is_junk_url(url):
-    """判断 URL 是否为非商机通用页面（百科/地图/文档库等）。"""
+    """判断 URL 是否为非商机通用页面（百科/词典/问答/新闻/地图等）。"""
     if not url:
         return True
     url_lower = url.lower()
     return any(d in url_lower for d in _JUNK_DOMAINS)
 
 
+# 采购意图关键词——军采监控降级路径必须命中至少一个才保留
+_PROCUREMENT_KEYWORDS = [
+    '招标', '采购', '公告', '中标', '成交', '询价', '谈判', '公示',
+    '需求公示', '意向公告', '竞争性', '单一来源', '投标', '开标',
+    'procurement', 'tender', 'bid',
+]
+
+
+def _has_procurement_intent(text):
+    """判断文本是否包含采购意图关键词（用于降级路径军采监控过滤）。"""
+    if not text:
+        return False
+    return any(k in text for k in _PROCUREMENT_KEYWORDS)
+
+
 def _build_search_queries(keywords, category, max_queries=3):
     """根据关键词和能力域构建搜索查询列表。
 
     招投标监控：用 site: 定向搜索真实政企采购网站，确保结果为招标公告而非百科/地图。
+    军采监控：用 site: 定向搜索军队采购/武器装备采购网站。
     其他能力域：用 category 模板包装关键词。
     """
     from datetime import datetime
@@ -419,6 +489,30 @@ def _build_search_queries(keywords, category, max_queries=3):
         for i, kw in enumerate(keywords[:max_queries]):
             site = _BIDDING_SITES[i % len(_BIDDING_SITES)]
             queries.append('{} 招标 采购 {} site:{}'.format(kw, year, site))
+        return queries
+
+    if category == '军采监控':
+        # 分层搜索策略：军采网站（plap.cn/weain.mil.cn）搜索引擎索引差，
+        # site: 定向常返回空，故以通用军采搜索为主（占50%），辅以 site: 定向和装备采购搜索
+        # 每个查询覆盖用户9大业务领域之一，确保全面覆盖
+        if not keywords:
+            # 默认覆盖用户9大业务领域核心词
+            keywords = ['装备健康', '模拟器', '雷达', '卫通', '智能体',
+                        '仿真', '软件', '卫星', '靶场', '对抗']
+        queries = []
+        for i, kw in enumerate(keywords[:max_queries]):
+            if i % 4 == 0:
+                # 通用军采搜索（覆盖 ccgp.gov.cn / weain.mil.cn / 各类军采渠道）
+                queries.append('{kw} 军队 采购 招标 公告 {year}'.format(kw=kw, year=year))
+            elif i % 4 == 1:
+                # 装备采购搜索（针对武器装备类，覆盖装备发展部渠道）
+                queries.append('{kw} 装备采购 武器装备 采购公告 {year}'.format(kw=kw, year=year))
+            elif i % 4 == 2:
+                # site: 定向 plap.cn（全军武器装备采购信息网）
+                queries.append('{kw} 采购 招标 {year} site:plap.cn'.format(kw=kw, year=year))
+            else:
+                # site: 定向 ccgp.gov.cn（中国政府采购网，含军采板块）
+                queries.append('{kw} 军用 采购 {year} site:ccgp.gov.cn'.format(kw=kw, year=year))
         return queries
 
     # 其他能力域用模板
@@ -486,21 +580,65 @@ def _llm_extract_leads(search_results, keywords, category, max_items):
         for i, r in enumerate(search_results[:max_items])
     )
     kw_str = '、'.join(keywords) if keywords else '不限'
-    prompt = (
-        '你是一个商机线索分析助手。以下是从互联网搜索到的真实结果，请从中提取有价值的商机线索。\n\n'
-        '搜索类别：{cat}\n关注关键词：{kw}\n\n搜索结果：\n{results}\n\n'
-        '请提取所有有价值的商机线索，返回 JSON 数组（不要任何其他文字），每个元素包含：\n'
-        '- company: 相关公司或机构名（从标题/摘要提取采购方/需求方名称，无则填标题前20字）\n'
-        '- opportunity_name: 商机/公告/需求名称（简洁有信息量，去掉网站名等噪声）\n'
-        '- link: 真实链接URL（直接取搜索结果的链接，原样复制）\n'
-        '- industry: 行业分类（卫星通信/卫星遥感/AI智能体/军工装备/信息技术 之一）\n'
-        '- contact_name: 联系人姓名（从摘要中提取项目联系人/采购人姓名，无则留空字符串）\n'
-        '- phone: 联系电话（从摘要中提取电话号码，无则留空字符串）\n'
-        '- region: 地区（从摘要提取省市，无则填"全国"）\n'
-        '- intent: 意向描述（为什么这是商机，一句话说明采购需求和价值）\n'
-        '- intent_score: 意向评分0-100整数（明确采购需求且预算大的90+，有采购意向的70-89，潜在需求50-69）\n\n'
-        '只返回 JSON 数组，如：[{{"company":"...","opportunity_name":"...","link":"...","industry":"...","contact_name":"...","phone":"...","region":"...","intent":"...","intent_score":80}}]'
-    ).format(cat=category or '商机', kw=kw_str, results=results_text)
+
+    # 军采监控用军工专用 prompt，其他类别用通用 prompt
+    if category == '军采监控':
+        prompt = (
+            '你是一个军工采购商机分析专家。以下是从互联网搜索到的真实结果，请严格筛选并提取军队/军工/国防采购商机。\n\n'
+            '【本公司业务领域】采购站、装备健康、模拟器、雷达、卫通、智能体、仿真、软件、卫星、靶场、对抗\n'
+            '【关注关键词】{kw}\n\n'
+            '【搜索结果】\n{results}\n\n'
+            '【✅ 必须提取（正例）】\n'
+            '- 招标公告 / 采购公告 / 询价公告 / 竞争性谈判公告\n'
+            '- 需求公示 / 中标公告 / 成交公告 / 意向公示\n'
+            '- 军队/部队/基地/装备发展部/军代室/国防单位发布的采购信息\n'
+            '- 来自 plap.cn / weain.mil.cn / ccgp.gov.cn / ggzy.gov.cn 的公告\n\n'
+            '【❌ 必须排除（反例）】\n'
+            '- 百度百科/维基百科/文库/文档库（非采购信息）\n'
+            '- 新闻报道/行业资讯/产品介绍/公司动态（非采购公告）\n'
+            '- 学术论文/技术方案/科普文章（非采购信息）\n'
+            '- 论坛帖子/问答/评论/社交媒体（非采购信息）\n'
+            '- 纯民用项目（无军队/军工/国防背景的政府采购）\n\n'
+            '【提取规则】\n'
+            '- opportunity_name 必须是项目全称（去掉网站名/栏目名等噪声）\n'
+            '- link 必须原样复制搜索结果的链接URL，优先保留军采域名(plap.cn/weain.mil.cn/ccgp.gov.cn)\n'
+            '- industry 从以下选一：雷达电子/电子对抗/仿真模拟/靶场试验/装备健康/卫通卫星/卫星遥感/AI智能体/军工装备/信息技术\n'
+            '- 如搜索结果中没有真实采购公告，返回空数组 []\n\n'
+            '请返回 JSON 数组（不要任何其他文字），每个元素包含：\n'
+            '- company: 采购方/需求方名称（某部队/某基地/装备发展部/军方单位/军工集团）\n'
+            '- opportunity_name: 采购项目名称\n'
+            '- link: 真实公告链接URL（原样复制）\n'
+            '- industry: 行业分类\n'
+            '- contact_name: 联系人姓名（无则空字符串）\n'
+            '- phone: 联系电话（无则空字符串）\n'
+            '- region: 地区（无则填"全国"）\n'
+            '- intent: 采购需求描述（采购什么/用途/规模，一句话）\n'
+            '- publish_date: 发布日期（YYYY-MM-DD，从摘要提取，无则空字符串）\n'
+            '- deadline: 投标截止日期（YYYY-MM-DD，从摘要提取，无则空字符串）\n'
+            '- budget: 预算金额（如"500万元"，从摘要提取，无则空字符串）\n'
+            '- procurement_method: 采购方式（公开招标/邀请招标/竞争性谈判/询价/单一来源，无则空字符串）\n'
+            '- intent_score: 意向评分0-100整数（军采招标公告90+，军方需求公示70-89，潜在军采需求50-69）\n\n'
+            '只返回 JSON 数组，如：[{{"company":"...","opportunity_name":"...","link":"...","industry":"...","contact_name":"","phone":"","region":"全国","intent":"...","publish_date":"2026-01-01","deadline":"2026-02-01","budget":"500万元","procurement_method":"公开招标","intent_score":90}}]'
+        ).format(kw=kw_str, results=results_text)
+    else:
+        prompt = (
+            '你是一个商机线索分析助手。以下是从互联网搜索到的真实结果，请从中提取有价值的商机线索。\n\n'
+            '搜索类别：{cat}\n关注关键词：{kw}\n\n搜索结果：\n{results}\n\n'
+            '【重要筛选规则】\n'
+            '- 只提取与采购/招标/需求/商机相关的信息\n'
+            '- 排除百科词条、新闻报道、学术论文、通用技术文章等非商机信息\n\n'
+            '请提取所有有价值的商机线索，返回 JSON 数组（不要任何其他文字），每个元素包含：\n'
+            '- company: 相关公司或机构名（从标题/摘要提取采购方/需求方名称，无则填标题前20字）\n'
+            '- opportunity_name: 商机/公告/需求名称（简洁有信息量，去掉网站名等噪声）\n'
+            '- link: 真实链接URL（直接取搜索结果的链接，原样复制）\n'
+            '- industry: 行业分类（雷达电子/电子对抗/仿真模拟/靶场试验/装备健康/卫通卫星/AI智能体/军工装备/信息技术 之一）\n'
+            '- contact_name: 联系人姓名（从摘要中提取项目联系人/采购人姓名，无则留空字符串）\n'
+            '- phone: 联系电话（从摘要中提取电话号码，无则留空字符串）\n'
+            '- region: 地区（从摘要提取省市，无则填"全国"）\n'
+            '- intent: 意向描述（为什么这是商机，一句话说明采购需求和价值）\n'
+            '- intent_score: 意向评分0-100整数（明确采购需求且预算大的90+，有采购意向的70-89，潜在需求50-69）\n\n'
+            '只返回 JSON 数组，如：[{{"company":"...","opportunity_name":"...","link":"...","industry":"...","contact_name":"...","phone":"...","region":"...","intent":"...","intent_score":80}}]'
+        ).format(cat=category or '商机', kw=kw_str, results=results_text)
 
     messages = [
         {'role': 'system', 'content': '你是商机线索分析助手，只返回JSON数组。'},
@@ -537,10 +675,30 @@ def _llm_extract_leads(search_results, keywords, category, max_items):
             if item.get('link') and item['link'] in sr['url']:
                 link = sr['url']
                 break
+        # 军采监控：链接黑名单验证，丢弃百科/新闻等非采购页面
+        if category == '军采监控' and _is_junk_url(link):
+            continue
         industry = item.get('industry') or _detect_industry(title)
         contact_name = (item.get('contact_name') or '').strip()
         phone = (item.get('phone') or '').strip()
         region = (item.get('region') or '全国').strip() or '全国'
+        # 提取扩展字段（发布日期/截止日期/预算/采购方式）
+        publish_date = (item.get('publish_date') or '').strip()
+        deadline = (item.get('deadline') or '').strip()
+        budget = (item.get('budget') or '').strip()
+        procurement_method = (item.get('procurement_method') or '').strip()
+        intent = (item.get('intent') or '').strip()
+        # 拼接备注：意向描述 + 采购方式 + 预算 + 截止日期
+        remark_parts = [intent]
+        if procurement_method:
+            remark_parts.append(f'采购方式:{procurement_method}')
+        if budget:
+            remark_parts.append(f'预算:{budget}')
+        if deadline:
+            remark_parts.append(f'截止:{deadline}')
+        elif publish_date:
+            remark_parts.append(f'发布:{publish_date}')
+        remark = '；'.join(p for p in remark_parts if p)[:200]
         leads.append({
             'company': (item.get('company') or title[:30]).strip(),
             'opportunity_name': title,
@@ -549,11 +707,17 @@ def _llm_extract_leads(search_results, keywords, category, max_items):
             'region': region,
             'source': 'AI智能体搜索',
             'link': link,
-            'remark': (item.get('intent') or '')[:120],
+            'remark': remark,
+            'publish_date': publish_date,
+            'deadline': deadline,
+            'budget': budget,
+            'procurement_method': procurement_method,
             'raw_data': json.dumps({
                 'title': title, 'link': link, 'industry': industry,
-                'intent': item.get('intent', ''), 'intent_score': item.get('intent_score', 50),
+                'intent': intent, 'intent_score': item.get('intent_score', 50),
                 'contact_name': contact_name, 'phone': phone, 'region': region,
+                'publish_date': publish_date, 'deadline': deadline,
+                'budget': budget, 'procurement_method': procurement_method,
                 'category': category or '商机', 'source_type': 'ai_search', 'llm_used': True,
                 'snippet': next((sr['snippet'] for sr in search_results if sr['url'] == link), '')
             }, ensure_ascii=False),
@@ -578,13 +742,27 @@ def _fallback_extract_leads(search_results, source, keywords, category, max_item
                 match_terms.add(kw[i:i + 2])
 
     leads = []
-    all_leads = []
     for r in search_results[:max_items]:
-        # 降级路径也过滤百科/地图等非商机页面
+        # 降级路径也过滤百科/词典/问答/新闻等非商机页面
         if _is_junk_url(r.get('url', '')):
             continue
         title = r['title']
-        text = title + ' ' + r['snippet']
+        snippet = r.get('snippet', '')
+        text = title + ' ' + snippet
+        # 军采监控降级路径：必须命中采购意图关键词，否则丢弃
+        # （降级路径无法像LLM那样理解语义，只能靠关键词硬过滤）
+        if category == '军采监控':
+            if not _has_procurement_intent(text):
+                continue
+        # 其他类别：过滤明显非商机的词典/百科类标题
+        junk_title_patterns = ['是什么意思', '怎么读', '念什么', '拼音', '近义词',
+                               '反义词', '翻译', '读音', '释义', '解释', '百科',
+                               '_百度知道', '- 知乎', '是什么', '如何定义']
+        if any(p in title for p in junk_title_patterns):
+            continue
+        # 关键词匹配：命中任一关键词（或拆分后的词组）才保留
+        if match_terms and not any(term in text for term in match_terms):
+            continue
         lead = {
             'company': _extract_company(title) or title[:30],
             'opportunity_name': title,
@@ -593,19 +771,17 @@ def _fallback_extract_leads(search_results, source, keywords, category, max_item
             'region': source.get('region', '全国'),
             'source': 'AI智能体搜索',
             'link': r['url'],
-            'remark': r['snippet'][:120] if r['snippet'] else title[:100],
+            'remark': snippet[:120] if snippet else title[:100],
+            'publish_date': '', 'deadline': '', 'budget': '', 'procurement_method': '',
             'raw_data': json.dumps({
-                'title': title, 'link': r['url'], 'snippet': r['snippet'][:200],
+                'title': title, 'link': r['url'], 'snippet': snippet[:200],
                 'category': category or '', 'source_type': 'ai_search', 'llm_used': False
             }, ensure_ascii=False),
             'category': category or '',
         }
-        all_leads.append(lead)
-        # 宽松关键词匹配：命中任一拆分后的词即保留
-        if not match_terms or any(term in text for term in match_terms):
-            leads.append(lead)
-    # 若关键词过滤后无结果，返回全部（搜索引擎已按查询筛选，结果有参考价值）
-    return leads if leads else all_leads[:max_items]
+        leads.append(lead)
+    # 降级路径不再"无结果时返回全部"——无结果说明搜索结果确实没有商机，返回空比返回垃圾好
+    return leads
 
 
 def _scrape_source(source):
@@ -648,23 +824,53 @@ def _parse_config(raw):
 
 
 def _detect_industry(text):
-    """根据文本关键词自动识别行业（覆盖本公司关注领域）。
+    """根据文本关键词自动识别行业（覆盖军工企业关注领域）。
 
-    用于 RSS 抓取的线索自动分类，使同一采购源中不同领域的商机被归类到
-    卫星遥感/卫星通信/AI智能体/军工装备/信息技术。
+    军工细分：雷达电子/仿真模拟/靶场试验/电子对抗/装备健康/卫通卫星/AI智能体/军工装备/信息技术。
     """
     if not text:
         return '信息技术'
-    # 卫星通信优先匹配（避免被"卫星遥感"的"卫星"误吞）
-    if any(k in text for k in ['卫星通信', '通信终端', 'VSAT', '卫星终端', '卫星电话']):
-        return '卫星通信'
-    if any(k in text for k in ['遥感', '遥感数据', '遥感影像', '遥感监测', '遥感卫星']):
+    # 雷达电子优先匹配（避免被通用"电子"误吞）
+    if any(k in text for k in ['雷达', '相控阵', '雷达系统', '雷达探测']):
+        return '雷达电子'
+    # 电子对抗
+    if any(k in text for k in ['对抗', '电子战', '电子对抗', '电磁对抗', '电磁干扰', '干扰机']):
+        return '电子对抗'
+    # 仿真模拟
+    if any(k in text for k in ['仿真', '模拟器', '模拟训练', '虚拟训练', '训练模拟', '半实物仿真']):
+        return '仿真模拟'
+    # 靶场试验
+    if any(k in text for k in ['靶场', '试验场', '武器试验', '作战试验', '试验鉴定']):
+        return '靶场试验'
+    # 装备健康/保障
+    if any(k in text for k in ['装备健康', '健康管理', '状态监测', 'PHM', '维修保障', '装备保障', '故障预测']):
+        return '装备健康'
+    # 卫通卫星（优先于通用"卫星"）
+    if any(k in text for k in ['卫通', '卫星通信', '通信终端', 'VSAT', '卫星终端', '卫星电话']):
+        return '卫通卫星'
+    if any(k in text for k in ['遥感', '遥感数据', '遥感影像', '遥感卫星']):
         return '卫星遥感'
+    # AI智能体
     if any(k in text for k in ['智能体', '人工智能', '大模型', 'AI开发', 'AI智能', 'AIGC']):
         return 'AI智能体'
-    if any(k in text for k in ['装备', '武器', '军用', '军工', '军采', '国防']):
+    # 军工装备兜底
+    if any(k in text for k in ['装备', '武器', '军用', '军工', '军采', '国防', '部队', '作战']):
         return '军工装备'
     return '信息技术'
+
+
+def _match_military_domain(text):
+    """检测文本命中用户9大业务领域之一，返回领域名。
+
+    用户关注领域：装备健康/模拟器/雷达/卫通/智能体/仿真/软件/卫星/靶场/对抗。
+    用于评分加权，命中关注领域的线索加分。无匹配返回空字符串。
+    """
+    if not text:
+        return ''
+    for domain, kws in MILITARY_DOMAIN_KEYWORDS.items():
+        if any(k.lower() in text.lower() for k in kws):
+            return domain
+    return ''
 
 
 # ==================== HTML 抓取基础设施（五大能力域共用）====================
@@ -1290,11 +1496,15 @@ def _extract_company(text):
 
 
 def _persist_leads(cursor, leads_data, source_id, source_name, source_category=None):
-    """线索入库（去重：同源同公司同联系方式视为重复）。返回新增数。
+    """线索入库（多维跨源去重），返回新增数。
+
+    去重策略（跨源去重，避免同一公告从不同查询/源重复入库）：
+    1. link 非空时，按 link 全局去重（同一公告链接只入库一次）
+    2. opportunity_name+company 去重（同一项目同一采购方只入库一次）
+    3. 兜底：source_id+company+phone 去重
 
     source_category 由调用方传入（来自 lead_sources.category），用于给线索打能力域标签。
     """
-    # 若未传入 category，则从源表查询一次
     if source_category is None and source_id:
         try:
             cursor.execute("SELECT category FROM lead_sources WHERE id=?", (source_id,))
@@ -1308,26 +1518,48 @@ def _persist_leads(cursor, leads_data, source_id, source_name, source_category=N
         company = (lead.get('company') or '').strip()
         if not company:
             continue
-        # 去重检查
-        cursor.execute(
-            "SELECT id FROM scraped_leads WHERE source_id=? AND company=? AND phone=?",
-            (source_id, company, lead.get('phone', ''))
-        )
-        if cursor.fetchone():
-            continue
-        # 线索 category 优先取 lead 自带，否则用源 category
+        link = (lead.get('link') or '').strip()
+        opp_name = (lead.get('opportunity_name') or '').strip()
         category = lead.get('category') or source_category or ''
+        # 军采监控：链接黑名单二次验证（LLM 降级路径可能漏过）
+        if category == '军采监控' and link and _is_junk_url(link):
+            continue
+        # 多维跨源去重检查
+        dup = False
+        if link:
+            cursor.execute("SELECT id FROM scraped_leads WHERE link=?", (link,))
+            if cursor.fetchone():
+                dup = True
+        if not dup and opp_name and company:
+            cursor.execute(
+                "SELECT id FROM scraped_leads WHERE opportunity_name=? AND company=?",
+                (opp_name, company)
+            )
+            if cursor.fetchone():
+                dup = True
+        if not dup:
+            cursor.execute(
+                "SELECT id FROM scraped_leads WHERE source_id=? AND company=? AND phone=?",
+                (source_id, company, lead.get('phone', ''))
+            )
+            if cursor.fetchone():
+                dup = True
+        if dup:
+            continue
         cursor.execute("""
             INSERT INTO scraped_leads (source_id, company, opportunity_name, contact_name, phone, email,
                                         industry, region, source, link, remark, raw_data, category,
+                                        publish_date, deadline, budget, procurement_method,
                                         status, scraped_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
         """, (
-            source_id, company, lead.get('opportunity_name', ''),
+            source_id, company, opp_name,
             lead.get('contact_name', ''), lead.get('phone', ''),
             lead.get('email', ''), lead.get('industry', ''), lead.get('region', ''),
-            lead.get('source', source_name), lead.get('link', ''),
+            lead.get('source', source_name), link,
             lead.get('remark', ''), lead.get('raw_data', ''), category,
+            lead.get('publish_date', ''), lead.get('deadline', ''),
+            lead.get('budget', ''), lead.get('procurement_method', ''),
         ))
         inserted += 1
     return inserted
@@ -1338,7 +1570,57 @@ def _mark_scraped(cursor, source_id):
                    (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), source_id))
 
 
+def _cleanup_expired_leads(cursor, days=30):
+    """清理过期线索：删除超过指定天数的 pending/evaluated/rejected 线索。
+
+    已分配(imported)的线索保留审计。
+    军采类商机有截止日期，过截止日期的优先清理。
+    """
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute("""
+        DELETE FROM scraped_leads
+        WHERE status IN ('pending', 'evaluated', 'rejected')
+        AND scraped_at < ?
+    """, (cutoff,))
+    deleted = cursor.rowcount
+    # 额外清理：已过投标截止日期的军采线索（即使未到30天）
+    today = datetime.now().strftime('%Y-%m-%d')
+    try:
+        cursor.execute("""
+            DELETE FROM scraped_leads
+            WHERE category='军采监控' AND deadline IS NOT NULL AND deadline != ''
+            AND deadline < ? AND status IN ('pending', 'evaluated', 'rejected')
+        """, (today,))
+        deleted += cursor.rowcount
+    except Exception:
+        pass
+    return deleted
+
+
 # ==================== 线索队列管理 ====================
+
+@leads_bp.route('/api/leads/cleanup-expired', methods=['POST'])
+@token_required
+def cleanup_expired_leads():
+    """清理过期线索（超过指定天数的 pending/evaluated/rejected）。
+
+    默认清理30天前的线索；军采类过投标截止日期的也清理。已分配线索保留。
+    """
+    payload = request.current_user
+    if payload.get('role') not in ('主任', '院长'):
+        return jsonify({'code': 403, 'message': '权限不足', 'data': None})
+    db = get_db()
+    cursor = db.cursor()
+    data = request.get_json(silent=True) or {}
+    days = int(data.get('days', 30))
+    deleted = _cleanup_expired_leads(cursor, days)
+    db.commit()
+    record_operation_log(payload['username'], '清理过期线索', '智能线索管理',
+                         f'清理 {deleted} 条过期线索（>{days}天或已过截止日期）')
+    return jsonify({'code': 200, 'message': f'已清理 {deleted} 条过期线索',
+                    'data': {'deleted': deleted}})
+
 
 @leads_bp.route('/api/leads', methods=['GET'])
 @token_required
@@ -1598,7 +1880,11 @@ def leads_stats():
 # ==================== 评估与分配工具函数（与 ai_agent.py 逻辑对齐） ====================
 
 def _load_eval_context(cursor):
-    """加载评估上下文：行业成交统计 + 在职销售工作量。"""
+    """加载评估上下文：行业成交统计 + 在职销售工作量。
+
+    用 user_roles 表查询（支持多角色），不遗漏兼任销售的人员。
+    并列商机数时用 RANDOM() 随机分配，避免总给同一个人。
+    """
     cursor.execute("""
         SELECT industry, COUNT(*) as cnt FROM business
         WHERE status='active' AND industry IS NOT NULL AND industry!=''
@@ -1608,9 +1894,10 @@ def _load_eval_context(cursor):
     cursor.execute("""
         SELECT u.username, u.name, COUNT(b.id) as biz_count
         FROM users u
+        JOIN user_roles ur ON u.username = ur.username AND ur.role='销售'
         LEFT JOIN business b ON b.owner_id = u.username AND b.status='active'
-        WHERE u.status='在职' AND u.role='销售'
-        GROUP BY u.username ORDER BY biz_count ASC
+        WHERE u.status='在职'
+        GROUP BY u.username ORDER BY biz_count ASC, RANDOM()
     """)
     salespeople = [dict(r) for r in cursor.fetchall()]
     return industry_stats, salespeople
@@ -1632,12 +1919,47 @@ def _evaluate_lead(lead, industry_stats):
     reasons = []
     industry = (lead.get('industry') or '').strip()
 
-    # —— AI 智能体搜索线索：优先用 LLM 提供的 intent_score ——
+    # —— AI 智能体搜索线索：优先用 LLM 提供的 intent_score，叠加军工领域加权 ——
     if raw.get('source_type') == 'ai_search' and raw.get('intent_score') is not None:
         score = max(0, min(100, int(raw.get('intent_score', 50))))
         intent = raw.get('intent', '')
+        opp_name = (lead.get('opportunity_name') or '').strip()
         if intent:
             reasons.append(intent)
+        # 军采监控专属加权（军工采购商机价值最高）
+        if category == '军采监控':
+            score = min(100, score + 10)
+            reasons.append('军采监控商机，采购意向明确')
+            # 军采白名单链接加分（plap.cn/weain.mil.cn 等真实军采域名）
+            link = (lead.get('link') or '').lower()
+            if any(d in link for d in _MILITARY_WHITELIST):
+                score = min(100, score + 8)
+                reasons.append('来源为军采官方网站，可信度高')
+            # 公告类型/采购方式加分
+            procurement_method = raw.get('procurement_method', '')
+            method_bonus = {'公开招标': 5, '邀请招标': 4, '竞争性谈判': 3, '询价': 2, '单一来源': 2}
+            if procurement_method in method_bonus:
+                score = min(100, score + method_bonus[procurement_method])
+                reasons.append(f'采购方式：{procurement_method}')
+            # 时效性：仍在投标有效期加分，已过截止日期降分
+            deadline = raw.get('deadline', '')
+            publish_date = raw.get('publish_date', '')
+            today = datetime.now().strftime('%Y-%m-%d')
+            if deadline:
+                if deadline >= today:
+                    score = min(100, score + 5)
+                    reasons.append(f'投标截止 {deadline}，仍可参与')
+                else:
+                    score = max(0, score - 15)
+                    reasons.append(f'投标已截止（{deadline}），意向降低')
+            elif publish_date:
+                reasons.append(f'发布日期 {publish_date}')
+        # 9大业务领域匹配加分（命中用户关注领域额外加分）
+        domain = _match_military_domain(opp_name + ' ' + intent)
+        if domain:
+            score = min(100, score + 5)
+            reasons.append(f'命中本公司业务领域：{domain}')
+        # 行业成交加分
         if industry and industry in industry_stats:
             score = min(100, score + min(10, industry_stats[industry]))
             reasons.append(f'行业「{industry}」有历史成交基础')

@@ -163,6 +163,23 @@ def _init_lead_tables(cursor):
         cursor.execute("ALTER TABLE scraped_leads ADD COLUMN category TEXT")
     except:
         pass
+    # 军采监控扩展字段：发布日期/截止日期/预算金额/采购方式
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN publish_date TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN deadline TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN budget TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN procurement_method TEXT")
+    except:
+        pass
     # lead_sources 幂等新增 category（能力域：招投标监控/电商商机/企业客源/竞品情报/舆情痛点/RSS订阅）
     try:
         cursor.execute("ALTER TABLE lead_sources ADD COLUMN category TEXT")
@@ -258,8 +275,8 @@ def _seed_lead_sources(cursor):
         cursor.execute("DELETE FROM lead_sources WHERE name='政府采购招标信息'")
     except Exception:
         pass
-    # 覆盖本公司关注领域的关键词（用于过滤真实采购公告）
-    domain_kw = '卫星,遥感,卫星通信,通信终端,VSAT,智能体,人工智能,大模型,AI,装备,武器,军用,军采,国防,遥感数据,遥感影像,信息化'
+    # 覆盖本公司9大业务领域的关键词（用于过滤真实采购公告）
+    domain_kw = '装备健康,模拟器,雷达,卫通,智能体,仿真,软件,卫星,靶场,对抗,遥感,通信终端,军用,装备,武器'
     # (name, source_type, url, config, keywords, industry, region, enabled, interval_hours, category)
     sources = [
         # ========== 1. 招投标监控（真实采购网 RSS）==========
@@ -291,8 +308,9 @@ def _seed_lead_sources(cursor):
          '{"dynamic": false, "max_items": 15}', '卫星,遥感,通信,智能体', '信息技术', '全国', 0, 24, '舆情痛点'),
         # ========== AI 智能体互联网搜索（五大能力域，默认启用，无需 playwright）==========
         # AI 搜索用 DuckDuckGo 搜索引擎 + LLM 提取结构化线索，仅需网络无需动态渲染
+        # 遥感领域聚焦安徽省内采购
         ('AI搜索-招投标监控', 'ai_search', '',
-         '{"max_items": 15, "max_queries": 3}', domain_kw, '信息技术', '全国', 1, 12, '招投标监控'),
+         '{"max_items": 15, "max_queries": 3}', '卫星遥感,遥感数据,安徽,卫星通信,通信终端', '信息技术', '安徽', 1, 12, '招投标监控'),
         ('AI搜索-电商商机', 'ai_search', '',
          '{"max_items": 15, "max_queries": 3}', '卫星通信,通信终端,智能体,遥感', '信息技术', '全国', 1, 24, '电商商机'),
         ('AI搜索-企业客源', 'ai_search', '',
@@ -301,6 +319,27 @@ def _seed_lead_sources(cursor):
          '{"max_items": 15, "max_queries": 3}', '卫星通信,通信终端,智能体,遥感', '信息技术', '全国', 1, 24, '竞品情报'),
         ('AI搜索-舆情痛点', 'ai_search', '',
          '{"max_items": 15, "max_queries": 3}', '卫星,遥感,通信,智能体,采购,招标', '信息技术', '全国', 1, 24, '舆情痛点'),
+        # ========== 军采监控：按9大业务领域配置专用 AI 搜索源 ==========
+        # 用户关注：采购站/装备健康/模拟器/雷达/卫通/智能体/仿真/软件/卫星/靶场/对抗
+        # 每个源覆盖1-2个相关领域，max_queries=3 确保每个领域有足够查询覆盖
+        # 雷达电子 + 电子对抗
+        ('AI搜索-军采雷达对抗', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '雷达,相控阵,对抗,电子战,电子对抗', '雷达电子', '全国', 1, 12, '军采监控'),
+        # 仿真模拟 + 模拟器
+        ('AI搜索-军采仿真模拟', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '仿真,半实物仿真,模拟器,训练模拟器,虚拟训练', '仿真模拟', '全国', 1, 12, '军采监控'),
+        # 卫通 + 卫星遥感
+        ('AI搜索-军采卫通卫星', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '卫通,卫星通信,通信终端,卫星,遥感', '卫通卫星', '全国', 1, 12, '军采监控'),
+        # 装备健康 + 靶场试验
+        ('AI搜索-军采装备靶场', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '装备健康,健康管理,PHM,靶场,试验场', '装备健康', '全国', 1, 12, '军采监控'),
+        # AI智能体 + 软件
+        ('AI搜索-军采智能软件', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '智能体,人工智能,大模型,软件,信息化,指挥控制', 'AI智能体', '全国', 1, 12, '军采监控'),
+        # 装备通用（武器/军用/国防）
+        ('AI搜索-军采装备通用', 'ai_search', '',
+         '{"max_items": 15, "max_queries": 3}', '装备,武器,军用,国防,装备采购', '军工装备', '全国', 1, 12, '军采监控'),
     ]
     for s in sources:
         try:
@@ -325,6 +364,20 @@ def _seed_lead_sources(cursor):
             WHERE source_type='rss' AND category='招投标监控'
             AND url IN ('http://www.plap.cn/', 'https://www.ggzy.gov.cn/', 'http://bulletin.cebpubservice.com/')
         """)
+    except Exception:
+        pass
+    # 停用旧的泛关键词军采源（被新的9大领域专用源替代）
+    try:
+        cursor.execute("""
+            UPDATE lead_sources SET enabled=0
+            WHERE source_type='ai_search' AND category='军采监控'
+            AND name IN ('AI搜索-军采装备', 'AI搜索-军采信息化')
+        """)
+    except Exception:
+        pass
+    # 停用需要 playwright 的 HTML 源（环境中无 playwright 时抓不到数据，避免无效抓取）
+    try:
+        cursor.execute("UPDATE lead_sources SET enabled=0 WHERE source_type='html'")
     except Exception:
         pass
 

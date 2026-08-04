@@ -23,6 +23,7 @@ def auto_roll_over_plans(db):
     cursor = db.cursor()
     
     try:
+        # 1. 归档过期的 weekly_plan 到历史记录（仅当有 next_week_plan 即将替换时才归档）
         cursor.execute("""
             INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
             SELECT id, 'weekly', plan_week, weekly_plan, CURRENT_TIMESTAMP
@@ -30,8 +31,10 @@ def auto_roll_over_plans(db):
             WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
                 AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
                 AND weekly_plan IS NOT NULL AND weekly_plan != ''
+                AND next_week_plan IS NOT NULL AND next_week_plan != ''
         """, (current_week_num,))
-        
+
+        # 2. 归档过期的 next_week_plan 到历史记录
         cursor.execute("""
             INSERT INTO business_plan_history (business_id, plan_type, week_label, content, created_at)
             SELECT id, 'next_week', plan_week, next_week_plan, CURRENT_TIMESTAMP
@@ -40,14 +43,25 @@ def auto_roll_over_plans(db):
                 AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
                 AND next_week_plan IS NOT NULL AND next_week_plan != ''
         """, (current_week_num,))
-        
+
+        # 3. 有 next_week_plan 的记录：滚动 next_week_plan → weekly_plan
         cursor.execute("""
             UPDATE business SET
-                weekly_plan = COALESCE(NULLIF(next_week_plan, ''), ''),
+                weekly_plan = next_week_plan,
                 next_week_plan = '',
                 plan_week = ?
             WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
                 AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
+                AND next_week_plan IS NOT NULL AND next_week_plan != ''
+        """, (current_week_str, current_week_num))
+
+        # 4. 无 next_week_plan 的记录：仅更新 plan_week 到当前周，不清空 weekly_plan
+        cursor.execute("""
+            UPDATE business SET
+                plan_week = ?
+            WHERE status = 'active' AND plan_week IS NOT NULL AND plan_week != ''
+                AND CAST(SUBSTR(plan_week, 7) AS INTEGER) <= ?
+                AND (next_week_plan IS NULL OR next_week_plan = '')
         """, (current_week_str, current_week_num))
         
         db.commit()

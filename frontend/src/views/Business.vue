@@ -493,10 +493,10 @@ const saveBusiness = async () => {
       if (!businessForm.id) {
         businessForm.owner_id = authStore.username
       }
-      
-      if (businessForm.next_week_plan) {
-        businessForm.plan_week = 'auto'
-      }
+
+      // 始终设 plan_week='auto'，让后端计算正确的周次
+      // 避免旧 plan_week 导致 auto_roll 误判过期、清空刚保存的 weekly_plan
+      businessForm.plan_week = 'auto'
       
       try {
         let response

@@ -480,13 +480,15 @@ def ai_leads_evaluate():
     cursor = db.cursor()
 
     # 统计各销售人员当前商机数与负责行业，用于精准分配
+    # 用 user_roles 表查询（支持多角色），并列时 RANDOM() 随机分配
     cursor.execute("""
         SELECT u.username, u.name, COUNT(b.id) as biz_count
         FROM users u
+        JOIN user_roles ur ON u.username = ur.username AND ur.role='销售'
         LEFT JOIN business b ON b.owner_id = u.username AND b.status='active'
-        WHERE u.status='在职' AND u.role='销售'
+        WHERE u.status='在职'
         GROUP BY u.username
-        ORDER BY biz_count ASC
+        ORDER BY biz_count ASC, RANDOM()
     """)
     salespeople = [dict(r) for r in cursor.fetchall()]
 

@@ -3,7 +3,7 @@
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">📡 智能线索管理</h2>
-        <p class="page-desc">五大能力域（招投标监控/电商商机/企业客源/竞品情报/舆情痛点）多渠道自动抓取 → AI 评估意向 → 精准分配销售</p>
+        <p class="page-desc">六大能力域（招投标监控/军采监控/电商商机/企业客源/竞品情报/舆情痛点）多渠道自动抓取 → AI 评估意向 → 精准分配销售</p>
       </div>
       <div class="header-right">
         <el-button @click="fetchData" :loading="loading"><span>🔄</span><span>刷新</span></el-button>
@@ -92,6 +92,7 @@
               <span>🧠</span><span>批量AI评估</span>
             </el-button>
             <el-button @click="scrapeAll" :loading="scraping"><span>🌐</span><span>抓取全部源</span></el-button>
+            <el-button @click="handleCleanup" type="info" plain><span>🧹</span><span>清理过期</span></el-button>
           </div>
         </div>
 
@@ -129,6 +130,17 @@
               <a v-if="row.link" :href="row.link" target="_blank" rel="noopener" class="link-btn" title="打开获取链接">
                 <span>🔗</span><span>查看</span>
               </a>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="采购详情" width="170">
+            <template #default="{ row }">
+              <div v-if="row.procurement_method || row.budget || row.deadline || row.publish_date" class="proc-detail">
+                <div v-if="row.procurement_method" class="proc-method">📋 {{ row.procurement_method }}</div>
+                <div v-if="row.budget" class="proc-budget">💰 {{ row.budget }}</div>
+                <div v-if="row.deadline" :class="['proc-deadline', { 'proc-expired': isExpired(row.deadline) }]">⏰ {{ row.deadline }}</div>
+                <div v-else-if="row.publish_date" class="proc-publish muted">📅 {{ row.publish_date }}</div>
+              </div>
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
@@ -424,20 +436,21 @@ const filterSource = ref('')
 const filterCategory = ref('')
 const keyword = ref('')
 
-// 五大能力域定义
+// 六大能力域定义
 const categories = [
   { value: '招投标监控', label: '招投标监控', icon: '📋', desc: '定时抓取全国/省市招投标网站，通过关键词筛选最新标讯，第一时间跟进投标' },
+  { value: '军采监控', label: '军采监控', icon: '🎖️', desc: '定向搜索全军武器装备采购信息网(plap.cn)、军队采购网，抓取装备/武器/军用物资采购公告' },
   { value: '电商商机', label: '电商商机', icon: '🛒', desc: '批量抓取亚马逊/TikTok Shop/淘宝等平台商品销量、评论增长率及热搜词，分析"高需求低竞争"潜在爆款' },
   { value: '企业客源', label: '企业客源', icon: '🏢', desc: '从企业信用公示系统、黄页网站批量提取特定行业新注册企业、联系方式及高管信息' },
   { value: '竞品情报', label: '竞品情报', icon: '🎯', desc: '监控竞品官网价格变动、新产品上线动态、促销活动，抓取社媒负面评价优化营销' },
   { value: '舆情痛点', label: '舆情痛点', icon: '💡', desc: '抓取知乎/小红书/贴吧等垂直论坛用户吐槽，挖掘未被满足的需求痛点作为新功能商机' },
 ]
 const categoryKeyMap = {
-  '招投标监控': 'bidding', '电商商机': 'ecommerce', '企业客源': 'b2b',
+  '招投标监控': 'bidding', '军采监控': 'military', '电商商机': 'ecommerce', '企业客源': 'b2b',
   '竞品情报': 'competitor', '舆情痛点': 'forum'
 }
 const categoryIconMap = {
-  '招投标监控': '📋', '电商商机': '🛒', '企业客源': '🏢',
+  '招投标监控': '📋', '军采监控': '🎖️', '电商商机': '🛒', '企业客源': '🏢',
   '竞品情报': '🎯', '舆情痛点': '💡'
 }
 
@@ -572,6 +585,26 @@ const handleBatchEvaluate = async () => {
     } else ElMessage.error(resp.message)
   } catch (e) { ElMessage.error('批量评估失败') }
   finally { evaluating.value = false }
+}
+
+const isExpired = (deadline) => {
+  if (!deadline) return false
+  const today = new Date().toISOString().substring(0, 10)
+  return deadline < today
+}
+
+const handleCleanup = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将清理超过30天的未分配线索及已过截止日期的军采线索，已分配线索保留。是否继续？',
+      '清理过期线索', { type: 'warning', confirmButtonText: '确认清理', cancelButtonText: '取消' }
+    )
+    const resp = await api.post('/leads/cleanup-expired', { days: 30 })
+    if (resp.code === 200) {
+      ElMessage.success(resp.message)
+      fetchLeads(); fetchStats()
+    } else ElMessage.error(resp.message)
+  } catch (e) { /* 用户取消 */ }
 }
 
 const openAssignDialog = async (row) => {
@@ -736,6 +769,14 @@ onMounted(() => { fetchData() })
 .opp-title { font-size: 15px; font-weight: 600; color: #1e293b; margin-bottom: 8px !important; }
 .link-btn { display: inline-flex; align-items: center; gap: 4px; color: #2563eb; text-decoration: none; font-size: 12px; word-break: break-all; }
 .link-btn:hover { color: #1d4ed8; text-decoration: underline; }
+
+/* 采购详情列（发布日期/截止日期/预算/采购方式） */
+.proc-detail { line-height: 1.7; }
+.proc-method { font-size: 12px; color: #1e40af; font-weight: 500; }
+.proc-budget { font-size: 12px; color: #d97706; }
+.proc-deadline { font-size: 12px; color: #059669; }
+.proc-deadline.proc-expired { color: #dc2626; text-decoration: line-through; }
+.proc-publish { font-size: 12px; }
 .muted { color: #94a3b8; font-size: 12px; }
 .mono { font-family: monospace; font-size: 12px; }
 .remark-text { font-size: 13px; color: #475569; }
@@ -755,6 +796,7 @@ onMounted(() => { fetchData() })
 .cat-chip .cat-count { background: rgba(255,255,255,0.3); padding: 1px 7px; border-radius: 10px; font-size: 11px; }
 .cat-chip:not(.active) .cat-count { background: #e2e8f0; color: #64748b; }
 .cat-chip.cat-招投标监控.active { background: #3b82f6; }
+.cat-chip.cat-军采监控.active { background: #1e40af; }
 .cat-chip.cat-电商商机.active { background: #f59e0b; }
 .cat-chip.cat-企业客源.active { background: #10b981; }
 .cat-chip.cat-竞品情报.active { background: #ef4444; }
@@ -763,6 +805,7 @@ onMounted(() => { fetchData() })
 /* 能力域徽标 */
 .cat-badge { font-size: 11px; padding: 2px 8px; border-radius: 8px; font-weight: 500; white-space: nowrap; }
 .cb-bidding { background: #dbeafe; color: #2563eb; }
+.cb-military { background: #dbeafe; color: #1e40af; }
 .cb-ecommerce { background: #fef3c7; color: #d97706; }
 .cb-b2b { background: #d1fae5; color: #059669; }
 .cb-competitor { background: #fee2e2; color: #dc2626; }

@@ -97,6 +97,18 @@ def run_scheduler():
                     logger.info(f"已自动清理 {deleted_count} 个超过 100 天未跟进的客户")
                 else:
                     logger.info("没有需要清理的客户")
+                # 过期线索清理（每天一次：>30天的未分配线索 + 已过截止日期的军采线索）
+                try:
+                    from routes.leads import _cleanup_expired_leads
+                    lead_conn = _open_db()
+                    lead_cursor = lead_conn.cursor()
+                    lead_deleted = _cleanup_expired_leads(lead_cursor, days=30)
+                    lead_conn.commit()
+                    lead_conn.close()
+                    if lead_deleted > 0:
+                        logger.info(f"已清理 {lead_deleted} 条过期线索（>30天或已过截止日期）")
+                except Exception as e:
+                    logger.error(f"过期线索清理失败: {e}")
                 _last_cleanup = now
 
         except Exception as e:
