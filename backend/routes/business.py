@@ -186,6 +186,40 @@ def create_business():
         return jsonify({'code': 500, 'message': str(e), 'data': None})
 
 
+@business_bp.route('/api/business/<int:business_id>', methods=['GET'])
+@token_required
+def get_business_detail(business_id):
+    payload = request.current_user
+    username = payload['username']
+    role = payload['role']
+
+    db = get_db()
+    cursor = db.cursor()
+
+    if role == '主任' or role == '院长':
+        cursor.execute("""
+            SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name
+            FROM business b
+            LEFT JOIN customers c ON b.cust_id = c.id
+            LEFT JOIN users u ON b.owner_id = u.username
+            WHERE b.id = ?
+        """, (business_id,))
+    else:
+        cursor.execute("""
+            SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name
+            FROM business b
+            LEFT JOIN customers c ON b.cust_id = c.id
+            LEFT JOIN users u ON b.owner_id = u.username
+            WHERE b.id = ? AND b.owner_id = ?
+        """, (business_id, username))
+
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '商机不存在', 'data': None})
+
+    return jsonify({'code': 200, 'message': 'success', 'data': dict(row)})
+
+
 @business_bp.route('/api/business/<int:business_id>', methods=['DELETE'])
 @token_required
 def delete_business(business_id):

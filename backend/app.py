@@ -1,11 +1,13 @@
 import os
 import sys
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, send_from_directory, jsonify, request
 import logging
 
+from config import SERVER_HOST, SERVER_PORT
 from extensions import (
     SECRET_KEY, DB_PATH, BASE_DIR, UPLOAD_DIR,
     setup_extensions, get_db, record_operation_log, ensure_tables
@@ -83,6 +85,16 @@ import atexit
 atexit.register(stop_scheduler)
 
 if __name__ == '__main__':
-    logger.info(f"Starting CRM server on port 5000...")
+    parser = argparse.ArgumentParser(description='CRM Backend Server')
+    parser.add_argument('--host', default=SERVER_HOST, help='Server host (default: 0.0.0.0)')
+    parser.add_argument('--port', type=int, default=SERVER_PORT, help='Server port (default: 5000)')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('--no-scheduler', action='store_true', help='Disable background scheduler')
+    args = parser.parse_args()
+
+    if args.no_scheduler:
+        stop_scheduler()
+
+    logger.info(f"Starting CRM server on {args.host}:{args.port}")
     logger.info(f"Database: {DB_PATH}")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host=args.host, port=args.port, debug=args.debug)

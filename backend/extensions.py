@@ -72,7 +72,9 @@ def _init_tables(db):
     _init_visits_table(cursor)
     _init_user_roles_table(cursor)
     _init_knowledge_base_table(cursor)
+    _init_knowledge_extension_tables(cursor)
     _init_lead_tables(cursor)
+    _init_follow_logs_table(cursor)
     db.commit()
 
 
@@ -95,6 +97,207 @@ def _init_knowledge_base_table(cursor):
                 FOREIGN KEY (visit_id) REFERENCES visits(id)
             )
         """)
+    except:
+        pass
+
+
+def _init_knowledge_extension_tables(cursor):
+    """知识库扩展表：文档库、向量索引、资质信息、CRM关联。"""
+    # 文档库：拜访纪要/合同/投标文件/技术方案等非结构化文档
+    try:
+        cursor.execute("""
+            CREATE TABLE knowledge_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT,
+                file_path TEXT,
+                file_name TEXT,
+                file_size INTEGER,
+                mime_type TEXT,
+                doc_metadata TEXT,
+                cust_id INTEGER,
+                business_id INTEGER,
+                contract_id INTEGER,
+                import_batch_id TEXT,
+                owner_id TEXT,
+                tags TEXT,
+                summary TEXT,
+                processed INTEGER DEFAULT 0,
+                processed_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_doc_type ON knowledge_documents(doc_type)")
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_doc_cust ON knowledge_documents(cust_id)")
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_doc_business ON knowledge_documents(business_id)")
+    except:
+        pass
+
+    # 向量索引：文档的语义向量存储
+    try:
+        cursor.execute("""
+            CREATE TABLE knowledge_vectors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_id INTEGER NOT NULL,
+                chunk_index INTEGER DEFAULT 0,
+                chunk_text TEXT,
+                vector BLOB,
+                vector_dim INTEGER,
+                embedding_model TEXT DEFAULT 'text-embedding-3-small',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (doc_id) REFERENCES knowledge_documents(id)
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vectors_doc ON knowledge_vectors(doc_id)")
+    except:
+        pass
+
+    # 人员资质信息
+    try:
+        cursor.execute("""
+            CREATE TABLE personnel_qualifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                name TEXT NOT NULL,
+                qualification_type TEXT NOT NULL,
+                qualification_name TEXT,
+                certificate_no TEXT,
+                issue_date TEXT,
+                expire_date TEXT,
+                issue_authority TEXT,
+                specialty TEXT,
+                level TEXT,
+                file_path TEXT,
+                status TEXT DEFAULT '有效',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (username) REFERENCES users(username)
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_personnel_username ON personnel_qualifications(username)")
+    except:
+        pass
+
+    # 企业资质信息
+    try:
+        cursor.execute("""
+            CREATE TABLE company_qualifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                qualification_type TEXT NOT NULL,
+                qualification_name TEXT,
+                certificate_no TEXT,
+                issue_date TEXT,
+                expire_date TEXT,
+                issue_authority TEXT,
+                scope TEXT,
+                level TEXT,
+                file_path TEXT,
+                status TEXT DEFAULT '有效',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+
+    # CRM数据自动同步配置
+    try:
+        cursor.execute("""
+            CREATE TABLE crm_sync_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                module TEXT NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                last_sync_at TEXT,
+                sync_interval_hours INTEGER DEFAULT 24,
+                field_mapping TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(module)
+            )
+        """)
+    except:
+        pass
+
+    # 智能推荐历史记录
+    try:
+        cursor.execute("""
+            CREATE TABLE ai_recommendations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recommendation_type TEXT NOT NULL,
+                target_id INTEGER,
+                target_type TEXT,
+                recommended_data TEXT,
+                reason TEXT,
+                score REAL,
+                used INTEGER DEFAULT 0,
+                used_at TEXT,
+                created_by TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rec_type ON ai_recommendations(recommendation_type)")
+    except:
+        pass
+
+    # 投标打分评估记录
+    try:
+        cursor.execute("""
+            CREATE TABLE bid_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bid_id TEXT,
+                project_name TEXT,
+                evaluator TEXT,
+                total_score REAL DEFAULT 0,
+                score_details TEXT,
+                evaluation_result TEXT,
+                recommendation TEXT,
+                status TEXT DEFAULT '待评估',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+
+    # 为已有表追加缺失字段
+    try:
+        cursor.execute("ALTER TABLE knowledge_documents ADD COLUMN summary TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE knowledge_documents ADD COLUMN import_batch_id TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE knowledge_documents ADD COLUMN analysis_result TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE knowledge_documents ADD COLUMN analysis_status TEXT DEFAULT 'pending'")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE knowledge_documents ADD COLUMN analyzed_at TEXT")
     except:
         pass
 
@@ -532,6 +735,35 @@ def _init_visits_table(cursor):
         pass
     try:
         cursor.execute("ALTER TABLE visits ADD COLUMN work_content TEXT")
+    except:
+        pass
+
+
+def _init_follow_logs_table(cursor):
+    """客户跟进日志表。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE follow_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ref_type TEXT NOT NULL,
+                ref_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                content TEXT,
+                log_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                next_action TEXT,
+                next_date TEXT,
+                status TEXT DEFAULT '跟进中',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_follow_ref ON follow_logs(ref_type, ref_id)")
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_follow_user ON follow_logs(user_id)")
     except:
         pass
 

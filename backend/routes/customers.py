@@ -91,6 +91,38 @@ def create_customer():
         return jsonify({'code': 500, 'message': str(e), 'data': None})
 
 
+@customers_bp.route('/api/customers/<int:cust_id>', methods=['GET'])
+@token_required
+def get_customer(cust_id):
+    payload = request.current_user
+    username = payload['username']
+    role = payload['role']
+
+    db = get_db()
+    cursor = db.cursor()
+
+    if role == '主任' or role == '院长':
+        cursor.execute("""
+            SELECT c.*, u.name as owner_name
+            FROM customers c
+            LEFT JOIN users u ON c.owner_id = u.username
+            WHERE c.id = ?
+        """, (cust_id,))
+    else:
+        cursor.execute("""
+            SELECT c.*, u.name as owner_name
+            FROM customers c
+            LEFT JOIN users u ON c.owner_id = u.username
+            WHERE c.id = ? AND c.owner_id = ?
+        """, (cust_id, username))
+
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '客户不存在', 'data': None})
+
+    return jsonify({'code': 200, 'message': 'success', 'data': dict(row)})
+
+
 @customers_bp.route('/api/customers/<int:cust_id>', methods=['DELETE'])
 @token_required
 def delete_customer(cust_id):

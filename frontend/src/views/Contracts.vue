@@ -22,7 +22,7 @@
         <div class="search-wrapper">
           <el-input 
             v-model="searchKeyword" 
-            placeholder="搜索合同名称、编号、甲方..." 
+            placeholder="搜索合同名称、编号、项目令号、甲方..." 
             class="search-input"
             clearable
             @keyup.enter="handleSearch"
@@ -522,6 +522,7 @@ const importResult = ref({ total: 0, success_count: 0, fail_count: 0, results: [
 const allColumns = [
   { prop: 'contract_name', label: '合同名称', width: '', minWidth: 120 },
   { prop: 'contract_no', label: '合同编号', width: 120 },
+  { prop: 'project_order_no', label: '项目令号', width: 120 },
   { prop: 'party_a', label: '甲方', width: '', minWidth: 120 },
   { prop: 'total_amt', label: '合同总额(万)', width: 110 },
   { prop: 'paid_amt', label: '已回款(万)', width: 110 },
@@ -537,7 +538,7 @@ const allColumns = [
 ]
 
 const visibleColumns = ref([
-  'contract_name', 'contract_no', 'party_a', 'total_amt', 
+  'contract_name', 'contract_no', 'project_order_no', 'party_a', 'total_amt', 
   'paid_amt', 'pending_amt', 'sign_date', 'business_type', 
   'classification', 'owner_name', 'acceptance_nodes', 'payment_nodes', 'note', 'status'
 ])
@@ -552,6 +553,7 @@ const filteredContracts = computed(() => {
   return contracts.value.filter(record => 
     (record.contract_name && record.contract_name.toLowerCase().includes(keyword)) ||
     (record.contract_no && record.contract_no.toLowerCase().includes(keyword)) ||
+    (record.project_order_no && record.project_order_no.toLowerCase().includes(keyword)) ||
     (record.party_a && record.party_a.toLowerCase().includes(keyword)) ||
     (record.owner_name && record.owner_name.toLowerCase().includes(keyword))
   )

@@ -111,6 +111,10 @@
             <span class="menu-icon">📚</span>
             <span>知识库</span>
           </el-menu-item>
+          <el-menu-item index="/qualifications">
+            <span class="menu-icon">📜</span>
+            <span>资质管理</span>
+          </el-menu-item>
           <el-menu-item index="/operation-logs" v-if="authStore.role === '主任'">
             <span class="menu-icon">📝</span>
             <span>操作日志</span>
@@ -193,6 +197,8 @@ const pageTitleMap = {
   '/search': '全局搜索',
   '/qa': '智能助手',
   '/knowledge': '企业知识库',
+  '/knowledge-docs': '知识文档中心',
+  '/qualifications': '资质信息管理',
   '/operation-logs': '操作日志'
 }
 
