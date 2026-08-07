@@ -13,6 +13,7 @@ reports_bp = Blueprint('reports', __name__)
 ai_agent_bp = Blueprint('ai_agent', __name__)
 knowledge_bp = Blueprint('knowledge', __name__)
 knowledge_ext_bp = Blueprint('knowledge_ext', __name__)
+knowledge_graph_bp = Blueprint('knowledge_graph', __name__)
 leads_bp = Blueprint('leads', __name__)
 agent_agent_bp = Blueprint('agent_agent', __name__)
 
@@ -30,6 +31,7 @@ def register_blueprints(app):
     from .ai_agent import register_routes as register_ai_agent
     from .knowledge import register_routes as register_knowledge
     from .knowledge_ext import register_routes as register_knowledge_ext
+    from .knowledge_graph import register_routes as register_knowledge_graph
     from .leads import register_routes as register_leads
     from .agent_agent import register_routes as register_agent_agent
 
@@ -46,5 +48,6 @@ def register_blueprints(app):
     register_ai_agent(app)
     register_knowledge(app)
     register_knowledge_ext(app)
+    register_knowledge_graph(app)
     register_leads(app)
     register_agent_agent(app)

@@ -29,34 +29,42 @@ if _extra_origins:
 
 
 def get_db():
+    """获取请求级数据库连接。
+
+    注意：不再在此调用 _init_tables()。建表工作由 ensure_tables() 在应用启动时
+    一次性完成。若每次请求都执行 DDL（CREATE TABLE / ALTER TABLE），会长时间
+    持有写锁，导致并发请求（如登录）因等待锁而超时——这正是"数据库被锁、登录不上"
+    的根本原因。
+    """
     if 'db' not in g:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA busy_timeout=10000")
         g.db = conn
-        _init_tables(conn)
     return g.db
 
 
 def close_db(error=None):
     if hasattr(g, 'db'):
-        g.db.close()
+        try:
+            g.db.close()
+        except Exception:
+            pass
 
 
 def ensure_tables():
-    """应用启动时预建表（请求上下文外，供调度器等提前使用）。
+    """应用启动时预建所有表（请求上下文外，供调度器等提前使用）。
 
-    get_db() 在首次请求时才建表，调度器在启动即运行会因表缺失报错，
-    因此在 start_scheduler() 之前调用本函数确保所有表已就绪。
+    只在启动时执行一次所有 DDL，避免每次请求重复建表导致锁竞争。
     """
     try:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA busy_timeout=10000")
         _init_tables(conn)
         conn.commit()
         conn.close()
@@ -66,6 +74,8 @@ def ensure_tables():
 
 def _init_tables(db):
     cursor = db.cursor()
+    _init_users_table(cursor)
+    _init_tokens_table(cursor)
     _init_business_table(cursor)
     _init_contracts_table(cursor)
     _init_operation_logs_table(cursor)
@@ -75,7 +85,63 @@ def _init_tables(db):
     _init_knowledge_extension_tables(cursor)
     _init_lead_tables(cursor)
     _init_follow_logs_table(cursor)
+    _init_other_tables(cursor)
     db.commit()
+
+
+def _init_users_table(cursor):
+    """初始化用户表，确保包含 id、username、password_hash 等必要字段。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL DEFAULT '',
+                password_hash TEXT,
+                name TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT '员工',
+                status TEXT DEFAULT '在职',
+                department TEXT DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except Exception:
+        pass
+    # 为已有 users 表补齐缺失字段
+    for col, decl in [
+        ('password', 'TEXT DEFAULT '''),
+        ('password_hash', 'TEXT'),
+        ('name', "TEXT NOT NULL DEFAULT ''"),
+        ('role', "TEXT NOT NULL DEFAULT '员工'"),
+        ('status', "TEXT DEFAULT '在职'"),
+        ('department', "TEXT DEFAULT ''"),
+        ('created_at', 'TEXT DEFAULT CURRENT_TIMESTAMP'),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
+        except Exception:
+            pass
+
+
+def _init_tokens_table(cursor):
+    """初始化令牌表。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tokens (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                expires TEXT NOT NULL
+            )
+        """)
+    except Exception:
+        pass
+
+
+def _init_other_tables(cursor):
+    """其他可能被引用的表，按需补建。"""
+    pass
 
 
 def _init_knowledge_base_table(cursor):

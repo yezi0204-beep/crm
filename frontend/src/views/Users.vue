@@ -77,7 +77,7 @@
       </div>
     </div>
 
-    <el-dialog v-model="showAddModal" :title="userForm.username && isEditing ? '编辑用户' : '添加用户'" width="450px">
+    <el-dialog v-model="showAddModal" :title="userForm.username && isEditing ? '编辑用户' : '添加用户'" width="450px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="userForm" :rules="rules" ref="formRef">
         <el-form-item label="用户名" prop="username">
           <el-input v-model="userForm.username" :disabled="isEditing" />

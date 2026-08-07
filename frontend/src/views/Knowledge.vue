@@ -212,10 +212,17 @@
           <div class="empty-desc">尝试调整搜索词或使用更通用的描述</div>
         </div>
       </el-tab-pane>
+
+      <!-- Tab 4: 知识图谱 -->
+      <!-- v-if="activeTab==='graph' 关键修复：切到Tab时才挂载，容器从一开始就有真实宽高，避免ECharts初始化width/height=0 -->
+      <el-tab-pane label="🕸️ 知识图谱" name="graph">
+        <div class="tab-desc">自动从文档中提取实体和关系，构建企业知识图谱，可视化展示知识关联</div>
+        <KnowledgeGraph v-if="activeTab === 'graph'" ref="knowledgeGraphRef" />
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 文档详情对话框 -->
-    <el-dialog v-model="detailVisible" title="文档详情" width="750px" top="5vh">
+    <el-dialog v-model="detailVisible" title="文档详情" width="750px" top="5vh" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-if="currentDoc" class="detail-content">
         <div class="detail-header">
           <el-tag :type="getDocTagType(currentDoc.doc_type)">{{ currentDoc.doc_type_display }}</el-tag>
@@ -381,7 +388,7 @@
     </el-dialog>
 
     <!-- 创建/编辑文档对话框 -->
-    <el-dialog v-model="createVisible" :title="editingDoc ? '编辑文档' : '新建知识文档'" width="600px">
+    <el-dialog v-model="createVisible" :title="editingDoc ? '编辑文档' : '新建知识文档'" width="600px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="docForm" label-width="100px" ref="docFormRef">
         <el-form-item label="文档类型" required>
           <el-select v-model="docForm.doc_type" style="width:100%">
@@ -460,7 +467,7 @@
     </el-dialog>
 
     <!-- 上传对话框 -->
-    <el-dialog v-model="uploadVisible" title="批量文件导入" width="500px">
+    <el-dialog v-model="uploadVisible" title="批量文件导入" width="500px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div class="upload-tip">
         💡 上传的文档将自动解析并生成向量索引，供智能体使用
       </div>
@@ -520,13 +527,25 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 
 // ========== 基础状态 ==========
 const activeTab = ref('documents')
 const stats = ref(null)
+
+// 知识图谱组件引用
+const knowledgeGraphRef = ref(null)
+
+// 监听Tab切换，激活知识图谱时触发图表重新渲染
+watch(activeTab, async (newVal) => {
+  if (newVal === 'graph' && knowledgeGraphRef.value?.refreshChart) {
+    await nextTick()
+    knowledgeGraphRef.value.refreshChart()
+  }
+})
 
 // ========== Tab 1: 知识文档 ==========
 const docTypes = [

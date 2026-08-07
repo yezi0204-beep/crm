@@ -391,70 +391,105 @@ def qa():
     return jsonify({'code': 200, 'message': 'success', 'data': {'answer': answer}})
 
 
-def process_question_llm(question, cursor, username, stream=False):
-    try:
-        from qa_engine import extract_query_function, generate_answer, generate_answer_stream
-    except ImportError:
-        return get_default_answer(question)
+def process_question_llm_stream(question, cursor, username):
+    """流式问答生成器：先查数据，再生成回答，全程有进度反馈。
 
-    try:
+    作为 generator，每条 yield 直接是一条 SSE 事件字符串。
+    进度消息带 type: status，实际回答内容不带 type。
+    """
+    from qa_engine import _extract_query_function_rule, generate_answer_stream, generate_answer
+
+    # 1. 快速函数选择（规则匹配，毫秒级）
+    func_name = _extract_query_function_rule(question)
+
+    if not func_name or func_name == 'none':
+        # 规则匹配没命中，尝试 LLM 选择（可能较慢）
+        yield f"data: {json.dumps({'answer': '正在分析意图...', 'type': 'status'}, ensure_ascii=False)}\n\n"
+        from qa_engine import extract_query_function
         func_name = extract_query_function(question)
-
         if not func_name or func_name == 'none':
-            default_answer = get_default_answer(question)
-            if stream:
-                def generate():
-                    yield f"data: {json.dumps({'answer': default_answer})}\n\n"
-                return Response(generate(), content_type='text/event-stream')
-            return default_answer
+            answer = get_default_answer(question)
+            yield f"data: {json.dumps({'answer': answer}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
-        func_map = {
-            'get_contracts_near_expiry': lambda: get_contracts_near_expiry_raw(cursor),
-            'get_top_pending_customer': lambda: get_top_pending_customer_raw(cursor),
-            'get_top_pending_contract': lambda: get_top_pending_contract_raw(cursor),
-            'get_business_to_follow': lambda: get_business_to_follow_raw(cursor),
-            'get_my_customer_count': lambda: get_my_customer_count_raw(cursor, username),
-            'get_top_contract_by_amount': lambda: get_top_contract_by_amount_raw(cursor),
-            'get_business_count': lambda: get_business_count_raw(cursor),
-            'get_total_payments': lambda: get_total_payments_raw(cursor),
-            'get_total_pending': lambda: get_total_pending_raw(cursor),
-            'get_weekly_plan': lambda: get_weekly_plan_raw(cursor, username),
-            'get_next_week_plan': lambda: get_next_week_plan_raw(cursor, username),
-        }
+    # 2. 查询数据
+    func_map = {
+        'get_contracts_near_expiry': lambda: get_contracts_near_expiry_raw(cursor),
+        'get_top_pending_customer': lambda: get_top_pending_customer_raw(cursor),
+        'get_top_pending_contract': lambda: get_top_pending_contract_raw(cursor),
+        'get_business_to_follow': lambda: get_business_to_follow_raw(cursor),
+        'get_my_customer_count': lambda: get_my_customer_count_raw(cursor, username),
+        'get_top_contract_by_amount': lambda: get_top_contract_by_amount_raw(cursor),
+        'get_business_count': lambda: get_business_count_raw(cursor),
+        'get_total_payments': lambda: get_total_payments_raw(cursor),
+        'get_total_pending': lambda: get_total_pending_raw(cursor),
+        'get_weekly_plan': lambda: get_weekly_plan_raw(cursor, username),
+        'get_next_week_plan': lambda: get_next_week_plan_raw(cursor, username),
+    }
 
-        if func_name in func_map:
-            data_context = func_map[func_name]()
+    if func_name not in func_map:
+        answer = get_default_answer(question)
+        yield f"data: {json.dumps({'answer': answer}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
-            if stream:
-                lines = generate_answer_stream(question, data_context, username)
-                if lines:
-                    def generate():
-                        for line in lines:
-                            if line:
-                                line = line.decode('utf-8')
-                                if line.startswith('data:'):
-                                    try:
-                                        data = json.loads(line[5:])
-                                        if 'choices' in data and data['choices']:
-                                            delta = data['choices'][0].get('delta', {})
-                                            content = delta.get('content', '')
-                                            if content:
-                                                yield f"data: {json.dumps({'answer': content})}\n\n"
-                                    except:
-                                        pass
-                        yield "data: [DONE]\n\n"
-                    return Response(generate(), content_type='text/event-stream')
-                else:
-                    return get_default_answer(question)
-            else:
-                llm_answer = generate_answer(question, data_context, username)
-                if llm_answer:
-                    return llm_answer
-                return get_default_answer(question)
+    yield f"data: {json.dumps({'answer': '正在查询数据...', 'type': 'status'}, ensure_ascii=False)}\n\n"
+    data_context = func_map[func_name]()
 
-        return get_default_answer(question)
-    except Exception:
-        return get_default_answer(question)
+    # 3. 尝试 LLM 流式生成回答
+    yield f"data: {json.dumps({'answer': '正在生成回答...', 'type': 'status'}, ensure_ascii=False)}\n\n"
+    lines = generate_answer_stream(question, data_context, username)
+
+    if lines:
+        received_content = False
+        for line in lines:
+            if line:
+                line = line.decode('utf-8')
+                if line.startswith('data:'):
+                    try:
+                        data = json.loads(line[5:])
+                        if 'choices' in data and data['choices']:
+                            delta = data['choices'][0].get('delta', {})
+                            content = delta.get('content', '')
+                            if content:
+                                received_content = True
+                                yield f"data: {json.dumps({'answer': content}, ensure_ascii=False)}\n\n"
+                    except Exception:
+                        pass
+        if received_content:
+            yield "data: [DONE]\n\n"
+            return
+
+    # LLM 流式生成失败，尝试非流式
+    answer = generate_answer(question, data_context, username)
+    if answer:
+        yield f"data: {json.dumps({'answer': answer}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    # LLM 完全失败，直接展示数据
+    if data_context and not data_context.startswith('暂无'):
+        fallback_answer = f'查询到以下数据：\n\n{data_context}'
+        yield f"data: {json.dumps({'answer': fallback_answer}, ensure_ascii=False)}\n\n"
+    else:
+        yield f"data: {json.dumps({'answer': '抱歉，未能查询到相关数据。'}, ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+def _answer_with_data_context(question, data_context, stream=False):
+    """当 LLM 生成失败时，直接用查询到的数据生成简单回答。"""
+    if not data_context or data_context.strip() in ['', '暂无数据。', '暂无即将到期的合同。', '暂无待回款的客户。', '暂无待回款的合同。']:
+        answer = '抱歉，未能查询到相关数据。您可以尝试换一种提问方式。'
+    else:
+        answer = f"根据查询结果：\n\n{data_context}"
+    
+    if stream:
+        def generate():
+            yield f"data: {json.dumps({'answer': answer})}\n\n"
+            yield "data: [DONE]\n\n"
+        return Response(generate(), content_type='text/event-stream')
+    return answer
 
 
 def process_question_rule(question, cursor, payload):

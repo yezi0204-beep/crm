@@ -190,7 +190,7 @@ let chart1 = null
 let chart2 = null
 
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(1)
+  return ((value || 0) / 10000).toFixed(4)
 }
 
 const formatDate = (dateStr) => {

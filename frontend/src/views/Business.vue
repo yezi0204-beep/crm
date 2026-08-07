@@ -91,7 +91,7 @@
       </div>
     </div>
     
-    <el-dialog v-model="showAddModal" :title="businessForm.id ? '编辑商机' : '添加商机'" width="500px">
+    <el-dialog v-model="showAddModal" :title="businessForm.id ? '编辑商机' : '添加商机'" width="500px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="businessForm" :rules="rules" ref="formRef">
         <el-form-item label="商机名称" prop="title">
           <el-input v-model="businessForm.title" />
@@ -201,7 +201,7 @@
       </template>
     </el-dialog>
     
-    <el-dialog v-model="showFollowModal" :title="`商机跟进 - ${currentBusiness?.title}`" width="700px">
+    <el-dialog v-model="showFollowModal" :title="`商机跟进 - ${currentBusiness?.title}`" width="700px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div class="follow-container">
         <div class="follow-history">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -423,7 +423,7 @@ const fetchUsers = async () => {
 }
 
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(2)
+  return ((value || 0) / 10000).toFixed(4)
 }
 
 const getProbabilityType = (probability) => {
@@ -728,7 +728,7 @@ const exportBusiness = () => {
     const rowData = exportColumns.map(col => {
       let value = row[col.prop]
       if (col.prop === 'amount') {
-        value = ((value || 0) / 10000).toFixed(2)
+        value = ((value || 0) / 10000).toFixed(4)
       }
       return escapeCsvValue(value)
     })

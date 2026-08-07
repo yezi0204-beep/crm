@@ -1,7 +1,7 @@
 import os
 
 SERVER_HOST = os.environ.get('SERVER_HOST', '0.0.0.0')
-SERVER_PORT = int(os.environ.get('SERVER_PORT', '5001'))
+SERVER_PORT = int(os.environ.get('SERVER_PORT', '5000'))
 
 LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
 LLM_API_BASE = os.environ.get('LLM_API_BASE', 'http://10.200.100.74:8000/v1')

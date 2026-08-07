@@ -112,7 +112,7 @@
     </el-tabs>
 
     <!-- 人员资质对话框 -->
-    <el-dialog v-model="personnelDialogVisible" :title="editingPersonnel ? '编辑人员资质' : '新增人员资质'" width="550px">
+    <el-dialog v-model="personnelDialogVisible" :title="editingPersonnel ? '编辑人员资质' : '新增人员资质'" width="550px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="personnelForm" label-width="110px">
         <el-row :gutter="12">
           <el-col :span="12">
@@ -183,7 +183,7 @@
     </el-dialog>
 
     <!-- 企业资质对话框 -->
-    <el-dialog v-model="companyDialogVisible" :title="editingCompany ? '编辑企业资质' : '新增企业资质'" width="550px">
+    <el-dialog v-model="companyDialogVisible" :title="editingCompany ? '编辑企业资质' : '新增企业资质'" width="550px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="companyForm" label-width="110px">
         <el-form-item label="资质类型" required>
           <el-select v-model="companyForm.qualification_type" style="width:100%">

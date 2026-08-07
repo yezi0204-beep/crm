@@ -56,7 +56,7 @@
             <el-table-column prop="name" label="阶段" width="100" />
             <el-table-column prop="count" label="商机数" width="80" align="center" />
             <el-table-column label="商机金额(万)" width="120" align="right">
-              <template #default="scope">{{ scope.row.amount }}</template>
+              <template #default="scope">{{ formatAmount(scope.row.amount) }}</template>
             </el-table-column>
             <el-table-column label="转化率" width="100" align="center">
               <template #default="scope">
@@ -116,17 +116,17 @@
         <el-table-column prop="role" label="角色" width="80" />
         <el-table-column prop="business_count" label="商机数" width="80" align="center" />
         <el-table-column label="商机金额(万)" width="120" align="right">
-          <template #default="scope">{{ scope.row.business_amount }}</template>
+          <template #default="scope">{{ formatAmount(scope.row.business_amount) }}</template>
         </el-table-column>
         <el-table-column prop="contract_count" label="合同数" width="80" align="center" />
         <el-table-column label="合同金额(万)" width="120" align="right">
-          <template #default="scope">{{ scope.row.contract_amount }}</template>
+          <template #default="scope">{{ formatAmount(scope.row.contract_amount) }}</template>
         </el-table-column>
         <el-table-column label="回款金额(万)" width="120" align="right">
-          <template #default="scope">{{ scope.row.payment_amount }}</template>
+          <template #default="scope">{{ formatAmount(scope.row.payment_amount) }}</template>
         </el-table-column>
         <el-table-column label="加权预测(万)" width="120" align="right">
-          <template #default="scope">{{ scope.row.forecast_amount }}</template>
+          <template #default="scope">{{ formatAmount(scope.row.forecast_amount) }}</template>
         </el-table-column>
         <el-table-column label="胜率" width="80" align="center">
           <template #default="scope">
@@ -176,6 +176,11 @@ import * as echarts from 'echarts'
 
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
+
+// 金额格式化：元 → 万元，精确到分需保留4位小数（0.0001万元 = 0.01元）
+const formatAmount = (value) => {
+  return ((value || 0) / 10000).toFixed(4)
+}
 
 // 年份选择
 const currentYear = new Date().getFullYear()
@@ -260,8 +265,8 @@ const fetchTrendComparison = async () => {
         return {
           key,
           label: labelMap[key] || key,
-          current: isAmount ? (val.current / 10000).toFixed(1) : val.current,
-          previous: isAmount ? (val.previous / 10000).toFixed(1) : val.previous,
+          current: isAmount ? (val.current / 10000).toFixed(4) : val.current,
+          previous: isAmount ? (val.previous / 10000).toFixed(4) : val.previous,
           growth_rate: val.growth_rate
         }
       })
@@ -337,7 +342,7 @@ const updateConversionChart = () => {
   conversionChartInstance.setOption({
     tooltip: { trigger: 'item', formatter: (p) => {
       const stage = stages[p.dataIndex] || {}
-      return `${p.name}<br/>商机数: ${stage.count || 0} 个<br/>金额: ${stage.amount || 0} 万<br/>转化率: ${stage.conversion_rate || 0}%<br/>流失率: ${stage.drop_rate || 0}%`
+      return `${p.name}<br/>商机数: ${stage.count || 0} 个<br/>金额: ${((stage.amount || 0) / 10000).toFixed(4)} 万<br/>转化率: ${stage.conversion_rate || 0}%<br/>流失率: ${stage.drop_rate || 0}%`
     }},
     series: [{
       name: '阶段转化',

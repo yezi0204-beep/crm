@@ -18,11 +18,13 @@
 所有写操作复用既有约束（owner_id 隔离、update_customer_last_follow 等）。
 """
 import json
+import os
+import sqlite3
 from datetime import datetime
 from flask import request, jsonify, Response
 
 from extensions import (
-    get_db, token_required, record_operation_log, update_customer_last_follow,
+    get_db, token_required, record_operation_log, update_customer_last_follow, DB_PATH,
 )
 from qa_engine import (
     extract_write_intent, generate_visit_summary, generate_agent_reply,
@@ -409,8 +411,11 @@ def ai_visit_summary():
 def ai_agent_stream():
     """SSE 流式对话：用于查询意图的自然语言回答逐字输出。
 
-    写操作意图会被识别并提示切换到对话录入模式；查询意图复用 misc.py 的流式问答。
-    SSE 数据格式与 /api/qa 流式一致：data: {"answer": "..."}  /  data: [DONE]
+    立即返回 SSE 连接，先发"思考中"消息，再异步处理查询。
+    写操作意图快速识别后提示切换到对话录入模式。
+
+    注意：SSE 流式响应会导致请求上下文在 generator 执行前被释放，
+    因此需要创建独立的数据库连接（不依赖 Flask g 对象）。
     """
     payload = request.current_user
     data = request.get_json(silent=True) or {}
@@ -419,39 +424,59 @@ def ai_agent_stream():
     if not text:
         return jsonify({'code': 400, 'message': '请输入内容', 'data': None})
 
-    # 先识别是否为写操作意图，若是则提示走 /api/ai/agent
-    intent_result = extract_write_intent(text, username)
-    intent = intent_result.get('intent', 'none')
-    if intent in ('create_follow_log', 'create_customer', 'update_business'):
-        action_label = {'create_follow_log': '跟进记录', 'create_customer': '新增客户',
-                        'update_business': '商机更新'}[intent]
-        hint = f'检测到您要进行「{action_label}」操作，已切换到对话录入模式，请在确认卡片中确认后执行。'
+    from config import USE_LLM
 
-        def write_hint():
-            yield f"data: {json.dumps({'answer': hint})}\n\n"
-            yield "data: [DONE]\n\n"
-        return Response(write_hint(), content_type='text/event-stream')
+    def generate():
+        # 创建独立的数据库连接（SSE 流式响应会释放请求上下文，不能用 get_db）
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        cursor = conn.cursor()
 
-    # 查询意图：复用 misc.py 的流式问答
-    # LLM 未启用时降级到规则问答，避免流式仅返回默认帮助文本
-    try:
-        from config import USE_LLM
-        db = get_db()
-        cursor = db.cursor()
-        if not USE_LLM:
-            from .misc import process_question_rule
-            answer = process_question_rule(text, cursor, payload)
-            def rule_stream():
-                yield f"data: {json.dumps({'answer': answer})}\n\n"
+        try:
+            # 先发一条"思考中"消息，让前端立即收到数据
+            yield f"data: {json.dumps({'answer': '正在思考中...', 'type': 'status'}, ensure_ascii=False)}\n\n"
+
+            # 1. 先用规则匹配快速识别写操作意图（不调 LLM，毫秒级响应）
+            from qa_engine import _extract_write_intent_rule
+            intent_result = _extract_write_intent_rule(text)
+            intent = intent_result.get('intent', 'none')
+
+            if intent in ('create_follow_log', 'create_customer', 'update_business'):
+                action_label = {'create_follow_log': '跟进记录', 'create_customer': '新增客户',
+                                'update_business': '商机更新'}[intent]
+                hint = f'检测到您要进行「{action_label}」操作，已切换到对话录入模式，请在确认卡片中确认后执行。'
+                yield f"data: {json.dumps({'answer': hint}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
-            return Response(rule_stream(), content_type='text/event-stream')
-        from .misc import process_question_llm
-        return process_question_llm(text, cursor, username, stream=True)
-    except Exception as e:
-        def err():
-            yield f"data: {json.dumps({'answer': f'流式查询失败：{e}'})}\n\n"
+                return
+
+            # 2. 查询意图：处理问答
+            if not USE_LLM:
+                from .misc import process_question_rule
+                answer = process_question_rule(text, cursor, payload)
+                yield f"data: {json.dumps({'answer': answer}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            from .misc import process_question_llm_stream
+            # process_question_llm_stream 是 generator，直接 yield 每一条 SSE 事件
+            for event in process_question_llm_stream(text, cursor, username):
+                yield event
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'answer': f'查询失败：{e}'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
-        return Response(err(), content_type='text/event-stream')
+        finally:
+            # 确保关闭独立的数据库连接
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return Response(generate(), content_type='text/event-stream')
 
 
 # ==================== 4. 智能线索评估与分配 ====================

@@ -34,12 +34,10 @@
           </el-table-column>
           <el-table-column prop="source" label="来源" min-width="100" sortable />
           <el-table-column prop="owner_name" label="负责人" min-width="90" sortable />
-          <el-table-column prop="last_follow" label="最后跟进" min-width="120" sortable />
           <el-table-column prop="created_at" label="创建时间" min-width="140" sortable />
           <el-table-column label="操作" min-width="260" fixed="right">
             <template #default="scope">
               <el-button size="small" @click="editCustomer(scope.row)">编辑</el-button>
-              <el-button size="small" type="warning" @click="showFollow(scope.row)">跟进</el-button>
               <el-button size="small" type="success" @click="showProfile(scope.row)">画像</el-button>
               <el-button size="small" type="primary" v-if="canEditOwner && scope.row.owner_id" @click="releaseToPool(scope.row)">释放</el-button>
               <el-button size="small" type="danger" @click="deleteCustomer(scope.row)">删除</el-button>
@@ -49,7 +47,7 @@
       </div>
     </div>
     
-    <el-dialog v-model="showAddModal" :title="customerForm.id ? '编辑客户' : '添加客户'" width="500px">
+    <el-dialog v-model="showAddModal" :title="customerForm.id ? '编辑客户' : '添加客户'" width="500px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="customerForm" :rules="rules" ref="formRef">
         <el-form-item label="联系人" prop="name">
           <el-input v-model="customerForm.name" />
@@ -102,7 +100,7 @@
       </template>
     </el-dialog>
     
-    <el-dialog v-model="showFollowModal" :title="`客户跟进 - ${currentCustomer?.company || currentCustomer?.name}`" width="700px">
+    <el-dialog v-model="showFollowModal" :title="`客户跟进 - ${currentCustomer?.company || currentCustomer?.name}`" width="700px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div class="follow-container">
         <div class="follow-history">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -183,6 +181,8 @@
       size="55%"
       direction="rtl"
       destroy-on-close
+      :close-on-click-modal="false"
+      :with-key="false"
     >
       <div v-loading="profileLoading" class="profile-container">
         <template v-if="profileData">
@@ -502,9 +502,9 @@ const releaseToPool = async (row) => {
   }
 }
 
-// 金额格式化：元 → 万元（与 Dashboard.vue 一致）
+// 金额格式化：元 → 万元，精确到分需保留4位小数（0.0001万元 = 0.01元）
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(2)
+  return ((value || 0) / 10000).toFixed(4)
 }
 
 // 打开画像 Drawer

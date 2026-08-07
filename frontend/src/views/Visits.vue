@@ -302,7 +302,7 @@
       </el-tabs>
     </div>
 
-    <el-dialog v-model="addDialogVisible" title="新增排班计划" width="600px">
+    <el-dialog v-model="addDialogVisible" title="新增排班计划" width="600px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="visitForm" label-width="100px" ref="visitFormRef" :rules="formRules">
         <el-form-item label="类型" prop="work_type">
           <el-radio-group v-model="visitForm.work_type">
@@ -367,7 +367,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="detailDialogVisible" title="排班详情" width="600px">
+    <el-dialog v-model="detailDialogVisible" title="排班详情" width="600px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-descriptions :column="2" border v-if="currentVisit">
         <el-descriptions-item label="类型">
           <el-tag :type="currentVisit.work_type === 'visit' ? 'primary' : 'success'" effect="plain">
@@ -426,6 +426,9 @@
         <el-button v-if="currentVisit?.status === 'planned'" @click="openEditDialog(currentVisit)">
           编辑
         </el-button>
+        <el-button v-if="currentVisit?.status === 'completed'" type="warning" @click="openEditCompleteDialog(currentVisit)">
+          修改完成记录
+        </el-button>
         <el-button
           v-if="currentVisit?.status === 'completed' && currentVisit?.work_type === 'visit'"
           type="primary"
@@ -437,8 +440,8 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="completeDialogVisible" title="完成排班" width="500px">
-      <el-form :model="completeForm" label-width="100px">
+    <el-dialog v-model="completeDialogVisible" :title="completeDialogTitle" width="680px" :close-on-click-modal="false" :close-on-press-escape="false">
+      <el-form :model="completeForm" label-width="100px" :disabled="completing">
         <el-form-item label="实际日期">
           <el-date-picker 
             v-model="completeForm.actual_date" 
@@ -454,23 +457,92 @@
             value-format="HH:mm"
           />
         </el-form-item>
-        <el-form-item :label="currentVisit?.work_type === 'visit' ? '拜访结果' : '完成情况'">
-          <el-input 
-            v-model="completeForm.result" 
-            type="textarea" 
-            :rows="4" 
-            :placeholder="currentVisit?.work_type === 'visit' ? '请输入拜访结果' : '请输入工作完成情况'"
-          />
-        </el-form-item>
+        <el-divider v-if="currentVisit?.work_type === 'visit' && completeMode === 'create'" content-position="left">📝 跟进信息（将同步到客户和商机）</el-divider>
+        <!-- 修改模式：只显示完成结果输入框 -->
+        <template v-if="completeMode === 'edit'">
+          <el-form-item label="完成结果">
+            <el-input
+              v-model="completeForm.follow_content"
+              type="textarea"
+              :rows="5"
+              placeholder="请输入完成结果/跟进内容"
+            />
+          </el-form-item>
+        </template>
+        <!-- 创建模式 + 客户拜访：显示跟进信息 -->
+        <template v-else-if="currentVisit?.work_type === 'visit'">
+          <el-form-item label="跟进方式">
+            <el-select v-model="completeForm.follow_type" placeholder="选择跟进方式" style="width:100%">
+              <el-option label="面谈" value="面谈" />
+              <el-option label="电话" value="电话" />
+              <el-option label="邮件" value="邮件" />
+              <el-option label="微信" value="微信" />
+              <el-option label="视频会议" value="视频会议" />
+              <el-option label="其他" value="其他" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="跟进内容" required>
+            <el-input
+              v-model="completeForm.follow_content"
+              type="textarea"
+              :rows="4"
+              placeholder="请输入本次跟进的详细内容、客户反馈、讨论要点等"
+            />
+          </el-form-item>
+          <el-form-item label="下一步计划">
+            <el-input
+              v-model="completeForm.next_action"
+              placeholder="下一步要做什么（如：发送方案、安排 demo、准备报价等）"
+            />
+          </el-form-item>
+          <el-form-item label="计划日期">
+            <el-date-picker
+              v-model="completeForm.next_date"
+              type="date"
+              placeholder="下一步行动日期"
+              value-format="YYYY-MM-DD"
+            />
+          </el-form-item>
+          <el-form-item v-if="customerBusinesses.length > 0" label="关联商机">
+            <el-select
+              v-model="completeForm.business_ids"
+              multiple
+              placeholder="选择关联的商机（不选则自动关联所有活跃商机）"
+              style="width:100%"
+            >
+              <el-option
+                v-for="biz in customerBusinesses"
+                :key="biz.id"
+                :label="`${biz.name}（${biz.stage}，概率${biz.probability}%）`"
+                :value="biz.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-else label="关联商机">
+            <span class="muted">该客户暂无活跃商机，完成后将自动创建客户跟进记录</span>
+          </el-form-item>
+        </template>
+        <!-- 创建模式 + 其它工作：显示完成情况 -->
+        <template v-else>
+          <el-form-item label="完成情况">
+            <el-input
+              v-model="completeForm.result"
+              type="textarea"
+              :rows="4"
+              placeholder="请输入工作完成情况"
+            />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
-        <el-button @click="completeDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleComplete">确定</el-button>
+        <el-button @click="completeDialogVisible = false" :disabled="completing">取消</el-button>
+        <el-button v-if="completeMode === 'create'" type="primary" @click="handleComplete" :loading="completing">确定并同步跟进</el-button>
+        <el-button v-else type="primary" @click="handleUpdateComplete" :loading="completing">保存修改</el-button>
       </template>
     </el-dialog>
 
     <!-- AI 复盘对话框 -->
-    <el-dialog v-model="reviewDialogVisible" title="🤖 AI 拜访复盘" width="680px" top="6vh">
+    <el-dialog v-model="reviewDialogVisible" title="🤖 AI 拜访复盘" width="680px" top="6vh" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-loading="reviewLoading" element-loading-text="AI 正在生成结构化复盘摘要...">
         <div v-if="reviewData" class="review-content">
           <div class="review-title">{{ reviewData.title }}</div>
@@ -564,10 +636,23 @@ const visitForm = reactive({
 const completeForm = reactive({
   actual_date: new Date().toISOString().split('T')[0],
   actual_time: new Date().toTimeString().slice(0, 5),
-  result: ''
+  result: '',
+  follow_type: '面谈',
+  follow_content: '',
+  next_action: '',
+  next_date: '',
+  business_ids: []
 })
 
+// 完成对话框模式：create=首次完成，edit=修改已完成记录
+const completeMode = ref('create')
+const completeDialogTitle = computed(() =>
+  completeMode.value === 'create' ? '完成拜访并录入跟进信息' : '修改完成记录'
+)
+
 const currentVisit = ref(null)
+const customerBusinesses = ref([])
+const completing = ref(false)
 
 const validateCustId = (rule, value, callback) => {
   if (visitForm.work_type === 'visit' && !value) {
@@ -780,12 +865,89 @@ const openEditDialog = (visit) => {
   detailDialogVisible.value = false
 }
 
-const openCompleteDialog = (visit) => {
+const openCompleteDialog = async (visit) => {
   currentVisit.value = visit
+  completeMode.value = 'create'
   completeForm.actual_date = new Date().toISOString().split('T')[0]
   completeForm.actual_time = new Date().toTimeString().slice(0, 5)
   completeForm.result = ''
+  completeForm.follow_type = '面谈'
+  completeForm.follow_content = ''
+  completeForm.next_action = ''
+  completeForm.next_date = ''
+  completeForm.business_ids = []
+  customerBusinesses.value = []
+  
+  // 如果是客户拜访类型，加载该客户的活跃商机
+  if (visit.work_type === 'visit' && visit.cust_id) {
+    try {
+      const res = await fetch(`/api/visits/customer-businesses/${visit.cust_id}`, {
+        headers: { 'Authorization': `Bearer ${token.value}` }
+      })
+      const data = await res.json()
+      if (data.code === 200) {
+        customerBusinesses.value = data.data
+      }
+    } catch (error) {
+      console.error('获取客户商机失败:', error)
+    }
+  }
+  
   completeDialogVisible.value = true
+}
+
+// 打开"修改完成记录"对话框：填充已录入的完成内容
+const openEditCompleteDialog = async (visit) => {
+  currentVisit.value = visit
+  completeMode.value = 'edit'
+  // 用已有数据填充表单
+  completeForm.actual_date = visit.actual_date || new Date().toISOString().split('T')[0]
+  completeForm.actual_time = visit.actual_time || new Date().toTimeString().slice(0, 5)
+  completeForm.result = visit.result || ''
+  // 跟进相关字段在修改模式下不使用（后端 update-complete 不改跟进记录）
+  completeForm.follow_type = '面谈'
+  completeForm.follow_content = visit.result || ''
+  completeForm.next_action = ''
+  completeForm.next_date = ''
+  completeForm.business_ids = []
+  customerBusinesses.value = []
+
+  detailDialogVisible.value = false
+  completeDialogVisible.value = true
+}
+
+// 保存已完成拜访的修改（只更新 visits 表，不重复创建跟进记录）
+const handleUpdateComplete = async () => {
+  if (!currentVisit.value) return
+
+  completing.value = true
+  try {
+    const res = await fetch(`/api/visits/${currentVisit.value.id}/update-complete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token.value}`
+      },
+      body: JSON.stringify({
+        actual_date: completeForm.actual_date,
+        actual_time: completeForm.actual_time,
+        result: completeForm.follow_content || completeForm.result
+      })
+    })
+    const data = await res.json()
+    if (data.code === 200) {
+      ElMessage.success('完成记录已更新')
+      completeDialogVisible.value = false
+      fetchVisits()
+      fetchStats()
+    } else {
+      ElMessage.error(data.message)
+    }
+  } catch (error) {
+    ElMessage.error('操作失败')
+  } finally {
+    completing.value = false
+  }
 }
 
 const handleSave = async () => {
@@ -828,6 +990,13 @@ const handleSave = async () => {
 const handleComplete = async () => {
   if (!currentVisit.value) return
 
+  // 验证：客户拜访类型必须有跟进内容
+  if (currentVisit.value.work_type === 'visit' && !completeForm.follow_content.trim()) {
+    ElMessage.warning('请填写跟进内容')
+    return
+  }
+
+  completing.value = true
   try {
     const res = await fetch(`/api/visits/${currentVisit.value.id}/complete`, {
       method: 'POST',
@@ -835,11 +1004,27 @@ const handleComplete = async () => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token.value}`
       },
-      body: JSON.stringify(completeForm)
+      body: JSON.stringify({
+        actual_date: completeForm.actual_date,
+        actual_time: completeForm.actual_time,
+        result: completeForm.follow_content || completeForm.result,
+        follow_type: completeForm.follow_type,
+        follow_content: completeForm.follow_content,
+        next_action: completeForm.next_action,
+        next_date: completeForm.next_date,
+        business_ids: completeForm.business_ids
+      })
     })
     const data = await res.json()
     if (data.code === 200) {
-      ElMessage.success('排班已完成')
+      let msg = '拜访已完成'
+      if (data.data && data.data.business_follow_count > 0) {
+        msg += `，已同步到 ${data.data.business_follow_count} 个商机`
+      }
+      if (data.data && data.data.customer_follow_created) {
+        msg += '，客户跟进已创建'
+      }
+      ElMessage.success(msg)
       completeDialogVisible.value = false
       detailDialogVisible.value = false
       fetchVisits()
@@ -849,6 +1034,8 @@ const handleComplete = async () => {
     }
   } catch (error) {
     ElMessage.error('操作失败')
+  } finally {
+    completing.value = false
   }
 }
 

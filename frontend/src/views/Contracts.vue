@@ -178,7 +178,7 @@
       </div>
     </div>
     
-    <el-dialog v-model="showAddModal" :title="contractForm.id ? '编辑合同' : '新建合同'" width="700px">
+    <el-dialog v-model="showAddModal" :title="contractForm.id ? '编辑合同' : '新建合同'" width="700px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="contractForm" :rules="rules" ref="formRef">
         <el-row :gutter="20">
           <el-col :span="12">
@@ -352,7 +352,7 @@
       </template>
     </el-dialog>
     
-    <el-dialog v-model="showPreviewModal" title="文件预览" width="900px" height="70vh">
+    <el-dialog v-model="showPreviewModal" title="文件预览" width="900px" height="70vh" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-if="previewContractFile" class="preview-section">
         <h4>📄 合同文本</h4>
         <div class="file-info">
@@ -392,7 +392,7 @@
       <div v-else class="no-file">暂无技术协议文件</div>
     </el-dialog>
     
-    <el-dialog v-model="showImportModal" title="导入合同" width="900px">
+    <el-dialog v-model="showImportModal" title="导入合同" width="900px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-if="importStep === 1" class="import-step-1">
         <el-upload
           :action="importParseUrl"
@@ -649,7 +649,7 @@ const rules = {
 }
 
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(2)
+  return ((value || 0) / 10000).toFixed(4)
 }
 
 const getPendingAmt = (row) => {
@@ -967,9 +967,9 @@ const exportContracts = () => {
     const rowData = exportColumns.map(col => {
       let value = row[col.prop]
       if (col.prop === 'total_amt' || col.prop === 'paid_amt') {
-        value = ((value || 0) / 10000).toFixed(2)
+        value = ((value || 0) / 10000).toFixed(4)
       } else if (col.prop === 'pending_amt') {
-        value = (((row.total_amt || 0) - (row.paid_amt || 0)) / 10000).toFixed(2)
+        value = (((row.total_amt || 0) - (row.paid_amt || 0)) / 10000).toFixed(4)
       }
       return escapeCsvValue(value)
     })

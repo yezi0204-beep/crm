@@ -53,7 +53,7 @@
       </div>
     </div>
     
-    <el-dialog v-model="showAddModal" title="添加回款记录" width="500px">
+    <el-dialog v-model="showAddModal" title="添加回款记录" width="500px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="paymentForm" :rules="rules" ref="formRef">
         <el-form-item label="选择合同" prop="contract_id">
           <el-select 
@@ -86,7 +86,7 @@
       </template>
     </el-dialog>
     
-    <el-dialog v-model="showImportModal" title="导入回款记录" width="900px">
+    <el-dialog v-model="showImportModal" title="导入回款记录" width="900px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-if="importStep === 1" class="import-step-1">
         <el-upload
           :action="importParseUrl"
@@ -193,7 +193,7 @@
       </template>
     </el-dialog>
     
-    <el-dialog v-model="showDuplicateDialog" title="重复数据处理" width="800px">
+    <el-dialog v-model="showDuplicateDialog" title="重复数据处理" width="800px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div class="duplicate-dialog-content">
         <p class="dialog-tip">请为每条重复数据选择处理方式：</p>
         <div class="duplicate-table-wrapper">
@@ -270,7 +270,7 @@ const rules = {
 }
 
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(2)
+  return ((value || 0) / 10000).toFixed(4)
 }
 
 const paymentRecords = computed(() => {

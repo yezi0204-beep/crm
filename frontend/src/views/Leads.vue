@@ -251,7 +251,7 @@
     </el-tabs>
 
     <!-- 分配对话框 -->
-    <el-dialog v-model="assignVisible" title="分配线索" width="500px">
+    <el-dialog v-model="assignVisible" title="分配线索" width="500px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-if="currentLead" class="assign-content">
         <div class="assign-info">
           <div class="info-row opp-title" v-if="currentLead.opportunity_name"><span class="info-label">商机：</span>{{ currentLead.opportunity_name }}</div>
@@ -278,7 +278,7 @@
     </el-dialog>
 
     <!-- 线索详情对话框 -->
-    <el-dialog v-model="detailVisible" title="线索详情" width="600px">
+    <el-dialog v-model="detailVisible" title="线索详情" width="600px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-if="currentLead" class="detail-content">
         <div class="detail-section">
           <div class="info-row opp-title" v-if="currentLead.opportunity_name"><span class="info-label">商机名称：</span>{{ currentLead.opportunity_name }}</div>
@@ -339,7 +339,7 @@
     </el-dialog>
 
     <!-- 线索源新建/编辑对话框 -->
-    <el-dialog v-model="sourceVisible" :title="sourceForm.id ? '编辑线索源' : '新增线索源'" width="640px">
+    <el-dialog v-model="sourceVisible" :title="sourceForm.id ? '编辑线索源' : '新增线索源'" width="640px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="sourceForm" label-width="100px">
         <el-form-item label="名称" required>
           <el-input v-model="sourceForm.name" placeholder="如：政府采购招标信息" />
@@ -395,7 +395,7 @@
     </el-dialog>
 
     <!-- 手动导入对话框 -->
-    <el-dialog v-model="importVisible" title="手动导入线索" width="640px">
+    <el-dialog v-model="importVisible" title="手动导入线索" width="640px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div class="import-tip">
         请输入 JSON 数组，每条线索包含 company(必填)/contact_name/phone/email/industry/region/source/remark 字段。
       </div>

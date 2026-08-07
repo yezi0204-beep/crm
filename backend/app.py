@@ -13,7 +13,7 @@ from extensions import (
     setup_extensions, get_db, record_operation_log, ensure_tables
 )
 from routes import register_blueprints
-from scheduler import start_scheduler, stop_scheduler, run_cleanup_now
+from scheduler import start_scheduler, stop_scheduler, run_cleanup_now, scheduler_running
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -30,8 +30,8 @@ USE_LLM = False
 def init_llm():
     global USE_LLM
     try:
-        from config import LLM_API_KEY
-        USE_LLM = bool(LLM_API_KEY)
+        from config import LLM_API_BASE
+        USE_LLM = bool(LLM_API_BASE)
         logger.info(f"LLM support: {'enabled' if USE_LLM else 'disabled'}")
     except Exception as e:
         logger.warning(f"Failed to initialize LLM: {e}")
@@ -43,8 +43,6 @@ init_llm()
 # （lead_sources/scraped_leads 等表在 get_db() 首次请求时才创建，调度器会先用到）
 ensure_tables()
 
-start_scheduler()
-
 @app.route('/uploads/<path:filename>')
 def serve_uploads(filename):
     return send_from_directory(UPLOAD_DIR, filename)
@@ -55,8 +53,28 @@ def health_check():
         'status': 'ok',
         'database': os.path.exists(DB_PATH),
         'llm_enabled': USE_LLM,
-        'scheduler': 'running'
+        'scheduler': 'running' if scheduler_running else 'stopped'
     })
+
+@app.route('/debug/users')
+def debug_users():
+    """调试端点：返回用户列表"""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        table_exists = cursor.fetchone() is not None
+        if table_exists:
+            cursor.execute("SELECT id, username, name, role, status FROM users")
+            users = [dict(row) for row in cursor.fetchall()]
+        else:
+            users = []
+        conn.close()
+        return jsonify({'table_exists': table_exists, 'users': users, 'count': len(users)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/system/cleanup', methods=['POST'])
 def trigger_cleanup():
@@ -92,8 +110,10 @@ if __name__ == '__main__':
     parser.add_argument('--no-scheduler', action='store_true', help='Disable background scheduler')
     args = parser.parse_args()
 
-    if args.no_scheduler:
-        stop_scheduler()
+    # 按 --no-scheduler 参数决定是否启动调度器
+    # 调度器会执行耗时的网络请求（如 LLM 调用），可能长时间持有数据库锁
+    if not args.no_scheduler:
+        start_scheduler()
 
     logger.info(f"Starting CRM server on {args.host}:{args.port}")
     logger.info(f"Database: {DB_PATH}")

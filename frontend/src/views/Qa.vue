@@ -411,7 +411,7 @@ const sendMessage = async () => {
 
 const sendQA = async (text) => {
   const assistantMsgId = Date.now() + 1
-  messages.value.push({ id: assistantMsgId, role: 'assistant', type: 'text', content: '', time: formatTime() })
+  messages.value.push({ id: assistantMsgId, role: 'assistant', type: 'text', content: '正在思考中...', time: formatTime() })
   const token = localStorage.getItem('crm_token')
   try {
     const resp = await fetch('/api/ai/agent/stream', {
@@ -423,6 +423,7 @@ const sendQA = async (text) => {
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
     let buffer = '', received = false
+    let fullContent = ''
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
@@ -438,14 +439,23 @@ const sendQA = async (text) => {
           if (data.answer) {
             received = true
             const idx = messages.value.findIndex(m => m.id === assistantMsgId)
-            if (idx !== -1) messages.value[idx].content += data.answer
+            if (idx !== -1) {
+              if (data.type === 'status') {
+                // 状态消息：显示为加载提示
+                messages.value[idx].content = data.answer
+              } else {
+                // 实际回答内容：追加到完整内容
+                fullContent += data.answer
+                messages.value[idx].content = fullContent
+              }
+            }
             scrollToBottom()
           }
         } catch (e) { /* ignore */ }
       }
     }
     const idx = messages.value.findIndex(m => m.id === assistantMsgId)
-    if (idx !== -1 && !received) messages.value[idx].content = '抱歉，暂未启用大语言模型。'
+    if (idx !== -1 && !received) messages.value[idx].content = '抱歉，查询失败，请稍后重试。'
   } catch (e) {
     const idx = messages.value.findIndex(m => m.id === assistantMsgId)
     if (idx !== -1) messages.value[idx].content = '网络连接异常，请稍后再试。'
