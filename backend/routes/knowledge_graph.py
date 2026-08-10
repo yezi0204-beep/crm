@@ -8,11 +8,14 @@
 """
 import json
 import re
+import sqlite3
+import threading
+import uuid
 from datetime import datetime
 
-from flask import request, jsonify
+from flask import request, jsonify, current_app
 
-from extensions import get_db, token_required, record_operation_log
+from extensions import get_db, token_required, record_operation_log, DB_PATH
 from config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL, USE_LLM
 
 from . import knowledge_graph_bp
@@ -366,164 +369,200 @@ def get_relations():
 
 # ============ 图谱构建 API ============
 
+# 构建任务状态（进程内存储，重启丢失；够用于进度查询）
+_build_tasks = {}
+
 @knowledge_graph_bp.route('/api/knowledge-graph/build', methods=['POST'])
 @token_required
 def build_graph():
-    """从文档构建知识图谱。"""
+    """从文档构建知识图谱（异步）。
+
+    立即返回 task_id，构建在后台线程执行，**完全不占用 HTTP 线程**，
+    前端通过 /api/knowledge-graph/build/status/<task_id> 轮询进度。
+    这样 build 调大模型（可能耗时数分钟）也绝不会阻塞登录等短请求。
+
+    后台三阶段分离，绝不在持有数据库写锁期间进行 LLM 调用：
+      1. 读取阶段：独立连接读文档，读完立即关闭
+      2. LLM 阶段：纯内存，不碰数据库（不持锁）
+      3. 写入阶段：独立连接批量写入，每文档即 commit
+    """
     data = request.current_user
     username = data.get('username', '')
     req_data = request.get_json(silent=True) or {}
 
-    doc_ids = req_data.get('doc_ids', [])  # 指定文档ID列表，为空则处理所有
-    entity_types_filter = req_data.get('entity_types', [])  # 实体类型过滤
-    use_llm = req_data.get('use_llm', True)  # 是否使用LLM
+    doc_ids = req_data.get('doc_ids', [])
+    entity_types_filter = req_data.get('entity_types', [])
+    use_llm = req_data.get('use_llm', True)
 
-    db = get_db()
-    cursor = db.cursor()
+    task_id = uuid.uuid4().hex[:8]
+    _build_tasks[task_id] = {
+        'status': 'running',
+        'progress': 0,
+        'total_docs': 0,
+        'processed_docs': 0,
+        'total_entities': 0,
+        'total_relations': 0,
+        'errors': [],
+        'message': '正在准备...',
+        'username': username,
+        'started_at': datetime.now().isoformat(),
+    }
 
-    # 获取待处理文档
-    if doc_ids:
-        placeholders = ','.join(['?'] * len(doc_ids))
-        cursor.execute(f"""
-            SELECT id, title, content, doc_type FROM knowledge_documents
-            WHERE id IN ({placeholders}) AND content IS NOT NULL AND content != ''
-        """, doc_ids)
-    else:
-        cursor.execute("""
-            SELECT id, title, content, doc_type FROM knowledge_documents
-            WHERE content IS NOT NULL AND content != ''
-        """)
+    # 捕获 app 实例，后台线程需要自己的应用上下文（record_operation_log 用 get_db）
+    app_obj = current_app._get_current_object()
 
-    documents = cursor.fetchall()
-    if not documents:
-        return jsonify({
-            'code': 400,
-            'message': '没有可处理的文档',
-            'data': None
-        })
-
-    total_docs = len(documents)
-    processed_docs = 0
-    total_entities = 0
-    total_relations = 0
-    errors = []
-
-    for doc in documents:
-        doc_id = doc['id']
-        title = doc['title']
-        content = doc['content']
-        doc_type = doc['doc_type']
-
-        try:
-            # 提取实体和关系
-            if use_llm and USE_LLM:
-                try:
-                    result = _call_llm_for_graph(title, content)
-                except Exception as e:
-                    print(f"[KnowledgeGraph] LLM超时或失败: {e}")
-                    result = None
-            else:
-                result = None
-
-            if not result:
-                result = _rule_based_extraction(title, content)
-
-            if not result or (not result.get('entities') and not result.get('relations')):
-                continue
-
-            entities = result.get('entities', [])
-            relations = result.get('relations', [])
-
-            # 根据过滤条件过滤实体
-            if entity_types_filter:
-                entities = [e for e in entities if e.get('type') in entity_types_filter]
-
-            # 存储实体
-            entity_id_map = {}  # 映射原始名称到数据库ID
-            for entity in entities:
-                name = entity.get('name', '').strip()
-                entity_type = entity.get('type', 'other').strip()
-                description = entity.get('description', '')
-
-                if not name:
-                    continue
-
-                # 查找或创建实体
-                cursor.execute(
-                    "SELECT id FROM knowledge_entities WHERE name = ? AND entity_type = ?",
-                    (name, entity_type)
-                )
-                existing = cursor.fetchone()
-
-                if existing:
-                    entity_id_map[name] = existing['id']
-                    # 更新描述和重要性
-                    cursor.execute("""
-                        UPDATE knowledge_entities
-                        SET description = ?,
-                            importance = importance + 0.1,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                    """, (description, existing['id']))
+    def run_build():
+        task = _build_tasks[task_id]
+        with app_obj.app_context():
+            try:
+                # 阶段1：读取
+                read_conn = sqlite3.connect(DB_PATH, timeout=10)
+                read_conn.row_factory = sqlite3.Row
+                read_conn.execute("PRAGMA journal_mode=WAL")
+                read_cursor = read_conn.cursor()
+                if doc_ids:
+                    placeholders = ','.join(['?'] * len(doc_ids))
+                    read_cursor.execute(f"""
+                        SELECT id, title, content, doc_type FROM knowledge_documents
+                        WHERE id IN ({placeholders}) AND content IS NOT NULL AND content != ''
+                    """, doc_ids)
                 else:
-                    cursor.execute("""
-                        INSERT INTO knowledge_entities (name, entity_type, description, doc_ids, importance)
-                        VALUES (?, ?, ?, ?, 0.5)
-                    """, (name, entity_type, description, str([doc_id])))
-                    entity_id_map[name] = cursor.lastrowid
+                    read_cursor.execute("""
+                        SELECT id, title, content, doc_type FROM knowledge_documents
+                        WHERE content IS NOT NULL AND content != ''
+                    """)
+                documents = [dict(r) for r in read_cursor.fetchall()]
+                read_conn.close()
 
-            # 存储关系
-            for relation in relations:
-                source_name = relation.get('source', '').strip()
-                target_name = relation.get('target', '').strip()
-                relation_type = relation.get('type', 'related_to').strip()
-                rel_desc = relation.get('description', '')
+                task['total_docs'] = len(documents)
+                if not documents:
+                    task.update({'status': 'done', 'message': '没有可处理的文档', 'progress': 100})
+                    return
 
-                if source_name not in entity_id_map or target_name not in entity_id_map:
-                    continue
+                # 阶段2：LLM 提取（纯内存，不碰数据库）
+                doc_results = []
+                for idx, doc in enumerate(documents):
+                    doc_id = doc['id']
+                    title = doc['title']
+                    content = doc['content']
+                    try:
+                        if use_llm and USE_LLM:
+                            try:
+                                result = _call_llm_for_graph(title, content)
+                            except Exception as e:
+                                print(f"[KnowledgeGraph] LLM超时或失败: {e}")
+                                result = None
+                        else:
+                            result = None
+                        if not result:
+                            result = _rule_based_extraction(title, content)
+                        if not result or (not result.get('entities') and not result.get('relations')):
+                            continue
+                        entities = result.get('entities', [])
+                        relations = result.get('relations', [])
+                        if entity_types_filter:
+                            entities = [e for e in entities if e.get('type') in entity_types_filter]
+                        doc_results.append({'doc_id': doc_id, 'entities': entities, 'relations': relations})
+                    except Exception as e:
+                        task['errors'].append(f"文档ID {doc_id} ({title}): {str(e)}")
+                        print(f"[KnowledgeGraph] Error processing doc {doc_id}: {e}")
+                    task['message'] = f'正在提取实体 {idx + 1}/{len(documents)}...'
+                    task['progress'] = int((idx + 1) / len(documents) * 80)  # LLM 占 80% 进度
 
-                source_id = entity_id_map[source_name]
-                target_id = entity_id_map[target_name]
-
-                # 避免自环
-                if source_id == target_id:
-                    continue
-
+                # 阶段3：写入（每文档即 commit）
+                write_conn = sqlite3.connect(DB_PATH, timeout=30)
+                write_conn.row_factory = sqlite3.Row
+                write_conn.execute("PRAGMA journal_mode=WAL")
+                write_conn.execute("PRAGMA busy_timeout=30000")
+                write_cursor = write_conn.cursor()
                 try:
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO knowledge_relations
-                        (source_id, target_id, relation_type, description, doc_id, confidence)
-                        VALUES (?, ?, ?, ?, ?, 0.8)
-                    """, (source_id, target_id, relation_type, rel_desc, doc_id))
-                except:
+                    for item in doc_results:
+                        doc_id = item['doc_id']
+                        entities = item['entities']
+                        relations = item['relations']
+                        entity_id_map = {}
+                        for entity in entities:
+                            name = entity.get('name', '').strip()
+                            entity_type = entity.get('type', 'other').strip()
+                            description = entity.get('description', '')
+                            if not name:
+                                continue
+                            write_cursor.execute(
+                                "SELECT id FROM knowledge_entities WHERE name = ? AND entity_type = ?",
+                                (name, entity_type))
+                            existing = write_cursor.fetchone()
+                            if existing:
+                                entity_id_map[name] = existing['id']
+                                write_cursor.execute("""
+                                    UPDATE knowledge_entities
+                                    SET description = ?, importance = importance + 0.1,
+                                        updated_at = CURRENT_TIMESTAMP
+                                    WHERE id = ?
+                                """, (description, existing['id']))
+                            else:
+                                write_cursor.execute("""
+                                    INSERT INTO knowledge_entities (name, entity_type, description, doc_ids, importance)
+                                    VALUES (?, ?, ?, ?, 0.5)
+                                """, (name, entity_type, description, str([doc_id])))
+                                entity_id_map[name] = write_cursor.lastrowid
+                        for relation in relations:
+                            source_name = relation.get('source', '').strip()
+                            target_name = relation.get('target', '').strip()
+                            relation_type = relation.get('type', 'related_to').strip()
+                            rel_desc = relation.get('description', '')
+                            if source_name not in entity_id_map or target_name not in entity_id_map:
+                                continue
+                            source_id = entity_id_map[source_name]
+                            target_id = entity_id_map[target_name]
+                            if source_id == target_id:
+                                continue
+                            try:
+                                write_cursor.execute("""
+                                    INSERT OR IGNORE INTO knowledge_relations
+                                    (source_id, target_id, relation_type, description, doc_id, confidence)
+                                    VALUES (?, ?, ?, ?, ?, 0.8)
+                                """, (source_id, target_id, relation_type, rel_desc, doc_id))
+                            except Exception:
+                                pass
+                        task['processed_docs'] += 1
+                        task['total_entities'] += len(entities)
+                        task['total_relations'] += len(relations)
+                        write_conn.commit()
+                except Exception as e:
+                    write_conn.rollback()
+                    task['errors'].append(f"写入数据库失败: {str(e)}")
+                    print(f"[KnowledgeGraph] Write error: {e}")
+                finally:
+                    write_conn.close()
+
+                task.update({'status': 'done', 'message': '构建完成', 'progress': 100})
+                try:
+                    record_operation_log(username, '构建', '知识图谱',
+                                         f"处理 {task['processed_docs']}/{task['total_docs']} 个文档，"
+                                         f"提取 {task['total_entities']} 个实体，{task['total_relations']} 个关系")
+                except Exception:
                     pass
+            except Exception as e:
+                task.update({'status': 'error', 'message': f'构建失败: {str(e)}',
+                             'errors': [str(e)], 'progress': 100})
+                print(f"[KnowledgeGraph] Build task error: {e}")
 
-            total_entities += len(entities)
-            total_relations += len(relations)
-            processed_docs += 1
-
-        except Exception as e:
-            errors.append(f"文档ID {doc_id} ({title}): {str(e)}")
-            print(f"[KnowledgeGraph] Error processing doc {doc_id}: {e}")
-            continue
-
-    db.commit()
-
-    record_operation_log(username, '构建', '知识图谱',
-                         f'处理 {processed_docs}/{total_docs} 个文档，'
-                         f'提取 {total_entities} 个实体，{total_relations} 个关系')
-
+    threading.Thread(target=run_build, daemon=True).start()
     return jsonify({
         'code': 200,
-        'message': '构建完成',
-        'data': {
-            'processed_docs': processed_docs,
-            'total_docs': total_docs,
-            'total_entities': total_entities,
-            'total_relations': total_relations,
-            'errors': errors[:10]  # 最多返回10个错误
-        }
+        'message': '构建已开始',
+        'data': {'task_id': task_id}
     })
+
+
+@knowledge_graph_bp.route('/api/knowledge-graph/build/status/<task_id>', methods=['GET'])
+@token_required
+def build_status(task_id):
+    """查询构建任务进度。"""
+    task = _build_tasks.get(task_id)
+    if not task:
+        return jsonify({'code': 404, 'message': '任务不存在或已过期', 'data': None})
+    return jsonify({'code': 200, 'message': 'success', 'data': task})
 
 
 # ============ 图谱可视化 API ============

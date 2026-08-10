@@ -26,6 +26,9 @@
           </el-button>
         </el-button-group>
         <el-button type="primary" @click="openAddDialog">+ 新增排班</el-button>
+        <el-button type="success" :loading="exporting" @click="exportWeeklyReport">
+          📄 导出周报
+        </el-button>
       </div>
     </div>
 
@@ -102,14 +105,23 @@
           <div class="calendar-cell" :class="getCellClass(data)">
             <div class="date-number">{{ data.day.split('-').slice(-1)[0] }}</div>
             <div class="day-visits">
-              <div 
-                v-for="visit in getDayVisits(data.day)" 
-                :key="visit.id" 
+              <div
+                v-for="visit in getDayVisitsLimited(data.day)"
+                :key="visit.id"
                 class="visit-tag"
                 :class="[visit.status, { 'other-work': visit.work_type === 'other' }]"
+                :title="`${visit.plan_time || ''} ${getVisitLabel(visit)}`"
                 @click="openDetailDialog(visit)"
               >
-                {{ visit.plan_time }} {{ visit.work_type === 'other' ? (visit.work_content || '其它工作') : (visit.customer_name || visit.customer_company || visit.purpose) }}
+                <span class="visit-time" v-if="visit.plan_time">{{ visit.plan_time }}</span>
+                <span class="visit-text">{{ getVisitLabel(visit) }}</span>
+              </div>
+              <div
+                v-if="getDayExtraCount(data.day) > 0"
+                class="visit-more"
+                @click="openDayListDialog(data.day)"
+              >
+                +{{ getDayExtraCount(data.day) }} 条
               </div>
             </div>
           </div>
@@ -579,6 +591,40 @@
         <el-button @click="reviewDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 当天全部拜访列表 -->
+    <el-dialog
+      v-model="dayListDialogVisible"
+      :title="`${dayListDate} 拜访列表（${dayListVisits.length} 条）`"
+      width="640px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+    >
+      <el-empty v-if="dayListVisits.length === 0" description="当天无排班" />
+      <div v-else class="day-list">
+        <div
+          v-for="visit in dayListVisits"
+          :key="visit.id"
+          class="day-list-item"
+          :class="visit.status"
+          @click="openDetailDialog(visit); dayListDialogVisible = false"
+        >
+          <div class="day-list-time">{{ visit.plan_time || '全天' }}</div>
+          <div class="day-list-content">
+            <div class="day-list-title">{{ getVisitLabel(visit) }}</div>
+            <div class="day-list-sub" v-if="visit.work_type === 'visit'">
+              {{ visit.visitor_name || visit.visitor_id || '-' }}<span v-if="visit.location"> · {{ visit.location }}</span>
+            </div>
+          </div>
+          <el-tag :type="getStatusType(visit.status)" size="small" effect="dark">
+            {{ getStatusText(visit.status) }}
+          </el-tag>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="dayListDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -733,6 +779,45 @@ const getDayVisits = (day) => {
   return visits.value.filter(v => v.plan_date === day)
 }
 
+// 日历单元格每天最多显示的条数，超出折叠为「+N 条」
+const MAX_DAY_VISITS = 3
+
+const getVisitLabel = (visit) => {
+  if (!visit) return ''
+  return visit.work_type === 'other'
+    ? (visit.work_content || '其它工作')
+    : (visit.customer_name || visit.customer_company || visit.purpose || '客户拜访')
+}
+
+// 当天拜访按时间升序排列，无时间的排到最后
+const getDayVisitsSorted = (day) => {
+  return visits.value
+    .filter(v => v.plan_date === day)
+    .slice()
+    .sort((a, b) => {
+      const ta = a.plan_time || '99:99'
+      const tb = b.plan_time || '99:99'
+      return ta.localeCompare(tb)
+    })
+}
+
+const getDayVisitsLimited = (day) => {
+  return getDayVisitsSorted(day).slice(0, MAX_DAY_VISITS)
+}
+
+const getDayExtraCount = (day) => {
+  return Math.max(0, getDayVisitsSorted(day).length - MAX_DAY_VISITS)
+}
+
+// 当天全部拜访弹窗
+const dayListDialogVisible = ref(false)
+const dayListDate = ref('')
+const dayListVisits = computed(() => getDayVisitsSorted(dayListDate.value))
+const openDayListDialog = (day) => {
+  dayListDate.value = day
+  dayListDialogVisible.value = true
+}
+
 const getCellClass = (data) => {
   const hasVisit = visits.value.some(v => v.plan_date === data.day)
   return hasVisit ? 'has-visit' : ''
@@ -822,6 +907,44 @@ const fetchUsers = async () => {
     }
   } catch (error) {
     console.error('获取用户列表失败:', error)
+  }
+}
+
+// 导出应用中心工作周报（Excel：每人本周工作 + 下周安排）
+const exporting = ref(false)
+const exportWeeklyReport = async () => {
+  exporting.value = true
+  try {
+    const response = await fetch('/api/visits/export-weekly-report', {
+      headers: { 'Authorization': `Bearer ${token.value}` }
+    })
+    if (!response.ok) {
+      const errData = await response.json().catch(() => null)
+      throw new Error(errData?.message || '导出失败')
+    }
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    // 从响应头解析文件名，解析失败则用默认名
+    let filename = '应用中心工作周报.xlsx'
+    const disposition = response.headers.get('Content-Disposition')
+    if (disposition) {
+      const match = disposition.match(/filename\*?=([^;]+)/)
+      if (match) {
+        filename = decodeURIComponent(match[1].replace(/['"]/g, '').replace(/UTF-8''/i, ''))
+      }
+    }
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('周报导出成功')
+  } catch (e) {
+    ElMessage.error('周报导出失败：' + e.message)
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -1220,10 +1343,23 @@ onMounted(async () => {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
 }
 
+/* 固定 el-calendar 单元格高度，避免内容多时撑高整行导致布局错乱 */
+:deep(.el-calendar-table .el-calendar-day) {
+  min-height: 110px;
+  max-height: 110px;
+  height: 110px;
+  padding: 0;
+  overflow: hidden;
+}
+
 .calendar-cell {
-  min-height: 100px;
-  padding: 4px;
+  height: 100%;
+  min-height: 110px;
+  padding: 4px 6px;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .calendar-cell.has-visit {
@@ -1231,25 +1367,56 @@ onMounted(async () => {
 }
 
 .date-number {
-  font-size: 14px;
+  font-size: 13px;
   color: #666;
   margin-bottom: 4px;
+  flex-shrink: 0;
 }
 
 .day-visits {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow: hidden;
 }
 
 .visit-tag {
   font-size: 11px;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 1px 5px;
+  border-radius: 3px;
   cursor: pointer;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  line-height: 1.5;
+}
+
+.visit-tag .visit-time {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.visit-tag .visit-text {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visit-more {
+  font-size: 11px;
+  color: #409eff;
+  cursor: pointer;
+  text-align: center;
+  padding: 1px 0;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.visit-more:hover {
+  text-decoration: underline;
 }
 
 .visit-tag.planned {
@@ -1265,6 +1432,61 @@ onMounted(async () => {
 .visit-tag.cancelled {
   background: #f5f5f5;
   color: #999;
+}
+
+/* 当天拜访列表弹窗 */
+.day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.day-list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+  border-left: 3px solid transparent;
+}
+
+.day-list-item:hover {
+  background: #f5f7fa;
+}
+
+.day-list-item.planned { border-left-color: #fa8c16; }
+.day-list-item.completed { border-left-color: #52c41a; }
+.day-list-item.cancelled { border-left-color: #c0c4cc; }
+
+.day-list-time {
+  font-size: 13px;
+  font-weight: 600;
+  color: #409eff;
+  flex-shrink: 0;
+  width: 56px;
+}
+
+.day-list-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.day-list-title {
+  font-size: 14px;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-list-sub {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
 }
 
 .list-view {

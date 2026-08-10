@@ -514,5 +514,236 @@ def get_customer_businesses(cust_id):
     return jsonify({'code': 200, 'message': 'success', 'data': businesses})
 
 
+@visits_bp.route('/api/visits/export-weekly-report', methods=['GET'])
+@token_required
+def export_weekly_report():
+    """导出应用中心工作周报 Excel：每人本周工作 + 下周工作安排。
+
+    - 本周工作：plan_date 落在本周一~本周日，排除已取消（反映本周实际做了/要做的事）
+    - 下周安排：plan_date 落在下周一~下周日，且状态为 planned
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from datetime import timedelta
+    from flask import send_file
+    import io
+
+    payload = request.current_user
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # 应用中心部门在职用户，主任/院长排在前面
+    cursor.execute("""
+        SELECT username, name, role, department
+        FROM users
+        WHERE department = '应用中心' AND (status = '在职' OR status IS NULL OR status = '')
+        ORDER BY
+            CASE role WHEN '主任' THEN 0 WHEN '院长' THEN 1 ELSE 2 END,
+            name
+    """)
+    users = [dict(r) for r in cursor.fetchall()]
+
+    # 本周/下周日期范围（周一到周日）
+    today = datetime.now().date()
+    this_monday = today - timedelta(days=today.weekday())
+    this_sunday = this_monday + timedelta(days=6)
+    next_monday = this_monday + timedelta(days=7)
+    next_sunday = next_monday + timedelta(days=6)
+
+    this_monday_str = this_monday.strftime('%Y-%m-%d')
+    this_sunday_str = this_sunday.strftime('%Y-%m-%d')
+    next_monday_str = next_monday.strftime('%Y-%m-%d')
+    next_sunday_str = next_sunday.strftime('%Y-%m-%d')
+
+    def fetch_visits_for(username, start, end, planned_only):
+        if planned_only:
+            sql = """
+                SELECT v.*, c.name as customer_name, c.company as customer_company
+                FROM visits v
+                LEFT JOIN customers c ON v.cust_id = c.id
+                WHERE v.visitor_id = ? AND v.plan_date >= ? AND v.plan_date <= ?
+                  AND v.status = 'planned'
+                ORDER BY v.plan_date, v.plan_time
+            """
+        else:
+            sql = """
+                SELECT v.*, c.name as customer_name, c.company as customer_company
+                FROM visits v
+                LEFT JOIN customers c ON v.cust_id = c.id
+                WHERE v.visitor_id = ? AND v.plan_date >= ? AND v.plan_date <= ?
+                  AND v.status != 'cancelled'
+                ORDER BY v.plan_date, v.plan_time
+            """
+        cursor.execute(sql, (username, start, end))
+        return [dict(r) for r in cursor.fetchall()]
+
+    report_data = []
+    for u in users:
+        report_data.append({
+            'user': u,
+            'this_week': fetch_visits_for(u['username'], this_monday_str, this_sunday_str, False),
+            'next_week': fetch_visits_for(u['username'], next_monday_str, next_sunday_str, True),
+        })
+
+    # ---------- 生成 Excel ----------
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '工作周报'
+
+    title_font = Font(name='微软雅黑', size=16, bold=True, color='FFFFFF')
+    title_fill = PatternFill('solid', fgColor='4472C4')
+    subtitle_font = Font(name='微软雅黑', size=11, color='555555')
+    user_font = Font(name='微软雅黑', size=12, bold=True, color='1F4E79')
+    user_fill = PatternFill('solid', fgColor='D6E4F0')
+    section_font = Font(name='微软雅黑', size=10, bold=True, color='2E75B6')
+    section_fill = PatternFill('solid', fgColor='EAF1FB')
+    header_font = Font(name='微软雅黑', size=10, bold=True, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='8EAADB')
+    cell_font = Font(name='微软雅黑', size=10)
+    empty_font = Font(name='微软雅黑', size=10, italic=True, color='999999')
+    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    thin = Side(border_style='thin', color='BFBFBF')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    widths = [14, 10, 12, 36, 24, 20]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + i)].width = w
+
+    last_col = chr(64 + len(widths))
+    row = 1
+
+    ws.merge_cells(f'A{row}:{last_col}{row}')
+    c = ws.cell(row=row, column=1, value='应用中心工作周报')
+    c.font = title_font
+    c.fill = title_fill
+    c.alignment = center
+    ws.row_dimensions[row].height = 32
+    row += 1
+
+    ws.merge_cells(f'A{row}:{last_col}{row}')
+    c = ws.cell(row=row, column=1,
+                value=f'本周：{this_monday_str} ~ {this_sunday_str}    下周安排：{next_monday_str} ~ {next_sunday_str}')
+    c.font = subtitle_font
+    c.alignment = center
+    row += 1
+    row += 1  # 空行
+
+    headers = ['日期', '时间', '类型', '工作内容', '客户/地点', '状态/结果']
+
+    def write_visit_row(r, visit, period):
+        if period == 'this':
+            status_map = {'completed': '已完成', 'planned': '待完成', 'cancelled': '已取消'}
+            status_text = status_map.get(visit.get('status'), visit.get('status', ''))
+            result_val = visit.get('result') or ''
+            if result_val:
+                status_text += f'\n结果：{result_val}'
+        else:
+            status_text = '待完成'
+
+        ws.cell(row=r, column=1, value=visit.get('plan_date', '')).alignment = center
+        ws.cell(row=r, column=2, value=visit.get('plan_time') or '').alignment = center
+        wtype = visit.get('work_type', 'visit')
+        ws.cell(row=r, column=3, value='客户拜访' if wtype == 'visit' else '其它工作').alignment = center
+        content = visit.get('work_content') if wtype == 'other' else (visit.get('purpose') or '')
+        ws.cell(row=r, column=4, value=content or '').alignment = left
+        if wtype == 'visit':
+            parts = []
+            if visit.get('customer_company'):
+                parts.append(visit['customer_company'])
+            if visit.get('customer_name'):
+                parts.append(visit['customer_name'])
+            loc = ' / '.join(parts) if parts else (visit.get('location') or '')
+        else:
+            loc = visit.get('location') or ''
+        ws.cell(row=r, column=5, value=loc).alignment = left
+        ws.cell(row=r, column=6, value=status_text).alignment = left
+        for col in range(1, len(widths) + 1):
+            cell = ws.cell(row=r, column=col)
+            cell.font = cell_font
+            cell.border = border
+        ws.row_dimensions[r].height = 30
+
+    def write_header_row(r):
+        for i, h in enumerate(headers, 1):
+            cell = ws.cell(row=r, column=i, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center
+            cell.border = border
+        ws.row_dimensions[r].height = 22
+
+    for item in report_data:
+        u = item['user']
+        ws.merge_cells(f'A{row}:{last_col}{row}')
+        c = ws.cell(row=row, column=1, value=f'■ {u["name"]}（{u["role"]}）')
+        c.font = user_font
+        c.fill = user_fill
+        c.alignment = left
+        ws.row_dimensions[row].height = 26
+        row += 1
+
+        # 本周工作
+        ws.merge_cells(f'A{row}:{last_col}{row}')
+        c = ws.cell(row=row, column=1, value=f'【本周工作】（共 {len(item["this_week"])} 项）')
+        c.font = section_font
+        c.fill = section_fill
+        c.alignment = left
+        row += 1
+        write_header_row(row)
+        row += 1
+        if item['this_week']:
+            for v in item['this_week']:
+                write_visit_row(row, v, 'this')
+                row += 1
+        else:
+            ws.merge_cells(f'A{row}:{last_col}{row}')
+            c = ws.cell(row=row, column=1, value='（本周暂无工作记录）')
+            c.font = empty_font
+            c.alignment = center
+            row += 1
+
+        # 下周安排
+        ws.merge_cells(f'A{row}:{last_col}{row}')
+        c = ws.cell(row=row, column=1, value=f'【下周安排】（共 {len(item["next_week"])} 项）')
+        c.font = section_font
+        c.fill = section_fill
+        c.alignment = left
+        row += 1
+        write_header_row(row)
+        row += 1
+        if item['next_week']:
+            for v in item['next_week']:
+                write_visit_row(row, v, 'next')
+                row += 1
+        else:
+            ws.merge_cells(f'A{row}:{last_col}{row}')
+            c = ws.cell(row=row, column=1, value='（下周暂无安排）')
+            c.font = empty_font
+            c.alignment = center
+            row += 1
+
+        row += 1  # 人员之间空一行
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f'应用中心工作周报_{this_monday_str}_{this_sunday_str}.xlsx'
+    try:
+        record_operation_log(payload['username'], '导出', '工作周报',
+                             f'导出应用中心工作周报 {this_monday_str}~{this_sunday_str}')
+    except Exception:
+        pass
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+
 def register_routes(app):
     app.register_blueprint(visits_bp)

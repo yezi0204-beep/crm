@@ -127,7 +127,17 @@
           </el-form-item>
         </el-form>
 
-        <div v-if="buildResult" class="build-result">
+        <div v-if="building" class="build-progress">
+          <el-divider />
+          <el-progress :percentage="buildProgress" :status="buildProgress >= 100 ? 'success' : ''" />
+          <div class="progress-msg">{{ buildStatusMsg }}</div>
+          <div v-if="buildResult && buildResult.total_docs > 0" class="progress-stats">
+            处理文档：{{ buildResult.processed_docs }} / {{ buildResult.total_docs }} ·
+            已提取实体：{{ buildResult.total_entities }} · 关系：{{ buildResult.total_relations }}
+          </div>
+        </div>
+
+        <div v-if="!building && buildResult" class="build-result">
           <el-divider />
           <el-result icon="success" :title="`构建完成！`">
             <template #extra>
@@ -287,6 +297,9 @@ const buildForm = reactive({
 })
 const documentOptions = ref([])
 const buildResult = ref(null)
+const buildProgress = ref(0)
+const buildStatusMsg = ref('')
+let buildTimer = null
 
 const canBuild = computed(() => documentOptions.value.length > 0)
 
@@ -410,15 +423,24 @@ async function loadRelations() {
   finally { relationLoading.value = false }
 }
 
-// ========== 构建图谱 ==========
+// ========== 构建图谱（异步：立即返回 task_id，轮询进度，不阻塞后端 HTTP 线程） ==========
 async function handleBuild() {
   if (buildForm.scope === 'selected' && buildForm.doc_ids.length === 0) {
     ElMessage.warning('请选择要处理的文档')
     return
   }
 
+  // 清理上一次轮询定时器
+  if (buildTimer) {
+    clearTimeout(buildTimer)
+    buildTimer = null
+  }
+
   building.value = true
   buildResult.value = null
+  buildProgress.value = 0
+  buildStatusMsg.value = '正在启动构建...'
+
   try {
     const payload = {
       entity_types: buildForm.entity_types,
@@ -428,18 +450,60 @@ async function handleBuild() {
       payload.doc_ids = buildForm.doc_ids
     }
 
-    const res = await api.post('/knowledge-graph/build', payload, { timeout: 300000 })
-    if (res.code === 200) {
-      buildResult.value = res.data
-      ElMessage.success(`构建完成！提取 ${res.data.total_entities} 个实体，${res.data.total_relations} 个关系`)
-      await loadGraph()
-      await loadStats()
-    } else {
-      ElMessage.error(res.message || '构建失败')
+    // 立即返回 task_id，后台线程构建，不阻塞 HTTP 线程
+    const res = await api.post('/knowledge-graph/build', payload)
+    if (res.code !== 200 || !res.data || !res.data.task_id) {
+      ElMessage.error(res.message || '启动构建失败')
+      building.value = false
+      return
     }
+
+    const taskId = res.data.task_id
+
+    // 轮询进度
+    const poll = async () => {
+      try {
+        const r = await api.get(`/knowledge-graph/build/status/${taskId}`)
+        if (r.code === 200 && r.data) {
+          const task = r.data
+          buildProgress.value = task.progress || 0
+          buildStatusMsg.value = task.message || ''
+          buildResult.value = {
+            processed_docs: task.processed_docs,
+            total_docs: task.total_docs,
+            total_entities: task.total_entities,
+            total_relations: task.total_relations,
+            errors: task.errors || []
+          }
+
+          if (task.status === 'running') {
+            buildTimer = setTimeout(poll, 2000)
+          } else if (task.status === 'done') {
+            building.value = false
+            buildTimer = null
+            if (task.total_docs === 0) {
+              ElMessage.warning('没有可处理的文档')
+            } else {
+              ElMessage.success(`构建完成！提取 ${task.total_entities} 个实体，${task.total_relations} 个关系`)
+            }
+            await loadGraph()
+            await loadStats()
+          } else if (task.status === 'error') {
+            building.value = false
+            buildTimer = null
+            ElMessage.error(task.message || '构建失败')
+          }
+        } else {
+          // 查询失败，稍后重试
+          buildTimer = setTimeout(poll, 3000)
+        }
+      } catch (e) {
+        buildTimer = setTimeout(poll, 3000)
+      }
+    }
+    poll()
   } catch (e) {
     ElMessage.error('构建图谱失败')
-  } finally {
     building.value = false
   }
 }
@@ -670,6 +734,10 @@ onUnmounted(() => {
     chartInstance.dispose()
     chartInstance = null
   }
+  if (buildTimer) {
+    clearTimeout(buildTimer)
+    buildTimer = null
+  }
 })
 
 watch(filterEntityType, () => {
@@ -781,6 +849,24 @@ defineExpose({
 
 .build-dialog .el-alert {
   margin-bottom: 16px;
+}
+
+.build-progress {
+  margin-top: 16px;
+}
+
+.progress-msg {
+  margin-top: 10px;
+  text-align: center;
+  color: #4a5568;
+  font-size: 13px;
+}
+
+.progress-stats {
+  margin-top: 8px;
+  text-align: center;
+  color: #718096;
+  font-size: 12px;
 }
 
 .build-result {

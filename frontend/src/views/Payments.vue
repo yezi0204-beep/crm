@@ -11,6 +11,11 @@
           <el-icon><Upload /></el-icon>
           导入回款记录
         </el-button>
+
+        <el-button @click="exportPayments" class="export-btn">
+          <el-icon><Download /></el-icon>
+          导出回款记录
+        </el-button>
       </div>
       
       <div class="search-wrapper">
@@ -240,7 +245,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, computed, watch } from 'vue'
-import { Plus, Search, Upload, CircleCheck } from '@element-plus/icons-vue'
+import { Plus, Search, Upload, Download, CircleCheck } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -271,6 +276,63 @@ const rules = {
 
 const formatAmount = (value) => {
   return ((value || 0) / 10000).toFixed(4)
+}
+
+const exportPayments = () => {
+  // 导出当前搜索过滤后的回款记录为 CSV（与商机/合同导出保持一致）
+  const data = paymentRecords.value
+  if (data.length === 0) {
+    ElMessage.info('暂无数据可导出')
+    return
+  }
+
+  const exportColumns = [
+    { prop: 'contract_name', label: '合同名称' },
+    { prop: 'contract_no', label: '合同编号' },
+    { prop: 'party_a', label: '甲方' },
+    { prop: 'payment_date', label: '回款日期' },
+    { prop: 'amount', label: '金额(万)' },
+    { prop: 'owner_name', label: '负责人' },
+    { prop: 'note', label: '备注' },
+    { prop: 'created_at', label: '创建时间' }
+  ]
+
+  const escapeCsvValue = (value) => {
+    if (value === null || value === undefined) {
+      return ''
+    }
+    let strValue = String(value)
+    strValue = strValue.replace(/"/g, '""')
+    return `"${strValue}"`
+  }
+
+  // BOM 头确保 Excel 正确识别中文编码
+  let csvContent = '\uFEFF' + exportColumns.map(col => escapeCsvValue(col.label)).join(',') + '\n'
+
+  data.forEach(row => {
+    const rowData = exportColumns.map(col => {
+      let value = row[col.prop]
+      // 金额精确到分：存储单位为元，导出为万元且保留 4 位小数（0.0001 万 = 0.01 元）
+      if (col.prop === 'amount') {
+        value = ((value || 0) / 10000).toFixed(4)
+      }
+      return escapeCsvValue(value)
+    })
+    csvContent += rowData.join(',') + '\n'
+  })
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+  const link = document.createElement('a')
+  const url = URL.createObjectURL(blob)
+  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  link.setAttribute('href', url)
+  link.setAttribute('download', `回款记录_${timestamp}.csv`)
+  link.style.visibility = 'hidden'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+
+  ElMessage.success('导出成功')
 }
 
 const paymentRecords = computed(() => {

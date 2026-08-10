@@ -117,4 +117,6 @@ if __name__ == '__main__':
 
     logger.info(f"Starting CRM server on {args.host}:{args.port}")
     logger.info(f"Database: {DB_PATH}")
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    # threaded=True：开发服务器多线程，确保即使有耗时的同步请求（如 LLM 调用）
+    # 也不会阻塞登录等其他短请求
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
