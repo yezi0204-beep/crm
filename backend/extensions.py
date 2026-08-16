@@ -89,6 +89,7 @@ def _init_tables(db):
     _init_other_tables(cursor)
     _init_products_and_quotes_tables(cursor)
     _init_marketing_tables(cursor)
+    _init_service_tables(cursor)
     db.commit()
 
 
@@ -1149,6 +1150,104 @@ def _init_marketing_tables(cursor):
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 remark TEXT
+            )
+        """)
+    except Exception:
+        pass
+
+
+def _init_service_tables(cursor):
+    """售后服务管理表：工单、处理记录、满意度调查。"""
+    # tickets 表：服务工单主表
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_no TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                type TEXT DEFAULT 'consult',
+                priority TEXT DEFAULT 'normal',
+                status TEXT DEFAULT 'new',
+                cust_id INTEGER,
+                contact_name TEXT,
+                contact_info TEXT,
+                source TEXT,
+                product_id INTEGER,
+                description TEXT,
+                resolution TEXT,
+                owner_id TEXT,
+                created_by TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TEXT,
+                closed_at TEXT,
+                due_date TEXT,
+                remark TEXT,
+                FOREIGN KEY (cust_id) REFERENCES customers(id),
+                FOREIGN KEY (product_id) REFERENCES products(id)
+            )
+        """)
+    except Exception:
+        pass
+    for col, decl in [
+        ('title', 'TEXT NOT NULL DEFAULT '''),
+        ('type', 'TEXT DEFAULT \'consult\''),
+        ('priority', 'TEXT DEFAULT \'normal\''),
+        ('status', 'TEXT DEFAULT \'new\''),
+        ('cust_id', 'INTEGER'),
+        ('contact_name', 'TEXT'),
+        ('contact_info', 'TEXT'),
+        ('source', 'TEXT'),
+        ('product_id', 'INTEGER'),
+        ('description', 'TEXT'),
+        ('resolution', 'TEXT'),
+        ('owner_id', 'TEXT'),
+        ('created_by', 'TEXT'),
+        ('updated_at', 'TEXT DEFAULT CURRENT_TIMESTAMP'),
+        ('resolved_at', 'TEXT'),
+        ('closed_at', 'TEXT'),
+        ('due_date', 'TEXT'),
+        ('remark', 'TEXT'),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE tickets ADD COLUMN {col} {decl}")
+        except Exception:
+            pass
+
+    # ticket_messages 表：工单处理记录/对话
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ticket_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id INTEGER NOT NULL,
+                sender_id TEXT,
+                sender_name TEXT,
+                sender_type TEXT DEFAULT 'operator',
+                content TEXT NOT NULL,
+                is_internal INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                attachment TEXT,
+                FOREIGN KEY (ticket_id) REFERENCES tickets(id)
+            )
+        """)
+    except Exception:
+        pass
+
+    # ticket_surveys 表：满意度调查
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ticket_surveys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id INTEGER NOT NULL UNIQUE,
+                overall_score INTEGER DEFAULT 0,
+                response_speed INTEGER DEFAULT 0,
+                attitude_score INTEGER DEFAULT 0,
+                quality_score INTEGER DEFAULT 0,
+                comment TEXT,
+                suggestion TEXT,
+                submitted_by TEXT,
+                submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (ticket_id) REFERENCES tickets(id)
             )
         """)
     except Exception:

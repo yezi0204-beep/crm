@@ -81,6 +81,14 @@
         </div>
 
         <div class="menu-group">
+          <div class="menu-group-title">🛠️ 售后服务</div>
+          <el-menu-item index="/service">
+            <span class="menu-icon">🛠️</span>
+            <span>服务工单</span>
+          </el-menu-item>
+        </div>
+
+        <div class="menu-group">
           <div class="menu-group-title">🌊 资源管理</div>
           <el-menu-item index="/pool">
             <span class="menu-icon">🌊</span>
