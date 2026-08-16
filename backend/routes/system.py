@@ -403,5 +403,129 @@ def get_alerts():
     return jsonify({'code': 200, 'message': 'success', 'data': {'alerts': alerts, 'count': len(alerts)}})
 
 
+# ==================== 用户偏好设置（5.6.1 多语言/多时区） ====================
+
+def _ensure_preferences_table(cursor):
+    """确保用户偏好表存在。"""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            language TEXT DEFAULT 'zh-CN',
+            timezone TEXT DEFAULT 'Asia/Shanghai',
+            theme TEXT DEFAULT 'light',
+            font_size TEXT DEFAULT 'medium',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
+@system_bp.route('/api/system/preferences', methods=['GET'])
+@token_required
+def get_preferences():
+    """获取当前用户偏好设置（语言、时区等）。"""
+    payload = request.current_user
+    username = payload['username']
+
+    db = get_db()
+    cursor = db.cursor()
+    _ensure_preferences_table(cursor)
+    db.commit()
+
+    cursor.execute("SELECT language, timezone, theme, font_size, updated_at FROM user_preferences WHERE username=?", (username,))
+    row = cursor.fetchone()
+    if not row:
+        # 首次访问，返回默认值
+        return jsonify({
+            'code': 200,
+            'message': 'success',
+            'data': {
+                'language': 'zh-CN',
+                'timezone': 'Asia/Shanghai',
+                'theme': 'light',
+                'font_size': 'medium'
+            }
+        })
+
+    return jsonify({'code': 200, 'message': 'success', 'data': dict(row)})
+
+
+@system_bp.route('/api/system/preferences', methods=['PUT'])
+@token_required
+def update_preferences():
+    """更新当前用户偏好设置。"""
+    payload = request.current_user
+    username = payload['username']
+
+    data = request.get_json(silent=True) or {}
+    # 白名单字段
+    language = data.get('language')
+    timezone = data.get('timezone')
+    theme = data.get('theme')
+    font_size = data.get('font_size')
+
+    # 简单校验
+    valid_languages = ('zh-CN', 'en-US')
+    if language and language not in valid_languages:
+        return jsonify({'code': 400, 'message': f'语言必须为 {valid_languages} 之一', 'data': None})
+
+    valid_themes = ('light', 'dark')
+    if theme and theme not in valid_themes:
+        return jsonify({'code': 400, 'message': '主题必须为 light 或 dark', 'data': None})
+
+    valid_font_sizes = ('small', 'medium', 'large')
+    if font_size and font_size not in valid_font_sizes:
+        return jsonify({'code': 400, 'message': '字号必须为 small/medium/large', 'data': None})
+
+    db = get_db()
+    cursor = db.cursor()
+    _ensure_preferences_table(cursor)
+
+    try:
+        cursor.execute("""
+            INSERT INTO user_preferences (username, language, timezone, theme, font_size, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(username) DO UPDATE SET
+                language=COALESCE(excluded.language, language),
+                timezone=COALESCE(excluded.timezone, timezone),
+                theme=COALESCE(excluded.theme, theme),
+                font_size=COALESCE(excluded.font_size, font_size),
+                updated_at=CURRENT_TIMESTAMP
+        """, (
+            username,
+            language or 'zh-CN',
+            timezone or 'Asia/Shanghai',
+            theme or 'light',
+            font_size or 'medium'
+        ))
+        db.commit()
+        return jsonify({'code': 200, 'message': '偏好设置已保存', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@system_bp.route('/api/system/timezones', methods=['GET'])
+@token_required
+def get_timezones():
+    """返回常用时区列表，供前端选择。"""
+    timezones = [
+        {'value': 'Asia/Shanghai', 'label': '中国标准时间 (UTC+8)', 'offset': 8},
+        {'value': 'Asia/Tokyo', 'label': '日本标准时间 (UTC+9)', 'offset': 9},
+        {'value': 'Asia/Singapore', 'label': '新加坡时间 (UTC+8)', 'offset': 8},
+        {'value': 'Asia/Hong_Kong', 'label': '香港时间 (UTC+8)', 'offset': 8},
+        {'value': 'Asia/Seoul', 'label': '韩国标准时间 (UTC+9)', 'offset': 9},
+        {'value': 'Asia/Dubai', 'label': '海湾标准时间 (UTC+4)', 'offset': 4},
+        {'value': 'Europe/London', 'label': '格林尼治时间 (UTC+0)', 'offset': 0},
+        {'value': 'Europe/Paris', 'label': '中欧时间 (UTC+1)', 'offset': 1},
+        {'value': 'Europe/Moscow', 'label': '莫斯科时间 (UTC+3)', 'offset': 3},
+        {'value': 'America/New_York', 'label': '美国东部时间 (UTC-5)', 'offset': -5},
+        {'value': 'America/Chicago', 'label': '美国中部时间 (UTC-6)', 'offset': -6},
+        {'value': 'America/Los_Angeles', 'label': '美国西部时间 (UTC-8)', 'offset': -8},
+        {'value': 'UTC', 'label': '协调世界时 (UTC+0)', 'offset': 0},
+    ]
+    return jsonify({'code': 200, 'message': 'success', 'data': timezones})
+
+
 def register_routes(app):
     app.register_blueprint(system_bp)

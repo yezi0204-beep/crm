@@ -5,109 +5,132 @@
       <div class="deco-circle c2"></div>
       <div class="deco-circle c3"></div>
     </div>
-    
+
+    <!-- 语言切换 -->
+    <div class="lang-toggle">
+      <span class="lang-flag">{{ settingsStore.currentLocale.flag }}</span>
+      <el-select v-model="currentLang" size="small" @change="onLangChange" style="width: 120px;">
+        <el-option v-for="l in availableLocales" :key="l.value" :label="l.label" :value="l.value" />
+      </el-select>
+    </div>
+
     <div class="login-box">
       <div class="logo-section">
         <div class="logo-wrapper">
           <div class="logo">🚀</div>
         </div>
-        <h1>天地信息网络研究院CRM</h1>
-        <p>欢迎登录客户关系管理系统</p>
+        <h1>{{ t('login.title') }}</h1>
+        <p>{{ t('login.subtitle') }}</p>
         <div class="features">
-          <span class="feature-item">📊 数据驱动</span>
-          <span class="feature-item">🔄 全流程</span>
-          <span class="feature-item">👥 团队协作</span>
+          <span class="feature-item">📊 {{ t('menu.salesManagement') }}</span>
+          <span class="feature-item">🔄 {{ t('common.all') }}</span>
+          <span class="feature-item">👥 {{ t('menu.salesManagement') }}</span>
         </div>
       </div>
-      
+
       <el-form :model="form" :rules="rules" ref="formRef" class="login-form">
         <el-form-item prop="username">
           <div class="input-wrapper">
             <span class="input-icon">👤</span>
-            <el-input 
-              v-model="form.username" 
-              placeholder="请输入账号" 
+            <el-input
+              v-model="form.username"
+              :placeholder="t('login.usernamePlaceholder')"
               size="large"
               class="custom-input"
             />
           </div>
         </el-form-item>
-        
+
         <el-form-item prop="password">
           <div class="input-wrapper">
             <span class="input-icon">🔒</span>
-            <el-input 
-              v-model="form.password" 
-              type="password" 
-              placeholder="请输入密码" 
+            <el-input
+              v-model="form.password"
+              type="password"
+              :placeholder="t('login.passwordPlaceholder')"
               size="large"
               class="custom-input"
               show-password
+              @keyup.enter="handleLogin"
             />
           </div>
         </el-form-item>
-        
+
         <div class="form-options">
-          <el-checkbox v-model="rememberMe">记住我</el-checkbox>
-          <a href="#" class="forgot-link">忘记密码？</a>
+          <el-checkbox v-model="rememberMe">{{ t('common.confirm') }}</el-checkbox>
+          <a href="#" class="forgot-link">{{ t('common.reset') }}</a>
         </div>
-        
+
         <el-form-item>
-          <el-button 
-            type="primary" 
-            size="large" 
+          <el-button
+            type="primary"
+            size="large"
             class="login-btn"
             :loading="loading"
             @click="handleLogin"
           >
-            <span>进入系统</span>
+            <span>{{ t('login.loginBtn') }}</span>
             <span class="arrow">→</span>
           </el-button>
         </el-form-item>
       </el-form>
-      
+
       <div class="footer">
-        <span>© 2026 天地信息网络研究院 | 客户关系管理系统</span>
+        <span>© 2026 {{ t('layout.subtitle') }} | {{ t('login.title') }}</span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useAuthStore } from '../stores/auth'
+import { useSettingsStore } from '../stores/settings'
 import { ElMessage } from 'element-plus'
+import { availableLocales, translate } from '../locales'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const settingsStore = useSettingsStore()
+const { language } = storeToRefs(settingsStore)
+const t = (key, params = null) => translate(language.value, key, params)
 const loading = ref(false)
 const rememberMe = ref(false)
+
+const currentLang = ref(settingsStore.language)
 
 const form = reactive({
   username: '',
   password: ''
 })
 
-const rules = {
-  username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+const rules = computed(() => ({
+  username: [{ required: true, message: t('login.usernamePlaceholder'), trigger: 'blur' }],
+  password: [{ required: true, message: t('login.passwordPlaceholder'), trigger: 'blur' }]
+}))
+
+const onLangChange = (lang) => {
+  settingsStore.setLanguage(lang)
 }
 
 const handleLogin = async () => {
   loading.value = true
-  
+
   try {
     const result = await authStore.login(form.username, form.password)
-    
+
     if (result.success) {
-      ElMessage.success('登录成功')
+      ElMessage.success(t('login.loginSuccess'))
+      // 登录后加载用户偏好
+      await settingsStore.loadPreferences()
       router.push('/dashboard')
     } else {
-      ElMessage.error(result.message || '账号或密码错误')
+      ElMessage.error(result.message || t('login.loginFailed'))
     }
   } catch (error) {
-    ElMessage.error('登录失败，请重试')
+    ElMessage.error(t('login.loginFailed'))
   } finally {
     loading.value = false
   }
@@ -335,5 +358,46 @@ const handleLogin = async () => {
 .footer span {
   font-size: 12px;
   color: #999;
+}
+
+/* 语言切换 */
+.lang-toggle {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 12px;
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.lang-flag {
+  font-size: 18px;
+}
+
+/* 响应式 */
+@media (max-width: 480px) {
+  .login-box {
+    width: 92% !important;
+    padding: 32px 24px !important;
+  }
+
+  .logo-section h1 {
+    font-size: 20px;
+  }
+
+  .features {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .lang-toggle {
+    top: 12px;
+    right: 12px;
+  }
 }
 </style>

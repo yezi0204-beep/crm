@@ -1,0 +1,110 @@
+/**
+ * 中文简体语言包
+ */
+export default {
+  // 通用
+  common: {
+    confirm: '确认',
+    cancel: '取消',
+    save: '保存',
+    delete: '删除',
+    edit: '编辑',
+    add: '新增',
+    search: '搜索',
+    reset: '重置',
+    export: '导出',
+    import: '导入',
+    loading: '加载中...',
+    success: '操作成功',
+    failed: '操作失败',
+    noData: '暂无数据',
+    total: '共',
+    items: '条',
+    actions: '操作',
+    status: '状态',
+    remark: '备注',
+    createTime: '创建时间',
+    updateTime: '更新时间',
+    all: '全部',
+    yes: '是',
+    no: '否'
+  },
+  // 布局/导航
+  layout: {
+    systemName: 'CRM系统',
+    subtitle: '天地信息网络研究院',
+    home: '首页',
+    logout: '退出',
+    globalSearch: '全局搜索...',
+    notifications: '通知',
+    settings: '设置',
+    collapse: '收起菜单',
+    expand: '展开菜单'
+  },
+  // 菜单分组
+  menu: {
+    salesManagement: '销售管理',
+    marketingManagement: '营销管理',
+    afterSales: '售后服务',
+    resourceManagement: '资源管理',
+    projectManagement: '项目管理',
+    systemManagement: '系统管理'
+  },
+  // 菜单项
+  menuItem: {
+    dashboard: '驾驶舱',
+    reports: '业绩报表',
+    customers: '客户管理',
+    business: '商机看板',
+    contracts: '合同管理',
+    quotes: '报价管理',
+    products: '产品库存',
+    payments: '回款管理',
+    visits: '拜访排班',
+    marketing: '营销活动',
+    service: '服务工单',
+    pool: '公海池',
+    leads: '智能线索',
+    enterprises: '企业信息库',
+    workhours: '工时管理',
+    projects: '项目分配',
+    users: '用户管理',
+    alerts: '预警通知',
+    search: '全局搜索',
+    qa: '智能助手',
+    knowledge: '知识库',
+    qualifications: '资质管理',
+    smartImport: '智能导入',
+    operationLogs: '操作日志'
+  },
+  // 设置面板
+  settings: {
+    title: '系统设置',
+    language: '界面语言',
+    timezone: '时区设置',
+    theme: '主题模式',
+    fontSize: '字号大小',
+    light: '浅色',
+    dark: '深色',
+    small: '小',
+    medium: '中',
+    large: '大',
+    saveSuccess: '设置已保存',
+    languageChanged: '语言已切换，部分页面需刷新生效',
+    currentTimezone: '当前时区',
+    preview: '预览效果'
+  },
+  // 登录
+  login: {
+    title: 'CRM 客户关系管理系统',
+    subtitle: '天地信息网络研究院',
+    username: '账号',
+    password: '密码',
+    loginBtn: '登 录',
+    usernamePlaceholder: '请输入账号',
+    passwordPlaceholder: '请输入密码',
+    loginSuccess: '登录成功',
+    loginFailed: '登录失败',
+    welcome: '欢迎回来'
+  }
+}

@@ -1,0 +1,189 @@
+/**
+ * 全局响应式与主题样式
+ * 支持字号、主题、多设备适配
+ */
+
+/* ==================== 字号设置 ==================== */
+:root {
+  --crm-font-size: 14px;
+}
+
+html[data-font-size="small"] {
+  --crm-font-size: 13px;
+}
+
+html[data-font-size="medium"] {
+  --crm-font-size: 14px;
+}
+
+html[data-font-size="large"] {
+  --crm-font-size: 16px;
+}
+
+/* 全局字号应用 */
+html[data-font-size] .el-table {
+  font-size: var(--crm-font-size);
+}
+
+html[data-font-size] .el-form-item__label {
+  font-size: var(--crm-font-size);
+}
+
+html[data-font-size] .el-button {
+  font-size: var(--crm-font-size);
+}
+
+html[data-font-size] .el-input__inner {
+  font-size: var(--crm-font-size);
+}
+
+html[data-font-size] .el-dialog__title {
+  font-size: calc(var(--crm-font-size) + 2px);
+}
+
+/* ==================== 主题：深色模式 ==================== */
+html[data-theme="dark"] {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+html[data-theme="dark"] img,
+html[data-theme="dark"] video,
+html[data-theme="dark"] .el-avatar,
+html[data-theme="dark"] .logo-wrapper,
+html[data-theme="dark"] .deco-circle {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* ==================== 全局响应式 ==================== */
+
+/* 平板适配 */
+@media (max-width: 1024px) {
+  .el-dialog {
+    width: 90% !important;
+  }
+
+  .el-drawer {
+    max-width: 100%;
+  }
+
+  .el-col-lg-12 {
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+}
+
+/* 手机适配 */
+@media (max-width: 768px) {
+  /* 表格水平滚动 */
+  .el-table {
+    width: 100% !important;
+    overflow-x: auto;
+  }
+
+  /* 对话框全屏化 */
+  .el-dialog {
+    width: 95% !important;
+    margin: 5vh auto !important;
+  }
+
+  .el-dialog__body {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  /* 表单单列 */
+  .el-form-item__label {
+    float: none;
+    text-align: left;
+    padding: 0 0 8px 0;
+  }
+
+  .el-form-item__content {
+    margin-left: 0 !important;
+  }
+
+  /* 分页居中 */
+  .el-pagination {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* 卡片间距缩小 */
+  .el-card {
+    margin-bottom: 12px;
+  }
+
+  .el-card__body {
+    padding: 12px;
+  }
+
+  /* 标签页滚动 */
+  .el-tabs__nav-wrap {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  /* 统计卡片网格单列 */
+  .el-col-6,
+  .el-col-xs-12 {
+    max-width: 50% !important;
+    flex: 0 0 50% !important;
+  }
+}
+
+/* 超小屏幕适配 */
+@media (max-width: 480px) {
+  .el-col-6,
+  .el-col-xs-12,
+  .el-col-xs-24 {
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+
+  .el-button-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .el-button-group .el-button {
+    margin: 0;
+    border-radius: 4px !important;
+  }
+}
+
+/* ==================== 滚动条美化 ==================== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* ==================== 过渡动画 ==================== */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* ==================== 无障碍：聚焦样式 ==================== */
+*:focus-visible {
+  outline: 2px solid #4ecdc4;
+  outline-offset: 2px;
+}

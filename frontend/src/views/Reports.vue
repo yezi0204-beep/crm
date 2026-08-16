@@ -164,13 +164,181 @@
         </div>
       </div>
     </el-card>
+
+    <!-- 客户满意度统计 -->
+    <el-card class="section-card">
+      <template #header>
+        <div class="card-header">
+          <span>😀 客户满意度统计</span>
+          <span class="header-tip">基于售后服务工单的客户评价数据</span>
+        </div>
+      </template>
+      <div class="satisfaction-summary">
+        <div class="summary-item">
+          <div class="summary-label">评价总数</div>
+          <div class="summary-value primary">{{ satisfactionData.total || 0 }} <span class="unit">条</span></div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">满意度</div>
+          <div class="summary-value success">{{ satisfactionData.satisfaction_rate || 0 }}<span class="unit">%</span></div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">总体评分</div>
+          <div class="summary-value warning">{{ satisfactionData.avg_overall || 0 }}<span class="unit">分</span></div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">响应速度</div>
+          <div class="summary-value">{{ satisfactionData.avg_response || 0 }}<span class="unit">分</span></div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">服务态度</div>
+          <div class="summary-value">{{ satisfactionData.avg_attitude || 0 }}<span class="unit">分</span></div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">服务质量</div>
+          <div class="summary-value">{{ satisfactionData.avg_quality || 0 }}<span class="unit">分</span></div>
+        </div>
+      </div>
+      <div ref="satisfactionChart" class="chart-md"></div>
+      <el-row :gutter="20" style="margin-top: 16px;">
+        <el-col :span="12">
+          <div class="sub-table-title">按工单类型</div>
+          <el-table :data="satisfactionData.by_type" stripe size="small">
+            <el-table-column prop="type_label" label="工单类型" width="100" />
+            <el-table-column prop="count" label="评价数" width="80" align="center" />
+            <el-table-column label="平均评分" align="center">
+              <template #default="scope">
+                <el-rate disabled :model-value="scope.row.avg_score" show-score size="small" />
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-col>
+        <el-col :span="12" v-if="isAdmin">
+          <div class="sub-table-title">按负责人（团队视角）</div>
+          <el-table :data="satisfactionData.by_owner" stripe size="small">
+            <el-table-column prop="owner_name" label="负责人" width="100" />
+            <el-table-column prop="count" label="评价数" width="80" align="center" />
+            <el-table-column label="平均评分" align="center">
+              <template #default="scope">
+                <el-rate disabled :model-value="scope.row.avg_score" show-score size="small" />
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-col>
+      </el-row>
+    </el-card>
+
+    <!-- ERP 系统集成 -->
+    <el-card v-if="isAdmin" class="section-card">
+      <template #header>
+        <div class="card-header">
+          <span>🔄 ERP 系统集成</span>
+          <el-button type="primary" size="small" @click="openERPConfigModal()">
+            <el-icon><Plus /></el-icon> 新增连接
+          </el-button>
+        </div>
+      </template>
+      <el-table :data="erpConnections" stripe size="small">
+        <el-table-column prop="name" label="连接名称" width="120" />
+        <el-table-column prop="system_type" label="系统类型" width="100" />
+        <el-table-column prop="base_url" label="服务地址" min-width="180" show-overflow-tooltip />
+        <el-table-column label="状态" width="90">
+          <template #default="scope">
+            <el-tag :type="scope.row.status === 'active' ? 'success' : 'info'" size="small">
+              {{ scope.row.status === 'active' ? '启用' : '停用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="last_sync_at" label="最后同步" min-width="140" />
+        <el-table-column label="操作" min-width="280" fixed="right">
+          <template #default="scope">
+            <el-button size="small" @click="testERPConnection(scope.row)">测试</el-button>
+            <el-button size="small" type="primary" @click="openSyncModal(scope.row)">同步</el-button>
+            <el-button size="small" @click="openERPConfigModal(scope.row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="deleteERPConnection(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- ERP 连接配置弹窗 -->
+    <el-dialog v-model="showERPConfigModal" :title="erpConfigForm.id ? '编辑 ERP 连接' : '新增 ERP 连接'" width="560px">
+      <el-form :model="erpConfigForm" label-width="100px" size="default">
+        <el-form-item label="连接名称" required>
+          <el-input v-model="erpConfigForm.name" placeholder="如：金蝶 ERP 生产环境" />
+        </el-form-item>
+        <el-form-item label="系统类型">
+          <el-select v-model="erpConfigForm.system_type" style="width: 100%;">
+            <el-option label="ERP 系统" value="erp" />
+            <el-option label="财务系统" value="finance" />
+            <el-option label="进销存系统" value="wms" />
+            <el-option label="OA 系统" value="oa" />
+            <el-option label="其他" value="other" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="服务地址">
+          <el-input v-model="erpConfigForm.base_url" placeholder="https://erp.example.com/api" />
+        </el-form-item>
+        <el-form-item label="认证方式">
+          <el-select v-model="erpConfigForm.auth_type" style="width: 100%;">
+            <el-option label="API Key" value="api_key" />
+            <el-option label="Basic Auth" value="basic" />
+            <el-option label="OAuth2" value="oauth2" />
+            <el-option label="无认证" value="none" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="API Key" v-if="erpConfigForm.auth_type === 'api_key'">
+          <el-input v-model="erpConfigForm.api_key" type="password" show-password
+            :placeholder="erpConfigForm.id ? '留空则不修改' : '请输入 API Key'" />
+        </el-form-item>
+        <el-form-item label="启用状态">
+          <el-switch v-model="erpConfigForm.status" active-value="active" inactive-value="inactive" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="erpConfigForm.remark" type="textarea" :rows="2" placeholder="连接用途、对接说明等" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showERPConfigModal = false">取消</el-button>
+        <el-button type="primary" :loading="erpSaving" @click="saveERPConnection">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ERP 数据同步弹窗 -->
+    <el-dialog v-model="showSyncModal" title="ERP 数据同步" width="480px">
+      <div style="margin-bottom: 12px; color: #666;">
+        连接：<b>{{ syncForm.connection_name }}</b>
+      </div>
+      <el-form :model="syncForm" label-width="90px" size="default">
+        <el-form-item label="同步方向">
+          <el-radio-group v-model="syncForm.direction">
+            <el-radio-button label="export">导出 CRM → ERP</el-radio-button>
+            <el-radio-button label="import">导入 ERP → CRM</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="数据模块">
+          <el-select v-model="syncForm.module" style="width: 100%;">
+            <el-option label="客户数据" value="customers" />
+            <el-option label="产品数据" value="products" />
+            <el-option label="合同数据" value="contracts" />
+            <el-option label="商机数据" value="business" />
+            <el-option label="回款数据" value="payments" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showSyncModal = false">取消</el-button>
+        <el-button type="primary" :loading="syncing" @click="executeSync">开始同步</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
 import api from '../api'
 import * as echarts from 'echarts'
 
@@ -200,13 +368,53 @@ const trendMetrics = ref([])
 const trendRange = ref('month')
 const exporting = ref(false)
 
+// 客户满意度数据
+const satisfactionData = ref({
+  total: 0,
+  satisfied: 0,
+  satisfaction_rate: 0,
+  avg_overall: 0,
+  avg_response: 0,
+  avg_attitude: 0,
+  avg_quality: 0,
+  by_type: [],
+  by_owner: [],
+  monthly_trend: [],
+  score_distribution: {}
+})
+
+// ERP 集成数据
+const erpConnections = ref([])
+const showERPConfigModal = ref(false)
+const erpSaving = ref(false)
+const erpConfigForm = ref({
+  id: null,
+  name: '',
+  system_type: 'erp',
+  base_url: '',
+  api_key: '',
+  auth_type: 'api_key',
+  status: 'inactive',
+  remark: ''
+})
+const showSyncModal = ref(false)
+const syncing = ref(false)
+const syncForm = ref({
+  connection_id: null,
+  connection_name: '',
+  direction: 'export',
+  module: 'customers'
+})
+
 // 图表 DOM 引用
 const forecastChart = ref(null)
 const conversionChart = ref(null)
 const teamChart = ref(null)
+const satisfactionChart = ref(null)
 let forecastChartInstance = null
 let conversionChartInstance = null
 let teamChartInstance = null
+let satisfactionChartInstance = null
 
 // 数据获取
 const fetchForecast = async () => {
@@ -272,6 +480,190 @@ const fetchTrendComparison = async () => {
       })
     }
   } catch (e) { console.error('环比趋势获取失败', e) }
+}
+
+// 客户满意度
+const fetchCustomerSatisfaction = async () => {
+  try {
+    const res = await api.get('/reports/customer-satisfaction')
+    if (res.code === 200) {
+      satisfactionData.value = res.data
+      updateSatisfactionChart()
+    }
+  } catch (e) { console.error('客户满意度数据获取失败', e) }
+}
+
+// 更新满意度图表
+const updateSatisfactionChart = () => {
+  if (!satisfactionChartInstance) return
+  const scoreData = Object.entries(satisfactionData.value.score_distribution).map(([score, count]) => ({
+    name: `${score}星`,
+    value: count
+  }))
+  const trendData = satisfactionData.value.monthly_trend.map(m => ({
+    month: m.month,
+    avg_score: m.avg_score
+  }))
+  satisfactionChartInstance.setOption({
+    title: [
+      { text: '评分分布', left: '20%', top: 0, textAlign: 'center', textStyle: { fontSize: 13, fontWeight: 'normal', color: '#666' } },
+      { text: '月度评分趋势', left: '70%', top: 0, textAlign: 'center', textStyle: { fontSize: 13, fontWeight: 'normal', color: '#666' } }
+    ],
+    tooltip: { trigger: 'item' },
+    grid: { left: '55%', right: '3%', top: '15%', bottom: '12%', containLabel: true },
+    xAxis: { type: 'category', data: trendData.map(d => d.month), axisLabel: { rotate: 35 } },
+    yAxis: { type: 'value', name: '平均分', min: 0, max: 5 },
+    series: [
+      {
+        name: '评分分布',
+        type: 'pie',
+        radius: ['35%', '60%'],
+        center: ['22%', '55%'],
+        data: scoreData,
+        label: { formatter: '{b}: {c} ({d}%)', fontSize: 11 }
+      },
+      {
+        name: '月度评分',
+        type: 'line',
+        data: trendData.map(d => d.avg_score),
+        itemStyle: { color: '#5470c6' },
+        markLine: { data: [{ type: 'average', name: '平均值' }] }
+      }
+    ]
+  })
+}
+
+// ERP 连接管理
+const fetchERPConnections = async () => {
+  if (!isAdmin.value) return
+  try {
+    const res = await api.get('/reports/erp/connections')
+    if (res.code === 200) {
+      erpConnections.value = res.data || []
+    }
+  } catch (e) { console.error('ERP 连接列表获取失败', e) }
+}
+
+const openERPConfigModal = (row = null) => {
+  if (row) {
+    erpConfigForm.value = {
+      id: row.id,
+      name: row.name,
+      system_type: row.system_type || 'erp',
+      base_url: row.base_url || '',
+      api_key: '',
+      auth_type: row.auth_type || 'api_key',
+      status: row.status || 'inactive',
+      remark: row.remark || ''
+    }
+  } else {
+    erpConfigForm.value = {
+      id: null, name: '', system_type: 'erp', base_url: '',
+      api_key: '', auth_type: 'api_key', status: 'inactive', remark: ''
+    }
+  }
+  showERPConfigModal.value = true
+}
+
+const saveERPConnection = async () => {
+  if (!erpConfigForm.value.name) {
+    ElMessage.warning('请填写连接名称')
+    return
+  }
+  erpSaving.value = true
+  try {
+    const payload = { ...erpConfigForm.value }
+    // 新建时若未填 api_key，清空避免误存
+    if (!payload.api_key) delete payload.api_key
+    let res
+    if (payload.id) {
+      res = await api.put(`/reports/erp/connections/${payload.id}`, payload)
+    } else {
+      res = await api.post('/reports/erp/connections', payload)
+    }
+    if (res.code === 200) {
+      ElMessage.success(res.message || '保存成功')
+      showERPConfigModal.value = false
+      fetchERPConnections()
+    } else {
+      ElMessage.error(res.message || '保存失败')
+    }
+  } catch (e) {
+    console.error('ERP 连接保存失败', e)
+    ElMessage.error('保存失败：' + (e.message || ''))
+  } finally {
+    erpSaving.value = false
+  }
+}
+
+const deleteERPConnection = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确认删除连接「${row.name}」吗？相关同步日志将一并删除。`, '删除确认', {
+      type: 'warning'
+    })
+  } catch {
+    return
+  }
+  try {
+    const res = await api.delete(`/reports/erp/connections/${row.id}`)
+    if (res.code === 200) {
+      ElMessage.success('删除成功')
+      fetchERPConnections()
+    } else {
+      ElMessage.error(res.message || '删除失败')
+    }
+  } catch (e) {
+    console.error('删除失败', e)
+    ElMessage.error('删除失败：' + (e.message || ''))
+  }
+}
+
+const testERPConnection = async (row) => {
+  try {
+    const res = await api.post(`/reports/erp/connections/${row.id}/test`)
+    if (res.code === 200) {
+      ElMessage.success(res.message || '连接测试通过')
+    } else {
+      ElMessage.warning(res.message || '连接测试未通过')
+    }
+  } catch (e) {
+    console.error('测试失败', e)
+    ElMessage.error('测试失败：' + (e.message || ''))
+  }
+}
+
+const openSyncModal = (row) => {
+  syncForm.value = {
+    connection_id: row.id,
+    connection_name: row.name,
+    direction: 'export',
+    module: 'customers'
+  }
+  showSyncModal.value = true
+}
+
+const executeSync = async () => {
+  syncing.value = true
+  try {
+    const res = await api.post('/reports/erp/sync', {
+      connection_id: syncForm.value.connection_id,
+      direction: syncForm.value.direction,
+      module: syncForm.value.module
+    })
+    if (res.code === 200) {
+      const d = res.data || {}
+      ElMessage.success(`同步完成：${d.direction} ${d.module} 共 ${d.success} 条`)
+      showSyncModal.value = false
+      fetchERPConnections()
+    } else {
+      ElMessage.error(res.message || '同步失败')
+    }
+  } catch (e) {
+    console.error('同步失败', e)
+    ElMessage.error('同步失败：' + (e.message || ''))
+  } finally {
+    syncing.value = false
+  }
 }
 
 const onYearChange = () => {
@@ -420,12 +812,16 @@ const initCharts = () => {
   if (teamChart.value && isAdmin.value) {
     teamChartInstance = echarts.init(teamChart.value)
   }
+  if (satisfactionChart.value) {
+    satisfactionChartInstance = echarts.init(satisfactionChart.value)
+  }
 }
 
 const handleResize = () => {
   forecastChartInstance?.resize()
   conversionChartInstance?.resize()
   teamChartInstance?.resize()
+  satisfactionChartInstance?.resize()
 }
 
 watch(selectedYear, () => {
@@ -443,6 +839,8 @@ onMounted(async () => {
   fetchTeamPerformance()
   fetchInsights()
   fetchTrendComparison()
+  fetchCustomerSatisfaction()
+  fetchERPConnections()
   window.addEventListener('resize', handleResize)
 })
 
@@ -451,6 +849,7 @@ onUnmounted(() => {
   forecastChartInstance?.dispose()
   conversionChartInstance?.dispose()
   teamChartInstance?.dispose()
+  satisfactionChartInstance?.dispose()
 })
 </script>
 
@@ -633,6 +1032,26 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 16px;
+}
+
+.satisfaction-summary {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.satisfaction-summary .summary-value {
+  font-size: 22px;
+}
+
+.sub-table-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
+  padding-left: 8px;
+  border-left: 3px solid #5470c6;
 }
 
 .metric-card {

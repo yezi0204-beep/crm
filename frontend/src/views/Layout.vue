@@ -1,17 +1,20 @@
 <template>
   <div class="layout-container">
-    <aside class="sidebar">
+    <!-- 移动端遮罩层 -->
+    <div v-if="isMobile && mobileSidebarOpen" class="mobile-overlay" @click="closeMobileSidebar"></div>
+
+    <aside class="sidebar" :class="{ 'collapsed': isCollapsed, 'mobile-open': isMobile && mobileSidebarOpen, 'mobile-hidden': isMobile && !mobileSidebarOpen }">
       <div class="sidebar-header">
         <div class="logo-wrapper">
           <div class="logo">🚀</div>
         </div>
-        <div class="title-section">
-          <span class="title">CRM系统</span>
-          <span class="subtitle">天地信息网络研究院</span>
+        <div class="title-section" v-show="!isCollapsed">
+          <span class="title">{{ t('layout.systemName') }}</span>
+          <span class="subtitle">{{ t('layout.subtitle') }}</span>
         </div>
       </div>
-      
-      <div class="user-info">
+
+      <div class="user-info" v-show="!isCollapsed">
         <div class="avatar-wrapper">
           <div class="avatar">👤</div>
           <div class="status-indicator online"></div>
@@ -21,8 +24,8 @@
           <div class="user-role">{{ authStore.role }}</div>
         </div>
       </div>
-      
-      <el-menu 
+
+      <el-menu
         :default-active="activeMenu"
         class="sidebar-menu"
         background-color="transparent"
@@ -30,147 +33,147 @@
         active-text-color="#4ecdc4"
         router
         :collapse="isCollapsed"
-        @collapse="handleCollapse"
+        @select="closeMobileSidebar"
       >
         <div class="menu-group">
-          <div class="menu-group-title">📊 销售管理</div>
+          <div class="menu-group-title" v-show="!isCollapsed">📊 {{ t('menu.salesManagement') }}</div>
           <el-menu-item index="/dashboard">
             <span class="menu-icon">📊</span>
-            <span>驾驶舱</span>
+            <span>{{ t('menuItem.dashboard') }}</span>
           </el-menu-item>
           <el-menu-item index="/reports">
             <span class="menu-icon">📈</span>
-            <span>业绩报表</span>
+            <span>{{ t('menuItem.reports') }}</span>
           </el-menu-item>
           <el-menu-item index="/customers">
             <span class="menu-icon">👥</span>
-            <span>客户管理</span>
+            <span>{{ t('menuItem.customers') }}</span>
           </el-menu-item>
           <el-menu-item index="/business">
             <span class="menu-icon">🎯</span>
-            <span>商机看板</span>
+            <span>{{ t('menuItem.business') }}</span>
           </el-menu-item>
           <el-menu-item index="/contracts">
             <span class="menu-icon">📜</span>
-            <span>合同管理</span>
+            <span>{{ t('menuItem.contracts') }}</span>
           </el-menu-item>
           <el-menu-item index="/quotes">
             <span class="menu-icon">💵</span>
-            <span>报价管理</span>
+            <span>{{ t('menuItem.quotes') }}</span>
           </el-menu-item>
           <el-menu-item index="/products">
             <span class="menu-icon">📦</span>
-            <span>产品库存</span>
+            <span>{{ t('menuItem.products') }}</span>
           </el-menu-item>
           <el-menu-item index="/payments">
             <span class="menu-icon">💰</span>
-            <span>回款管理</span>
+            <span>{{ t('menuItem.payments') }}</span>
           </el-menu-item>
           <el-menu-item index="/visits">
             <span class="menu-icon">📅</span>
-            <span>拜访排班</span>
+            <span>{{ t('menuItem.visits') }}</span>
           </el-menu-item>
         </div>
 
         <div class="menu-group">
-          <div class="menu-group-title">📢 营销管理</div>
+          <div class="menu-group-title" v-show="!isCollapsed">📢 {{ t('menu.marketingManagement') }}</div>
           <el-menu-item index="/marketing">
             <span class="menu-icon">📢</span>
-            <span>营销活动</span>
+            <span>{{ t('menuItem.marketing') }}</span>
           </el-menu-item>
         </div>
 
         <div class="menu-group">
-          <div class="menu-group-title">🛠️ 售后服务</div>
+          <div class="menu-group-title" v-show="!isCollapsed">🛠️ {{ t('menu.afterSales') }}</div>
           <el-menu-item index="/service">
             <span class="menu-icon">🛠️</span>
-            <span>服务工单</span>
+            <span>{{ t('menuItem.service') }}</span>
           </el-menu-item>
         </div>
 
         <div class="menu-group">
-          <div class="menu-group-title">🌊 资源管理</div>
+          <div class="menu-group-title" v-show="!isCollapsed">🌊 {{ t('menu.resourceManagement') }}</div>
           <el-menu-item index="/pool">
             <span class="menu-icon">🌊</span>
-            <span>公海池</span>
+            <span>{{ t('menuItem.pool') }}</span>
           </el-menu-item>
           <el-menu-item index="/leads" v-if="['主任','院长'].includes(authStore.role)">
             <span class="menu-icon">📡</span>
-            <span>智能线索</span>
+            <span>{{ t('menuItem.leads') }}</span>
           </el-menu-item>
           <el-menu-item index="/enterprises">
             <span class="menu-icon">🏢</span>
-            <span>企业信息库</span>
+            <span>{{ t('menuItem.enterprises') }}</span>
           </el-menu-item>
         </div>
-        
+
         <div class="menu-group">
-          <div class="menu-group-title">⚡ 项目管理</div>
+          <div class="menu-group-title" v-show="!isCollapsed">⚡ {{ t('menu.projectManagement') }}</div>
           <el-menu-item index="/workhours">
             <span class="menu-icon">⏱️</span>
-            <span>工时管理</span>
+            <span>{{ t('menuItem.workhours') }}</span>
           </el-menu-item>
           <el-menu-item index="/projects">
             <span class="menu-icon">📋</span>
-            <span>项目分配</span>
+            <span>{{ t('menuItem.projects') }}</span>
           </el-menu-item>
         </div>
-        
+
         <div class="menu-group">
-          <div class="menu-group-title">🔧 系统管理</div>
+          <div class="menu-group-title" v-show="!isCollapsed">🔧 {{ t('menu.systemManagement') }}</div>
           <el-menu-item index="/users" v-if="authStore.department === '应用中心' && authStore.role === '主任'">
             <span class="menu-icon">👥</span>
-            <span>用户管理</span>
+            <span>{{ t('menuItem.users') }}</span>
           </el-menu-item>
           <el-menu-item index="/alerts">
             <span class="menu-icon">🔔</span>
-            <span>预警通知</span>
+            <span>{{ t('menuItem.alerts') }}</span>
             <el-badge v-if="alertCount > 0" :value="alertCount" class="menu-badge" />
           </el-menu-item>
           <el-menu-item index="/search">
             <span class="menu-icon">🔍</span>
-            <span>全局搜索</span>
+            <span>{{ t('menuItem.search') }}</span>
           </el-menu-item>
           <el-menu-item index="/qa">
             <span class="menu-icon">🤖</span>
-            <span>智能助手</span>
+            <span>{{ t('menuItem.qa') }}</span>
           </el-menu-item>
           <el-menu-item index="/knowledge">
             <span class="menu-icon">📚</span>
-            <span>知识库</span>
+            <span>{{ t('menuItem.knowledge') }}</span>
           </el-menu-item>
           <el-menu-item index="/qualifications">
             <span class="menu-icon">📜</span>
-            <span>资质管理</span>
+            <span>{{ t('menuItem.qualifications') }}</span>
           </el-menu-item>
           <el-menu-item index="/smart-import">
             <span class="menu-icon">📥</span>
-            <span>智能导入</span>
+            <span>{{ t('menuItem.smartImport') }}</span>
           </el-menu-item>
           <el-menu-item index="/operation-logs" v-if="authStore.role === '主任'">
             <span class="menu-icon">📝</span>
-            <span>操作日志</span>
+            <span>{{ t('menuItem.operationLogs') }}</span>
           </el-menu-item>
         </div>
       </el-menu>
-      
+
       <div class="sidebar-footer">
-        <div class="collapse-btn" @click="toggleCollapse">
+        <div class="collapse-btn" @click="toggleCollapse" v-show="!isMobile">
           <span>{{ isCollapsed ? '▶' : '◀' }}</span>
         </div>
         <el-button text @click="handleLogout" class="logout-btn">
           <span>🚪</span>
-          <span>退出</span>
+          <span v-show="!isCollapsed">{{ t('layout.logout') }}</span>
         </el-button>
       </div>
     </aside>
-    
-    <main class="main-content" :class="{ 'collapsed': isCollapsed }">
+
+    <main class="main-content" :class="{ 'collapsed': isCollapsed, 'mobile': isMobile }">
       <header class="header">
         <div class="header-left">
           <button class="menu-toggle" @click="toggleCollapse">☰</button>
           <div class="breadcrumb">
-            <span class="breadcrumb-item">首页</span>
+            <span class="breadcrumb-item">{{ t('layout.home') }}</span>
             <span class="breadcrumb-separator">/</span>
             <span class="breadcrumb-item active">{{ pageTitle }}</span>
           </div>
@@ -178,7 +181,14 @@
         <div class="header-right">
           <div class="search-box">
             <span class="search-icon">🔍</span>
-            <input type="text" placeholder="全局搜索..." class="search-input" @keyup.enter="handleGlobalSearch">
+            <input type="text" :placeholder="t('layout.globalSearch')" class="search-input" @keyup.enter="handleGlobalSearch">
+          </div>
+          <div class="lang-switcher" @click="openSettings" :title="t('layout.settings')">
+            <span class="lang-flag">{{ settingsStore.currentLocale.flag }}</span>
+            <span class="lang-label">{{ settingsStore.currentLocale.label }}</span>
+          </div>
+          <div class="settings-btn" @click="openSettings" :title="t('layout.settings')">
+            <span>⚙️</span>
           </div>
           <div class="notification-btn" @click="handleNotificationClick">
             <span>🔔</span>
@@ -189,65 +199,168 @@
           </div>
         </div>
       </header>
-      
+
       <div class="content-wrapper">
         <router-view />
       </div>
     </main>
+
+    <!-- 设置抽屉 -->
+    <el-drawer v-model="showSettingsDrawer" :title="t('settings.title')" direction="rtl" size="380px">
+      <div class="settings-panel">
+        <!-- 语言设置 -->
+        <div class="setting-section">
+          <div class="setting-label">{{ t('settings.language') }}</div>
+          <div class="lang-options">
+            <div
+              v-for="locale in availableLocales"
+              :key="locale.value"
+              class="lang-option"
+              :class="{ active: settingsForm.language === locale.value }"
+              @click="onLanguageChange(locale.value)"
+            >
+              <span class="lang-flag">{{ locale.flag }}</span>
+              <span>{{ locale.label }}</span>
+              <span v-if="settingsForm.language === locale.value" class="check">✓</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 时区设置 -->
+        <div class="setting-section">
+          <div class="setting-label">{{ t('settings.timezone') }}</div>
+          <el-select v-model="settingsForm.timezone" style="width: 100%;" @change="onTimezoneChange" filterable>
+            <el-option
+              v-for="tz in timezones"
+              :key="tz.value"
+              :label="tz.label"
+              :value="tz.value"
+            />
+          </el-select>
+          <div class="setting-hint">{{ t('settings.currentTimezone') }}: {{ settingsForm.timezone }}</div>
+        </div>
+
+        <!-- 主题设置 -->
+        <div class="setting-section">
+          <div class="setting-label">{{ t('settings.theme') }}</div>
+          <el-radio-group v-model="settingsForm.theme" @change="onThemeChange">
+            <el-radio-button label="light">☀️ {{ t('settings.light') }}</el-radio-button>
+            <el-radio-button label="dark">🌙 {{ t('settings.dark') }}</el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <!-- 字号设置 -->
+        <div class="setting-section">
+          <div class="setting-label">{{ t('settings.fontSize') }}</div>
+          <el-radio-group v-model="settingsForm.font_size" @change="onFontSizeChange">
+            <el-radio-button label="small">{{ t('settings.small') }}</el-radio-button>
+            <el-radio-button label="medium">{{ t('settings.medium') }}</el-radio-button>
+            <el-radio-button label="large">{{ t('settings.large') }}</el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <!-- 预览 -->
+        <div class="setting-section preview-section">
+          <div class="setting-label">{{ t('settings.preview') }}</div>
+          <div class="preview-box">
+            <p>{{ t('common.confirm') }} · {{ t('common.cancel') }} · {{ t('common.save') }} · {{ t('common.delete') }}</p>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="showSettingsDrawer = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="savingSettings" @click="saveSettings">{{ t('common.save') }}</el-button>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useAuthStore } from '../stores/auth'
+import { useSettingsStore } from '../stores/settings'
 import { ElMessage } from 'element-plus'
+import { availableLocales, translate } from '../locales'
+import api from '../api'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const settingsStore = useSettingsStore()
+const { language } = storeToRefs(settingsStore)
+const t = (key, params = null) => translate(language.value, key, params)
+
 const isCollapsed = ref(false)
+const isMobile = ref(false)
+const mobileSidebarOpen = ref(false)
 const unreadLogCount = ref(0)
 const alertCount = ref(0)
 
+// 设置抽屉
+const showSettingsDrawer = ref(false)
+const timezones = ref([])
+const settingsForm = ref({
+  language: 'zh-CN',
+  timezone: 'Asia/Shanghai',
+  theme: 'light',
+  font_size: 'medium'
+})
+const savingSettings = ref(false)
+
 const activeMenu = computed(() => route.path)
 
-const pageTitleMap = {
-  '/dashboard': '销售驾驶舱',
-  '/reports': '业绩报表',
-  '/customers': '客户管理',
-  '/business': '商机看板',
-  '/contracts': '合同管理',
-  '/payments': '回款管理',
-  '/visits': '拜访排班',
-  '/pool': '公海池',
-  '/leads': '智能线索',
-  '/workhours': '工时管理',
-  '/projects': '项目分配',
-  '/users': '用户管理',
-  '/alerts': '预警通知',
-  '/search': '全局搜索',
-  '/qa': '智能助手',
-  '/knowledge': '企业知识库',
-  '/knowledge-docs': '知识文档中心',
-  '/qualifications': '资质信息管理',
-  '/smart-import': '智能导入',
-  '/operation-logs': '操作日志',
-  '/products': '产品库存管理',
-  '/quotes': '报价管理'
-}
+const pageTitleMap = computed(() => ({
+  '/dashboard': t('menuItem.dashboard'),
+  '/reports': t('menuItem.reports'),
+  '/customers': t('menuItem.customers'),
+  '/business': t('menuItem.business'),
+  '/contracts': t('menuItem.contracts'),
+  '/payments': t('menuItem.payments'),
+  '/visits': t('menuItem.visits'),
+  '/pool': t('menuItem.pool'),
+  '/leads': t('menuItem.leads'),
+  '/workhours': t('menuItem.workhours'),
+  '/projects': t('menuItem.projects'),
+  '/users': t('menuItem.users'),
+  '/alerts': t('menuItem.alerts'),
+  '/search': t('menuItem.search'),
+  '/qa': t('menuItem.qa'),
+  '/knowledge': t('menuItem.knowledge'),
+  '/knowledge-docs': t('menuItem.knowledge'),
+  '/qualifications': t('menuItem.qualifications'),
+  '/smart-import': t('menuItem.smartImport'),
+  '/operation-logs': t('menuItem.operationLogs'),
+  '/products': t('menuItem.products'),
+  '/quotes': t('menuItem.quotes'),
+  '/marketing': t('menuItem.marketing'),
+  '/service': t('menuItem.service'),
+  '/enterprises': t('menuItem.enterprises')
+}))
 
-const pageTitle = computed(() => pageTitleMap[route.path] || '')
+const pageTitle = computed(() => pageTitleMap.value[route.path] || '')
 
 const totalUnread = computed(() => {
   return unreadLogCount.value + alertCount.value
 })
 
+// 响应式：检测屏幕宽度
+const checkResponsive = () => {
+  const width = window.innerWidth
+  isMobile.value = width < 768
+  if (isMobile.value) {
+    isCollapsed.value = false
+    mobileSidebarOpen.value = false
+  }
+}
+
 const fetchUnreadCounts = async () => {
   try {
     const token = authStore.token
     if (!token) return
-    
+
     const [logRes, alertRes] = await Promise.all([
       fetch('/api/operation_logs/unread_count', {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -256,12 +369,12 @@ const fetchUnreadCounts = async () => {
         headers: { 'Authorization': `Bearer ${token}` }
       })
     ])
-    
+
     const logData = await logRes.json()
     if (logData.code === 200) {
       unreadLogCount.value = logData.data.unread_count || 0
     }
-    
+
     const alertData = await alertRes.json()
     if (alertData.code === 200) {
       alertCount.value = alertData.data.count || 0
@@ -273,16 +386,24 @@ const fetchUnreadCounts = async () => {
 
 const handleLogout = () => {
   authStore.logout()
-  ElMessage.success('已安全退出')
+  ElMessage.success(t('layout.logout'))
   router.push('/login')
 }
 
 const toggleCollapse = () => {
-  isCollapsed.value = !isCollapsed.value
+  if (isMobile.value) {
+    mobileSidebarOpen.value = !mobileSidebarOpen.value
+  } else {
+    isCollapsed.value = !isCollapsed.value
+  }
 }
 
 const handleCollapse = (val) => {
   isCollapsed.value = val
+}
+
+const closeMobileSidebar = () => {
+  mobileSidebarOpen.value = false
 }
 
 const handleGlobalSearch = (e) => {
@@ -296,14 +417,78 @@ const handleNotificationClick = () => {
   router.push('/alerts')
 }
 
+// 设置抽屉
+const openSettings = () => {
+  settingsForm.value = {
+    language: settingsStore.language,
+    timezone: settingsStore.timezone,
+    theme: settingsStore.theme,
+    font_size: settingsStore.fontSize
+  }
+  showSettingsDrawer.value = true
+}
+
+const fetchTimezones = async () => {
+  try {
+    const res = await api.get('/system/timezones')
+    if (res.code === 200) {
+      timezones.value = res.data || []
+    }
+  } catch (e) {
+    console.error('时区列表获取失败', e)
+  }
+}
+
+const onLanguageChange = (lang) => {
+  settingsStore.setLanguage(lang)
+  settingsForm.value.language = lang
+}
+
+const onTimezoneChange = (tz) => {
+  settingsStore.setTimezone(tz)
+  settingsForm.value.timezone = tz
+}
+
+const onThemeChange = (theme) => {
+  settingsStore.setTheme(theme)
+  settingsForm.value.theme = theme
+}
+
+const onFontSizeChange = (size) => {
+  settingsStore.setFontSize(size)
+  settingsForm.value.font_size = size
+}
+
+const saveSettings = async () => {
+  savingSettings.value = true
+  try {
+    const res = await settingsStore.savePreferences(settingsForm.value)
+    if (res.code === 200) {
+      ElMessage.success(t('settings.saveSuccess'))
+      showSettingsDrawer.value = false
+    } else {
+      ElMessage.error(res.message || '保存失败')
+    }
+  } catch (e) {
+    ElMessage.error('保存失败')
+  } finally {
+    savingSettings.value = false
+  }
+}
+
 let refreshInterval = null
 
-onMounted(() => {
+onMounted(async () => {
+  checkResponsive()
+  window.addEventListener('resize', checkResponsive)
+  await settingsStore.loadPreferences()
   fetchUnreadCounts()
+  fetchTimezones()
   refreshInterval = setInterval(fetchUnreadCounts, 30000)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', checkResponsive)
   if (refreshInterval) {
     clearInterval(refreshInterval)
   }
@@ -648,5 +833,239 @@ onUnmounted(() => {
 .content-wrapper {
   flex: 1;
   padding: 24px;
+}
+
+/* ==================== 语言切换器 ==================== */
+.lang-switcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  font-size: 13px;
+  color: #666;
+}
+
+.lang-switcher:hover {
+  background: rgba(78, 205, 196, 0.1);
+}
+
+.lang-flag {
+  font-size: 16px;
+}
+
+.lang-label {
+  font-weight: 500;
+}
+
+/* ==================== 设置按钮 ==================== */
+.settings-btn {
+  cursor: pointer;
+  font-size: 20px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.settings-btn:hover {
+  background: rgba(78, 205, 196, 0.1);
+  transform: rotate(45deg);
+}
+
+/* ==================== 设置面板 ==================== */
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.setting-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setting-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.setting-hint {
+  font-size: 12px;
+  color: #999;
+}
+
+.lang-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lang-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 2px solid #e4e8ec;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 14px;
+}
+
+.lang-option:hover {
+  border-color: #4ecdc4;
+  background: rgba(78, 205, 196, 0.05);
+}
+
+.lang-option.active {
+  border-color: #4ecdc4;
+  background: rgba(78, 205, 196, 0.1);
+  color: #4ecdc4;
+  font-weight: 600;
+}
+
+.lang-option .check {
+  margin-left: auto;
+  color: #4ecdc4;
+  font-weight: bold;
+}
+
+.preview-section {
+  margin-top: 8px;
+}
+
+.preview-box {
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 10px;
+  text-align: center;
+  color: #666;
+  font-size: 14px;
+}
+
+/* ==================== 移动端遮罩 ==================== */
+.mobile-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ==================== 响应式设计 ==================== */
+
+/* 平板（768px - 1024px） */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 220px;
+  }
+
+  .main-content {
+    margin-left: 220px;
+  }
+
+  .main-content.collapsed {
+    margin-left: 64px;
+  }
+
+  .content-wrapper {
+    padding: 16px;
+  }
+
+  .search-input {
+    width: 140px;
+  }
+
+  .header {
+    padding: 12px 16px;
+  }
+}
+
+/* 手机（< 768px） */
+@media (max-width: 767px) {
+  .sidebar {
+    width: 260px;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar.mobile-hidden {
+    transform: translateX(-100%);
+  }
+
+  .sidebar.collapsed {
+    width: 260px;
+  }
+
+  .main-content {
+    margin-left: 0 !important;
+  }
+
+  .main-content.mobile {
+    margin-left: 0;
+  }
+
+  .header {
+    padding: 10px 12px;
+  }
+
+  .header-right {
+    gap: 10px;
+  }
+
+  .search-box {
+    display: none;
+  }
+
+  .lang-label {
+    display: none;
+  }
+
+  .header-user {
+    display: none;
+  }
+
+  .content-wrapper {
+    padding: 12px;
+  }
+
+  .breadcrumb {
+    font-size: 13px;
+  }
+}
+
+/* 超小屏幕（< 480px） */
+@media (max-width: 479px) {
+  .header-left {
+    gap: 8px;
+  }
+
+  .breadcrumb-item {
+    font-size: 12px;
+  }
+
+  .settings-btn {
+    font-size: 18px;
+  }
+
+  .notification-btn {
+    font-size: 18px;
+  }
 }
 </style>
