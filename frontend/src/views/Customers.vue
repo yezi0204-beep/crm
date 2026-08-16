@@ -5,6 +5,10 @@
         <el-icon><Plus /></el-icon>
         添加客户
       </el-button>
+      <el-button type="success" @click="showAnalysis = true" class="add-btn">
+        <el-icon><DataAnalysis /></el-icon>
+        客户分析
+      </el-button>
       <div class="search-wrapper">
         <el-input
           v-model="searchKeyword"
@@ -17,6 +21,23 @@
             <span>🔍</span>
           </template>
         </el-input>
+        <el-select v-model="filterLevel" placeholder="等级" clearable style="width: 100px" @change="fetchCustomers">
+          <el-option label="A(重点)" value="A" />
+          <el-option label="B(普通)" value="B" />
+          <el-option label="C(一般)" value="C" />
+        </el-select>
+        <el-select v-model="filterIndustry" placeholder="行业" clearable filterable style="width: 120px" @change="fetchCustomers">
+          <el-option label="政府/军工" value="政府/军工" />
+          <el-option label="教育" value="教育" />
+          <el-option label="金融" value="金融" />
+          <el-option label="制造" value="制造" />
+          <el-option label="矿业" value="矿业" />
+          <el-option label="通信" value="通信" />
+          <el-option label="其它" value="其它" />
+        </el-select>
+        <el-select v-model="filterSource" placeholder="来源" clearable filterable allow-create style="width: 120px" @change="fetchCustomers">
+          <el-option v-for="s in sourceOptions" :key="s" :label="s" :value="s" />
+        </el-select>
         <el-button @click="handleSearch" class="search-btn">搜索</el-button>
       </div>
     </div>
@@ -33,6 +54,7 @@
             </template>
           </el-table-column>
           <el-table-column prop="source" label="来源" min-width="100" sortable />
+          <el-table-column prop="address" label="地址" min-width="150" sortable show-overflow-tooltip />
           <el-table-column prop="owner_name" label="负责人" min-width="90" sortable />
           <el-table-column prop="created_at" label="创建时间" min-width="140" sortable />
           <el-table-column label="操作" min-width="260" fixed="right">
@@ -77,6 +99,9 @@
         </el-form-item>
         <el-form-item label="地区">
           <el-input v-model="customerForm.region" placeholder="如：北京/上海/四川" />
+        </el-form-item>
+        <el-form-item label="地址">
+          <el-input v-model="customerForm.address" placeholder="详细地址" />
         </el-form-item>
         <el-form-item label="客户等级">
           <el-select v-model="customerForm.level">
@@ -278,13 +303,96 @@
         </template>
       </div>
     </el-drawer>
+
+    <!-- 客户分析对话框 -->
+    <el-dialog
+      v-model="showAnalysis"
+      title="客户数据分析"
+      width="90%"
+      top="5vh"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <div v-loading="analysisLoading">
+        <template v-if="analysisData">
+          <div class="analysis-summary">
+            <el-card class="summary-card">
+              <div class="summary-val">{{ analysisData.total }}</div>
+              <div class="summary-lbl">客户总数</div>
+            </el-card>
+            <el-card class="summary-card" v-for="(s, idx) in analysisData.conversion_funnel.slice(1)" :key="idx">
+              <div class="summary-val">{{ s.count }}</div>
+              <div class="summary-lbl">{{ s.stage }}</div>
+            </el-card>
+          </div>
+
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-card class="chart-card">
+                <template #header><span class="chart-title">客户等级分布</span></template>
+                <div ref="levelChartRef" class="chart-box"></div>
+              </el-card>
+            </el-col>
+            <el-col :span="12">
+              <el-card class="chart-card">
+                <template #header><span class="chart-title">客户行业分布</span></template>
+                <div ref="industryChartRef" class="chart-box"></div>
+              </el-card>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16" style="margin-top: 16px;">
+            <el-col :span="12">
+              <el-card class="chart-card">
+                <template #header><span class="chart-title">客户来源分布</span></template>
+                <div ref="sourceChartRef" class="chart-box"></div>
+              </el-card>
+            </el-col>
+            <el-col :span="12">
+              <el-card class="chart-card">
+                <template #header><span class="chart-title">客户地区分布 (Top 10)</span></template>
+                <div ref="regionChartRef" class="chart-box"></div>
+              </el-card>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16" style="margin-top: 16px;">
+            <el-col :span="12">
+              <el-card class="chart-card">
+                <template #header><span class="chart-title">客户转化漏斗</span></template>
+                <div ref="funnelChartRef" class="chart-box"></div>
+              </el-card>
+            </el-col>
+            <el-col :span="12" v-if="isAdmin && analysisData.owner_ranking.length > 0">
+              <el-card class="chart-card">
+                <template #header><span class="chart-title">负责人业绩排行</span></template>
+                <el-table :data="analysisData.owner_ranking" size="small" border height="320">
+                  <el-table-column type="index" label="排名" width="60" />
+                  <el-table-column prop="owner_name" label="负责人" min-width="90" />
+                  <el-table-column prop="customer_count" label="客户数" width="70" sortable />
+                  <el-table-column prop="business_count" label="商机数" width="70" sortable />
+                  <el-table-column prop="contract_count" label="合同数" width="70" sortable />
+                  <el-table-column label="合同总额(万)" width="110" sortable :sort-method="(a,b)=>(a.total_amount||0)-(b.total_amount||0)">
+                    <template #default="{ row }">
+                      ¥{{ ((row.total_amount || 0) / 10000).toFixed(2) }}
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-card>
+            </el-col>
+          </el-row>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="showAnalysis = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { Plus, DataAnalysis } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import * as echarts from 'echarts'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useRouter } from 'vue-router'
@@ -304,6 +412,17 @@ const followLogs = ref([])
 const followSearchKeyword = ref('')
 const searchKeyword = ref('')
 
+// 筛选条件
+const filterLevel = ref('')
+const filterIndustry = ref('')
+const filterSource = ref('')
+const sourceOptions = ref(['主动开发', '客户介绍', '展会', '网络推广', '电话营销', '其它'])
+
+// 客户分析
+const showAnalysis = ref(false)
+const analysisLoading = ref(false)
+const analysisData = ref(null)
+
 // 画像相关状态
 const showProfileDrawer = ref(false)
 const profileLoading = ref(false)
@@ -318,8 +437,6 @@ const filteredCustomers = computed(() => {
     (c.phone && c.phone.toLowerCase().includes(keyword))
   )
 })
-
-const handleSearch = () => {}
 
 const followForm = reactive({
   subject: '',
@@ -344,6 +461,7 @@ const customerForm = reactive({
   email: '',
   industry: '',
   region: '',
+  address: '',
   level: 'B',
   source: '',
   owner_id: '',
@@ -385,10 +503,19 @@ const getLevelLabel = (level) => {
 }
 
 const fetchCustomers = async () => {
-  const response = await api.get('/customers')
+  const params = {}
+  if (searchKeyword.value) params.keyword = searchKeyword.value
+  if (filterLevel.value) params.level = filterLevel.value
+  if (filterIndustry.value) params.industry = filterIndustry.value
+  if (filterSource.value) params.source = filterSource.value
+  const response = await api.get('/customers', params)
   if (response.code === 200) {
     customers.value = response.data
   }
+}
+
+const handleSearch = () => {
+  fetchCustomers()
 }
 
 const saveCustomer = async () => {
@@ -658,9 +785,184 @@ const timelineEvents = computed(() => {
   return events
 })
 
+// ===== 客户分析 =====
+const levelChartRef = ref(null)
+const industryChartRef = ref(null)
+const sourceChartRef = ref(null)
+const regionChartRef = ref(null)
+const funnelChartRef = ref(null)
+let levelChartInstance = null
+let industryChartInstance = null
+let sourceChartInstance = null
+let regionChartInstance = null
+let funnelChartInstance = null
+
+const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
+
+const fetchAnalysis = async () => {
+  analysisLoading.value = true
+  analysisData.value = null
+  try {
+    const response = await api.get('/customers/analysis')
+    if (response.code === 200) {
+      analysisData.value = response.data
+      await nextTick()
+      initAnalysisCharts()
+      updateAnalysisCharts()
+    } else {
+      ElMessage.error(response.message)
+    }
+  } catch (error) {
+    ElMessage.error('加载客户分析失败')
+  } finally {
+    analysisLoading.value = false
+  }
+}
+
+const initAnalysisCharts = () => {
+  if (levelChartRef.value) levelChartInstance = echarts.init(levelChartRef.value)
+  if (industryChartRef.value) industryChartInstance = echarts.init(industryChartRef.value)
+  if (sourceChartRef.value) sourceChartInstance = echarts.init(sourceChartRef.value)
+  if (regionChartRef.value) regionChartInstance = echarts.init(regionChartRef.value)
+  if (funnelChartRef.value) funnelChartInstance = echarts.init(funnelChartRef.value)
+}
+
+const updateAnalysisCharts = () => {
+  if (!analysisData.value) return
+  const d = analysisData.value
+
+  // 等级分布 - 饼图
+  if (levelChartInstance) {
+    levelChartInstance.setOption({
+      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+      legend: { bottom: 0 },
+      series: [{
+        name: '等级分布',
+        type: 'pie',
+        radius: ['40%', '70%'],
+        center: ['50%', '45%'],
+        label: { formatter: '{b}\n{c}' },
+        data: d.level_distribution.map(item => ({
+          name: item.level,
+          value: item.count,
+          itemStyle: {
+            color: item.level === 'A' ? '#ee6666' : (item.level === 'B' ? '#fac858' : '#91cc75')
+          }
+        }))
+      }]
+    })
+  }
+
+  // 行业分布 - 柱状图
+  if (industryChartInstance) {
+    industryChartInstance.setOption({
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: { type: 'category', data: d.industry_distribution.map(i => i.industry), axisLabel: { rotate: 30 } },
+      yAxis: { type: 'value' },
+      series: [{ type: 'bar', data: d.industry_distribution.map(i => i.count), itemStyle: { color: '#5470c6' } }]
+    })
+  }
+
+  // 来源分布 - 饼图
+  if (sourceChartInstance) {
+    sourceChartInstance.setOption({
+      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+      legend: { bottom: 0 },
+      series: [{
+        name: '来源分布',
+        type: 'pie',
+        radius: '65%',
+        center: ['50%', '45%'],
+        label: { formatter: '{b}: {c}' },
+        data: d.source_distribution.map(item => ({ name: item.source, value: item.count }))
+      }]
+    })
+  }
+
+  // 地区分布 - 柱状图
+  if (regionChartInstance) {
+    regionChartInstance.setOption({
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: { type: 'category', data: d.region_distribution.map(i => i.region), axisLabel: { rotate: 30 } },
+      yAxis: { type: 'value' },
+      series: [{ type: 'bar', data: d.region_distribution.map(i => i.count), itemStyle: { color: '#73c0de' } }]
+    })
+  }
+
+  // 转化漏斗
+  if (funnelChartInstance) {
+    const stages = d.conversion_funnel
+    const maxVal = stages.length > 0 ? Math.max(...stages.map(s => s.count)) : 100
+    funnelChartInstance.setOption({
+      tooltip: { trigger: 'item', formatter: (p) => {
+        const stage = stages[p.dataIndex] || {}
+        const rate = maxVal > 0 ? ((stage.count / stages[0].count) * 100).toFixed(1) : 0
+        return `${stage.stage}<br/>数量: ${stage.count}<br/>相对首阶段: ${rate}%`
+      }},
+      series: [{
+        name: '客户转化漏斗',
+        type: 'funnel',
+        left: '10%',
+        top: 10,
+        bottom: 10,
+        width: '80%',
+        min: 0,
+        max: maxVal,
+        minSize: '20%',
+        maxSize: '100%',
+        sort: 'descending',
+        gap: 2,
+        label: { show: true, position: 'inside', formatter: (p) => {
+          const stage = stages[p.dataIndex] || {}
+          return `${stage.stage}\n${stage.count}`
+        }},
+        itemStyle: { borderColor: '#fff', borderWidth: 1 },
+        data: stages.map((s, i) => ({
+          value: s.count,
+          name: s.stage,
+          itemStyle: { color: ['#5470c6', '#91cc75', '#fac858', '#ee6666'][i] || '#73c0de' }
+        }))
+      }]
+    })
+  }
+}
+
+const handleAnalysisResize = () => {
+  levelChartInstance?.resize()
+  industryChartInstance?.resize()
+  sourceChartInstance?.resize()
+  regionChartInstance?.resize()
+  funnelChartInstance?.resize()
+}
+
+watch(showAnalysis, async (val) => {
+  if (val) {
+    await fetchAnalysis()
+  } else {
+    // 关闭时销毁图表实例，避免重复初始化
+    levelChartInstance?.dispose(); levelChartInstance = null
+    industryChartInstance?.dispose(); industryChartInstance = null
+    sourceChartInstance?.dispose(); sourceChartInstance = null
+    regionChartInstance?.dispose(); regionChartInstance = null
+    funnelChartInstance?.dispose(); funnelChartInstance = null
+  }
+})
+
 onMounted(() => {
   fetchCustomers()
   fetchUsers()
+  window.addEventListener('resize', handleAnalysisResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleAnalysisResize)
+  levelChartInstance?.dispose()
+  industryChartInstance?.dispose()
+  sourceChartInstance?.dispose()
+  regionChartInstance?.dispose()
+  funnelChartInstance?.dispose()
 })
 </script>
 
@@ -798,5 +1100,44 @@ onMounted(() => {
 .event-meta {
   font-size: 12px;
   color: #94a3b8;
+}
+
+.analysis-summary {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.summary-card {
+  flex: 1;
+  min-width: 120px;
+  text-align: center;
+}
+
+.summary-val {
+  font-size: 24px;
+  font-weight: 700;
+  color: #4ecdc4;
+}
+
+.summary-lbl {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+.chart-card {
+  margin-bottom: 0;
+}
+
+.chart-title {
+  font-weight: 600;
+  color: #334155;
+}
+
+.chart-box {
+  width: 100%;
+  height: 320px;
 }
 </style>

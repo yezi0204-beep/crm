@@ -54,6 +54,14 @@
             <span class="menu-icon">📜</span>
             <span>合同管理</span>
           </el-menu-item>
+          <el-menu-item index="/quotes">
+            <span class="menu-icon">💵</span>
+            <span>报价管理</span>
+          </el-menu-item>
+          <el-menu-item index="/products">
+            <span class="menu-icon">📦</span>
+            <span>产品库存</span>
+          </el-menu-item>
           <el-menu-item index="/payments">
             <span class="menu-icon">💰</span>
             <span>回款管理</span>
@@ -208,7 +216,9 @@ const pageTitleMap = {
   '/knowledge-docs': '知识文档中心',
   '/qualifications': '资质信息管理',
   '/smart-import': '智能导入',
-  '/operation-logs': '操作日志'
+  '/operation-logs': '操作日志',
+  '/products': '产品库存管理',
+  '/quotes': '报价管理'
 }
 
 const pageTitle = computed(() => pageTitleMap[route.path] || '')

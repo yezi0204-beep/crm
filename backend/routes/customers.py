@@ -16,43 +16,42 @@ def get_customers():
     username = payload['username']
     role = payload['role']
     keyword = request.args.get('keyword', '')
+    level = request.args.get('level', '')
+    industry = request.args.get('industry', '')
+    source = request.args.get('source', '')
 
     db = get_db()
     cursor = db.cursor()
 
-    if role == '主任' or role == '院长':
-        if keyword:
-            cursor.execute("""
-                SELECT c.*, u.name as owner_name
-                FROM customers c
-                LEFT JOIN users u ON c.owner_id = u.username
-                WHERE c.company LIKE ? OR c.name LIKE ? OR c.contact_name LIKE ?
-                ORDER BY c.created_at DESC
-            """, (f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'))
-        else:
-            cursor.execute("""
-                SELECT c.*, u.name as owner_name
-                FROM customers c
-                LEFT JOIN users u ON c.owner_id = u.username
-                ORDER BY c.created_at DESC
-            """)
-    else:
-        if keyword:
-            cursor.execute("""
-                SELECT c.*, u.name as owner_name
-                FROM customers c
-                LEFT JOIN users u ON c.owner_id = u.username
-                WHERE c.owner_id = ? AND (c.company LIKE ? OR c.name LIKE ? OR c.contact_name LIKE ?)
-                ORDER BY c.created_at DESC
-            """, (username, f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'))
-        else:
-            cursor.execute("""
-                SELECT c.*, u.name as owner_name
-                FROM customers c
-                LEFT JOIN users u ON c.owner_id = u.username
-                WHERE c.owner_id = ?
-                ORDER BY c.created_at DESC
-            """, (username,))
+    conditions = []
+    params = []
+
+    if role != '主任' and role != '院长':
+        conditions.append("c.owner_id = ?")
+        params.append(username)
+
+    if keyword:
+        conditions.append("(c.company LIKE ? OR c.name LIKE ? OR c.contact_name LIKE ? OR c.phone LIKE ?)")
+        params.extend([f'%{keyword}%', f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'])
+    if level:
+        conditions.append("c.level = ?")
+        params.append(level)
+    if industry:
+        conditions.append("c.industry = ?")
+        params.append(industry)
+    if source:
+        conditions.append("c.source = ?")
+        params.append(source)
+
+    where_clause = ' AND '.join(conditions) if conditions else '1=1'
+
+    cursor.execute(f"""
+        SELECT c.*, u.name as owner_name
+        FROM customers c
+        LEFT JOIN users u ON c.owner_id = u.username
+        WHERE {where_clause}
+        ORDER BY c.created_at DESC
+    """, params)
 
     rows = cursor.fetchall()
     customers = []
@@ -74,12 +73,13 @@ def create_customer():
 
     try:
         cursor.execute("""
-            INSERT INTO customers (name, company, phone, level, source, owner_id, contact_name, email, industry, region, created_at, last_follow)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            INSERT INTO customers (name, company, phone, level, source, owner_id, contact_name, email, industry, region, address, created_at, last_follow)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """, (
             data.get('name'), data.get('company'), data.get('phone'),
             data.get('level'), data.get('source'), data.get('owner_id'),
-            data.get('contact_name'), data.get('email'), data.get('industry'), data.get('region')
+            data.get('contact_name'), data.get('email'), data.get('industry'),
+            data.get('region'), data.get('address')
         ))
         db.commit()
 
@@ -179,26 +179,28 @@ def update_customer(cust_id):
                 UPDATE customers SET
                     name=?, company=?, phone=?, level=?, source=?,
                     contact_name=?, email=?, industry=?, region=?,
-                    owner_id=?, previous_owner=owner_id
+                    address=?, owner_id=?, previous_owner=owner_id
                 WHERE id=?
             """, (
                 data.get('name'), data.get('company'), data.get('phone'),
                 data.get('level'), data.get('source'),
                 data.get('contact_name'), data.get('email'),
                 data.get('industry'), data.get('region'),
-                data.get('owner_id'), cust_id
+                data.get('address'), data.get('owner_id'), cust_id
             ))
         else:
             cursor.execute("""
                 UPDATE customers SET
                     name=?, company=?, phone=?, level=?, source=?,
-                    contact_name=?, email=?, industry=?, region=?
+                    contact_name=?, email=?, industry=?, region=?,
+                    address=?
                 WHERE id=?
             """, (
                 data.get('name'), data.get('company'), data.get('phone'),
                 data.get('level'), data.get('source'),
                 data.get('contact_name'), data.get('email'),
-                data.get('industry'), data.get('region'), cust_id
+                data.get('industry'), data.get('region'),
+                data.get('address'), cust_id
             ))
         db.commit()
 
@@ -341,6 +343,126 @@ def get_customer_profile(cust_id):
             'visits': visits,
             'stats': stats,
             'enterprise': enterprise
+        }
+    })
+
+
+@customers_bp.route('/api/customers/analysis', methods=['GET'])
+@token_required
+def analyze_customers():
+    """自动收集和分析客户数据：等级分布、行业分布、来源分布、地区分布、转化漏斗。"""
+    payload = request.current_user
+    username = payload['username']
+    role = payload['role']
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # 权限过滤
+    owner_filter = "" if role in ('主任', '院长') else "WHERE c.owner_id = ?"
+    owner_params = [] if role in ('主任', '院长') else [username]
+
+    # 1. 总数
+    cursor.execute(f"SELECT COUNT(*) as total FROM customers c {owner_filter}", owner_params)
+    total = cursor.fetchone()['total']
+
+    # 2. 等级分布
+    cursor.execute(f"""
+        SELECT COALESCE(NULLIF(c.level, ''), '未分级') as level, COUNT(*) as count
+        FROM customers c {owner_filter}
+        GROUP BY c.level ORDER BY count DESC
+    """, owner_params)
+    level_dist = [dict(r) for r in cursor.fetchall()]
+
+    # 3. 行业分布
+    cursor.execute(f"""
+        SELECT COALESCE(NULLIF(c.industry, ''), '未分类') as industry, COUNT(*) as count
+        FROM customers c {owner_filter}
+        GROUP BY c.industry ORDER BY count DESC
+    """, owner_params)
+    industry_dist = [dict(r) for r in cursor.fetchall()]
+
+    # 4. 来源分布
+    cursor.execute(f"""
+        SELECT COALESCE(NULLIF(c.source, ''), '未知') as source, COUNT(*) as count
+        FROM customers c {owner_filter}
+        GROUP BY c.source ORDER BY count DESC
+    """, owner_params)
+    source_dist = [dict(r) for r in cursor.fetchall()]
+
+    # 5. 地区分布
+    cursor.execute(f"""
+        SELECT COALESCE(NULLIF(c.region, ''), '未知') as region, COUNT(*) as count
+        FROM customers c {owner_filter}
+        GROUP BY c.region ORDER BY count DESC LIMIT 10
+    """, owner_params)
+    region_dist = [dict(r) for r in cursor.fetchall()]
+
+    # 6. 转化漏斗：客户数 → 有商机数 → 有合同数 → 有回款数
+    cust_cond = "c.owner_id = ?" if role not in ('主任', '院长') else "1=1"
+    cust_params = [username] if role not in ('主任', '院长') else []
+
+    cursor.execute(f"""
+        SELECT COUNT(DISTINCT c.id) as total FROM customers c WHERE {cust_cond}
+    """, cust_params)
+    total_customers = cursor.fetchone()['total']
+
+    cursor.execute(f"""
+        SELECT COUNT(DISTINCT c.id) as total FROM customers c
+        WHERE {cust_cond} AND EXISTS (SELECT 1 FROM business b WHERE b.cust_id = c.id)
+    """, cust_params)
+    has_business = cursor.fetchone()['total']
+
+    cursor.execute(f"""
+        SELECT COUNT(DISTINCT c.id) as total FROM customers c
+        WHERE {cust_cond} AND EXISTS (SELECT 1 FROM contracts ct WHERE ct.cust_id = c.id)
+    """, cust_params)
+    has_contract = cursor.fetchone()['total']
+
+    cursor.execute(f"""
+        SELECT COUNT(DISTINCT c.id) as total FROM customers c
+        WHERE {cust_cond} AND EXISTS (
+            SELECT 1 FROM contracts ct WHERE ct.cust_id = c.id AND ct.paid_amt > 0
+        )
+    """, cust_params)
+    has_payment = cursor.fetchone()['total']
+
+    funnel = [
+        {'stage': '客户总数', 'count': total_customers},
+        {'stage': '有商机', 'count': has_business},
+        {'stage': '有合同', 'count': has_contract},
+        {'stage': '已回款', 'count': has_payment},
+    ]
+
+    # 7. 负责人业绩排行（仅管理层可见）
+    owner_ranking = []
+    if role in ('主任', '院长'):
+        cursor.execute("""
+            SELECT u.name as owner_name, c.owner_id,
+                   COUNT(DISTINCT c.id) as customer_count,
+                   COUNT(DISTINCT b.id) as business_count,
+                   COUNT(DISTINCT ct.id) as contract_count,
+                   COALESCE(SUM(ct.total_amt), 0) as total_amount
+            FROM customers c
+            LEFT JOIN users u ON c.owner_id = u.username
+            LEFT JOIN business b ON b.cust_id = c.id
+            LEFT JOIN contracts ct ON ct.cust_id = c.id
+            GROUP BY c.owner_id
+            ORDER BY total_amount DESC
+        """)
+        owner_ranking = [dict(r) for r in cursor.fetchall()]
+
+    return jsonify({
+        'code': 200,
+        'message': 'success',
+        'data': {
+            'total': total,
+            'level_distribution': level_dist,
+            'industry_distribution': industry_dist,
+            'source_distribution': source_dist,
+            'region_distribution': region_dist,
+            'conversion_funnel': funnel,
+            'owner_ranking': owner_ranking,
         }
     })
 

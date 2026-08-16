@@ -160,6 +160,12 @@
                 {{ row.work_type === 'other' ? '-' : (row.customer_company || '-') }}
               </template>
             </el-table-column>
+            <el-table-column prop="enterprise_name" label="关联企业" min-width="140" show-overflow-tooltip>
+              <template #default="{ row }">
+                <el-link v-if="row.enterprise_id" type="primary" @click="$router.push('/enterprises')">{{ row.enterprise_name }}</el-link>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="purpose" label="内容" min-width="160" show-overflow-tooltip>
               <template #default="{ row }">
                 {{ row.work_type === 'other' ? (row.work_content || '-') : (row.purpose || '-') }}
@@ -324,11 +330,21 @@
         </el-form-item>
         <el-form-item v-if="visitForm.work_type === 'visit'" label="客户" prop="cust_id">
           <el-select v-model="visitForm.cust_id" placeholder="选择客户" filterable>
-            <el-option 
-              v-for="customer in customerList" 
-              :key="customer.id" 
-              :label="`${customer.name} (${customer.company})`" 
+            <el-option
+              v-for="customer in customerList"
+              :key="customer.id"
+              :label="`${customer.name} (${customer.company})`"
               :value="customer.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="visitForm.work_type === 'visit'" label="关联企业">
+          <el-select v-model="visitForm.enterprise_id" placeholder="选择企业信息库（可选）" filterable clearable>
+            <el-option
+              v-for="ent in enterpriseList"
+              :key="ent.id"
+              :label="ent.name"
+              :value="ent.id"
             />
           </el-select>
         </el-form-item>
@@ -391,6 +407,9 @@
         </el-descriptions-item>
         <el-descriptions-item v-if="currentVisit.work_type === 'visit'" label="客户">
           {{ currentVisit.customer_name }} ({{ currentVisit.customer_company }})
+        </el-descriptions-item>
+        <el-descriptions-item v-if="currentVisit.enterprise_id" label="关联企业">
+          <el-link type="primary" @click="$router.push('/enterprises')">{{ currentVisit.enterprise_name }}</el-link>
         </el-descriptions-item>
         <el-descriptions-item label="计划日期">
           {{ formatDate(currentVisit.plan_date) }}
@@ -642,6 +661,7 @@ const visits = ref([])
 const stats = ref({})
 const customerList = ref([])
 const userList = ref([])
+const enterpriseList = ref([])
 
 const filterDateRange = ref([])
 const filterStatus = ref('')
@@ -669,6 +689,7 @@ const visitForm = reactive({
   id: null,
   work_type: 'visit',
   cust_id: null,
+  enterprise_id: null,
   work_content: '',
   visitor_id: authStore.username,
   plan_date: '',
@@ -910,6 +931,20 @@ const fetchUsers = async () => {
   }
 }
 
+const fetchEnterprises = async () => {
+  try {
+    const res = await fetch('/api/enterprises', {
+      headers: { 'Authorization': `Bearer ${token.value}` }
+    })
+    const data = await res.json()
+    if (data.code === 200) {
+      enterpriseList.value = data.data || []
+    }
+  } catch (error) {
+    console.error('获取企业列表失败:', error)
+  }
+}
+
 // 导出应用中心工作周报（Excel：每人本周工作 + 下周安排）
 const exporting = ref(false)
 const exportWeeklyReport = async () => {
@@ -953,6 +988,7 @@ const openAddDialog = () => {
     id: null,
     work_type: 'visit',
     cust_id: null,
+    enterprise_id: null,
     work_content: '',
     visitor_id: authStore.username,
     plan_date: new Date().toISOString().split('T')[0],
@@ -975,6 +1011,7 @@ const openEditDialog = (visit) => {
     id: visit.id,
     work_type: visit.work_type || 'visit',
     cust_id: visit.cust_id,
+    enterprise_id: visit.enterprise_id || null,
     work_content: visit.work_content || '',
     visitor_id: visit.visitor_id,
     plan_date: visit.plan_date,
@@ -1248,6 +1285,7 @@ onMounted(async () => {
   fetchVisits()
   fetchStats()
   fetchCustomers()
+  fetchEnterprises()
   await fetchUsers()
   if (userList.value.length > 0 && !activePersonnelTab.value) {
     activePersonnelTab.value = userList.value[0].username

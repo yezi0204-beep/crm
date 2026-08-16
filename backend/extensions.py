@@ -87,6 +87,7 @@ def _init_tables(db):
     _init_follow_logs_table(cursor)
     _init_enterprise_table(cursor)
     _init_other_tables(cursor)
+    _init_products_and_quotes_tables(cursor)
     db.commit()
 
 
@@ -142,7 +143,34 @@ def _init_tokens_table(cursor):
 
 def _init_other_tables(cursor):
     """其他可能被引用的表，按需补建。"""
-    pass
+    # customers 表：如果不存在则创建
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS customers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                company TEXT,
+                level TEXT,
+                source TEXT,
+                owner_id TEXT,
+                last_follow DATE,
+                created_at DATE DEFAULT CURRENT_TIMESTAMP,
+                phone TEXT,
+                contact_name TEXT,
+                email TEXT,
+                industry TEXT,
+                region TEXT,
+                address TEXT,
+                previous_owner TEXT
+            )
+        """)
+    except Exception:
+        pass
+    # 为已有 customers 表补充 address 字段
+    try:
+        cursor.execute("ALTER TABLE customers ADD COLUMN address TEXT")
+    except Exception:
+        pass
 
 
 def _init_knowledge_base_table(cursor):
@@ -900,6 +928,121 @@ def _init_enterprise_table(cursor):
         pass
     try:
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ent_visit ON enterprise_visits(enterprise_id, visit_id)")
+    except Exception:
+        pass
+
+
+def _init_products_and_quotes_tables(cursor):
+    """产品库存与报价管理表。"""
+    # products 表：产品基础信息 + 实时库存
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                model TEXT,
+                category TEXT,
+                unit TEXT,
+                price REAL DEFAULT 0,
+                cost REAL DEFAULT 0,
+                stock REAL DEFAULT 0,
+                warn_threshold REAL DEFAULT 0,
+                description TEXT,
+                owner_id TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except Exception:
+        pass
+    # 为已有 products 表补齐缺失字段
+    for col, decl in [
+        ('name', 'TEXT NOT NULL DEFAULT \'\''),
+        ('model', 'TEXT'),
+        ('category', 'TEXT'),
+        ('unit', 'TEXT'),
+        ('price', 'REAL DEFAULT 0'),
+        ('cost', 'REAL DEFAULT 0'),
+        ('stock', 'REAL DEFAULT 0'),
+        ('warn_threshold', 'REAL DEFAULT 0'),
+        ('description', 'TEXT'),
+        ('owner_id', 'TEXT'),
+        ('updated_at', 'TEXT DEFAULT CURRENT_TIMESTAMP'),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE products ADD COLUMN {col} {decl}")
+        except Exception:
+            pass
+
+    # inventory_records 表：出入库流水
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inventory_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                reference TEXT,
+                operator_id TEXT,
+                remark TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (product_id) REFERENCES products(id)
+            )
+        """)
+    except Exception:
+        pass
+
+    # quotes 表：报价单主表
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS quotes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quote_no TEXT NOT NULL UNIQUE,
+                cust_id INTEGER,
+                b_id INTEGER,
+                title TEXT,
+                total_amount REAL DEFAULT 0,
+                status TEXT DEFAULT 'draft',
+                valid_until TEXT,
+                owner_id TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                remark TEXT,
+                FOREIGN KEY (cust_id) REFERENCES customers(id),
+                FOREIGN KEY (b_id) REFERENCES business(id)
+            )
+        """)
+    except Exception:
+        pass
+    # 为已有 quotes 表补齐缺失字段
+    for col, decl in [
+        ('b_id', 'INTEGER'),
+        ('valid_until', 'TEXT'),
+        ('updated_at', 'TEXT DEFAULT CURRENT_TIMESTAMP'),
+        ('remark', 'TEXT'),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE quotes ADD COLUMN {col} {decl}")
+        except Exception:
+            pass
+
+    # quote_items 表：报价单明细
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS quote_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quote_id INTEGER NOT NULL,
+                product_id INTEGER,
+                name TEXT,
+                model TEXT,
+                qty REAL DEFAULT 1,
+                unit_price REAL DEFAULT 0,
+                amount REAL DEFAULT 0,
+                remark TEXT,
+                FOREIGN KEY (quote_id) REFERENCES quotes(id),
+                FOREIGN KEY (product_id) REFERENCES products(id)
+            )
+        """)
     except Exception:
         pass
 

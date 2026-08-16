@@ -53,7 +53,13 @@ def get_visits():
     cursor.execute(f"""
         SELECT v.*, c.name as customer_name, c.company as customer_company,
                c.contact_name as contact_name, c.phone as customer_phone,
-               u.name as visitor_name
+               u.name as visitor_name,
+               (SELECT e.id FROM enterprises e
+                JOIN enterprise_visits ev ON ev.enterprise_id = e.id
+                WHERE ev.visit_id = v.id LIMIT 1) as enterprise_id,
+               (SELECT e.name FROM enterprises e
+                JOIN enterprise_visits ev ON ev.enterprise_id = e.id
+                WHERE ev.visit_id = v.id LIMIT 1) as enterprise_name
         FROM visits v
         LEFT JOIN customers c ON v.cust_id = c.id
         LEFT JOIN users u ON v.visitor_id = u.username
@@ -76,7 +82,13 @@ def get_visit(visit_id):
     cursor.execute("""
         SELECT v.*, c.name as customer_name, c.company as customer_company,
                c.contact_name as contact_name, c.phone as customer_phone,
-               u.name as visitor_name
+               u.name as visitor_name,
+               (SELECT e.id FROM enterprises e
+                JOIN enterprise_visits ev ON ev.enterprise_id = e.id
+                WHERE ev.visit_id = v.id LIMIT 1) as enterprise_id,
+               (SELECT e.name FROM enterprises e
+                JOIN enterprise_visits ev ON ev.enterprise_id = e.id
+                WHERE ev.visit_id = v.id LIMIT 1) as enterprise_name
         FROM visits v
         LEFT JOIN customers c ON v.cust_id = c.id
         LEFT JOIN users u ON v.visitor_id = u.username
@@ -123,12 +135,25 @@ def create_visit():
             work_content
         ))
         db.commit()
+        visit_id = cursor.lastrowid
 
-        work_desc = data.get("purpose", "") if work_type == 'visit' else data.get("work_content", "")
+        # 如果传入了 enterprise_id，自动写入关联表
+        enterprise_id = data.get('enterprise_id')
+        if enterprise_id:
+            try:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO enterprise_visits (enterprise_id, visit_id) VALUES (?, ?)",
+                    (enterprise_id, visit_id)
+                )
+                db.commit()
+            except Exception:
+                pass
+
+        work_desc = data.get("purpose", "") if work_type == "visit" else data.get("work_content", "")
         record_operation_log(username, '创建', '拜访排班', 
             f'创建{("拜访" if work_type == "visit" else "其它工作")}计划：{data.get("plan_date")} - {work_desc}')
 
-        return jsonify({'code': 200, 'message': '创建成功', 'data': {'id': cursor.lastrowid}})
+        return jsonify({'code': 200, 'message': '创建成功', 'data': {'id': visit_id}})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
@@ -183,6 +208,22 @@ def update_visit(visit_id):
             record_operation_log(username, '编辑', '拜访排班', 
                 f'编辑排班计划 ID:{visit_id}')
 
+        # 如果传入了 enterprise_id，更新企业关联
+        enterprise_id = data.get('enterprise_id')
+        if enterprise_id is not None:
+            # 先删除旧关联
+            cursor.execute("DELETE FROM enterprise_visits WHERE visit_id = ?", (visit_id,))
+            # 如果传入了新的企业ID，写入新关联
+            if enterprise_id:
+                try:
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO enterprise_visits (enterprise_id, visit_id) VALUES (?, ?)",
+                        (enterprise_id, visit_id)
+                    )
+                except Exception:
+                    pass
+            db.commit()
+
         return jsonify({'code': 200, 'message': '更新成功', 'data': None})
     except Exception as e:
         db.rollback()
@@ -208,6 +249,7 @@ def delete_visit(visit_id):
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     try:
+        cursor.execute("DELETE FROM enterprise_visits WHERE visit_id = ?", (visit_id,))
         cursor.execute("DELETE FROM visits WHERE id=?", (visit_id,))
         db.commit()
 
