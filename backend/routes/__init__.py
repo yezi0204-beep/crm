@@ -16,6 +16,7 @@ knowledge_ext_bp = Blueprint('knowledge_ext', __name__)
 knowledge_graph_bp = Blueprint('knowledge_graph', __name__)
 leads_bp = Blueprint('leads', __name__)
 agent_agent_bp = Blueprint('agent_agent', __name__)
+enterprises_bp = Blueprint('enterprises', __name__)
 
 def register_blueprints(app):
     from .auth import register_routes as register_auth
@@ -34,6 +35,7 @@ def register_blueprints(app):
     from .knowledge_graph import register_routes as register_knowledge_graph
     from .leads import register_routes as register_leads
     from .agent_agent import register_routes as register_agent_agent
+    from .enterprises import register_routes as register_enterprises
 
     register_auth(app)
     register_customers(app)
@@ -51,3 +53,7 @@ def register_blueprints(app):
     register_knowledge_graph(app)
     register_leads(app)
     register_agent_agent(app)
+    register_enterprises(app)
+
+    from .smart_import import smart_import_bp
+    app.register_blueprint(smart_import_bp)

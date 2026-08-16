@@ -314,6 +314,22 @@ def get_customer_profile(cust_id):
         'follow_count': len(follow_logs)
     }
 
+    # 7. 关联企业信息（按客户公司名匹配企业信息库）
+    enterprise = None
+    if customer_company:
+        cursor.execute("""
+            SELECT e.id, e.name, e.established_date, e.location, e.personnel_size,
+                   e.brief, e.registered_capital, e.business_scope, e.main_qualifications,
+                   e.main_products, e.relationship_status, e.cooperation_opportunities,
+                   e.website, e.contact_person, e.contact_info
+            FROM enterprises e
+            WHERE e.name = ? OR e.name LIKE ? OR ? LIKE '%' || e.name || '%'
+            LIMIT 1
+        """, (customer_company, f'%{customer_company}%', customer_company))
+        ent_row = cursor.fetchone()
+        if ent_row:
+            enterprise = dict(ent_row)
+
     return jsonify({
         'code': 200,
         'message': 'success',
@@ -323,7 +339,8 @@ def get_customer_profile(cust_id):
             'business': business,
             'contracts': contracts,
             'visits': visits,
-            'stats': stats
+            'stats': stats,
+            'enterprise': enterprise
         }
     })
 

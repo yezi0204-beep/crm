@@ -74,6 +74,10 @@
             <span class="menu-icon">📡</span>
             <span>智能线索</span>
           </el-menu-item>
+          <el-menu-item index="/enterprises">
+            <span class="menu-icon">🏢</span>
+            <span>企业信息库</span>
+          </el-menu-item>
         </div>
         
         <div class="menu-group">
@@ -114,6 +118,10 @@
           <el-menu-item index="/qualifications">
             <span class="menu-icon">📜</span>
             <span>资质管理</span>
+          </el-menu-item>
+          <el-menu-item index="/smart-import">
+            <span class="menu-icon">📥</span>
+            <span>智能导入</span>
           </el-menu-item>
           <el-menu-item index="/operation-logs" v-if="authStore.role === '主任'">
             <span class="menu-icon">📝</span>
@@ -199,6 +207,7 @@ const pageTitleMap = {
   '/knowledge': '企业知识库',
   '/knowledge-docs': '知识文档中心',
   '/qualifications': '资质信息管理',
+  '/smart-import': '智能导入',
   '/operation-logs': '操作日志'
 }
 

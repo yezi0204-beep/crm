@@ -290,8 +290,10 @@ async function fetchPersonnel() {
 async function fetchUserOptions() {
   try {
     const res = await api.get('/users')
-    if (res.code === 200 && res.data?.users) {
-      userOptions.value = res.data.users.map(u => ({ username: u.username, name: u.name || u.username }))
+    if (res.code === 200) {
+      // 后端 /api/users 返回 { code:200, data: [用户数组] }，data 直接是数组
+      const users = Array.isArray(res.data) ? res.data : (res.data?.users || [])
+      userOptions.value = users.map(u => ({ username: u.username, name: u.name || u.username }))
     }
   } catch (e) { /* ignore */ }
 }

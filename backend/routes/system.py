@@ -276,11 +276,11 @@ def get_alerts():
 
     if role == '主任' or role == '院长':
         cursor.execute("""
-            SELECT id, contract_name, expected_income_date, total_amt, paid_amt, owner_id, u.name as owner_name
+            SELECT c.id, c.contract_name, c.expected_income_date, c.total_amt, c.paid_amt, c.owner_id, u.name as owner_name
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
-            WHERE c.status = '执行中' AND expected_income_date IS NOT NULL AND expected_income_date != ''
-                AND expected_income_date >= ? AND expected_income_date <= ?
+            WHERE c.status = '执行中' AND c.expected_income_date IS NOT NULL AND c.expected_income_date != ''
+                AND c.expected_income_date >= ? AND c.expected_income_date <= ?
             ORDER BY expected_income_date ASC
         """, (today, seven_days_later))
         rows = cursor.fetchall()
@@ -296,11 +296,11 @@ def get_alerts():
             })
 
         cursor.execute("""
-            SELECT id, contract_name, acceptance_date, owner_id, u.name as owner_name
+            SELECT c.id, c.contract_name, c.acceptance_date, c.owner_id, u.name as owner_name
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
-            WHERE c.status = '执行中' AND acceptance_date IS NOT NULL AND acceptance_date != ''
-                AND acceptance_date >= ? AND acceptance_date <= ?
+            WHERE c.status = '执行中' AND c.acceptance_date IS NOT NULL AND c.acceptance_date != ''
+                AND c.acceptance_date >= ? AND c.acceptance_date <= ?
             ORDER BY acceptance_date ASC
         """, (today, seven_days_later))
         rows = cursor.fetchall()
@@ -316,11 +316,11 @@ def get_alerts():
             })
 
         cursor.execute("""
-            SELECT id, title, predict_date, owner_id, u.name as owner_name
+            SELECT b.id, b.title, b.predict_date, b.owner_id, u.name as owner_name
             FROM business b
             LEFT JOIN users u ON b.owner_id = u.username
-            WHERE b.status = 'active' AND predict_date IS NOT NULL AND predict_date != ''
-                AND substr(predict_date, 1, 7) IN (?, ?)
+            WHERE b.status = 'active' AND b.predict_date IS NOT NULL AND b.predict_date != ''
+                AND substr(b.predict_date, 1, 7) IN (?, ?)
             ORDER BY predict_date ASC
         """, (this_month, next_month))
         rows = cursor.fetchall()
@@ -336,12 +336,12 @@ def get_alerts():
             })
     else:
         cursor.execute("""
-            SELECT id, contract_name, expected_income_date, total_amt, paid_amt, owner_id, u.name as owner_name
+            SELECT c.id, c.contract_name, c.expected_income_date, c.total_amt, c.paid_amt, c.owner_id, u.name as owner_name
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
-            WHERE c.status = '执行中' AND owner_id = ?
-                AND expected_income_date IS NOT NULL AND expected_income_date != ''
-                AND expected_income_date >= ? AND expected_income_date <= ?
+            WHERE c.status = '执行中' AND c.owner_id = ?
+                AND c.expected_income_date IS NOT NULL AND c.expected_income_date != ''
+                AND c.expected_income_date >= ? AND c.expected_income_date <= ?
             ORDER BY expected_income_date ASC
         """, (username, today, seven_days_later))
         rows = cursor.fetchall()
@@ -357,12 +357,12 @@ def get_alerts():
             })
 
         cursor.execute("""
-            SELECT id, contract_name, acceptance_date, owner_id, u.name as owner_name
+            SELECT c.id, c.contract_name, c.acceptance_date, c.owner_id, u.name as owner_name
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
-            WHERE c.status = '执行中' AND owner_id = ?
-                AND acceptance_date IS NOT NULL AND acceptance_date != ''
-                AND acceptance_date >= ? AND acceptance_date <= ?
+            WHERE c.status = '执行中' AND c.owner_id = ?
+                AND c.acceptance_date IS NOT NULL AND c.acceptance_date != ''
+                AND c.acceptance_date >= ? AND c.acceptance_date <= ?
             ORDER BY acceptance_date ASC
         """, (username, today, seven_days_later))
         rows = cursor.fetchall()
@@ -378,12 +378,12 @@ def get_alerts():
             })
 
         cursor.execute("""
-            SELECT id, title, predict_date, owner_id, u.name as owner_name
+            SELECT b.id, b.title, b.predict_date, b.owner_id, u.name as owner_name
             FROM business b
             LEFT JOIN users u ON b.owner_id = u.username
             WHERE b.status = 'active' AND b.owner_id = ?
-                AND predict_date IS NOT NULL AND predict_date != ''
-                AND substr(predict_date, 1, 7) IN (?, ?)
+                AND b.predict_date IS NOT NULL AND b.predict_date != ''
+                AND substr(b.predict_date, 1, 7) IN (?, ?)
             ORDER BY predict_date ASC
         """, (username, this_month, next_month))
         rows = cursor.fetchall()

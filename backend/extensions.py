@@ -85,6 +85,7 @@ def _init_tables(db):
     _init_knowledge_extension_tables(cursor)
     _init_lead_tables(cursor)
     _init_follow_logs_table(cursor)
+    _init_enterprise_table(cursor)
     _init_other_tables(cursor)
     db.commit()
 
@@ -831,6 +832,75 @@ def _init_follow_logs_table(cursor):
     try:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_follow_user ON follow_logs(user_id)")
     except:
+        pass
+
+
+def _init_enterprise_table(cursor):
+    """企业信息库表。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS enterprises (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                established_date TEXT,
+                location TEXT,
+                personnel_size TEXT,
+                brief TEXT,
+                registered_capital TEXT,
+                business_scope TEXT,
+                main_qualifications TEXT,
+                main_products TEXT,
+                relationship_status TEXT DEFAULT '未接触',
+                cooperation_opportunities TEXT,
+                website TEXT,
+                contact_person TEXT,
+                contact_info TEXT,
+                owner_id TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except Exception:
+        pass
+    # 为已有表补齐缺失字段
+    for col, decl in [
+        ('established_date', 'TEXT'),
+        ('location', 'TEXT'),
+        ('personnel_size', 'TEXT'),
+        ('brief', 'TEXT'),
+        ('registered_capital', 'TEXT'),
+        ('business_scope', 'TEXT'),
+        ('main_qualifications', 'TEXT'),
+        ('main_products', 'TEXT'),
+        ('relationship_status', "TEXT DEFAULT '未接触'"),
+        ('cooperation_opportunities', 'TEXT'),
+        ('website', 'TEXT'),
+        ('contact_person', 'TEXT'),
+        ('contact_info', 'TEXT'),
+        ('owner_id', 'TEXT'),
+        ('updated_at', 'TEXT DEFAULT CURRENT_TIMESTAMP'),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE enterprises ADD COLUMN {col} {decl}")
+        except Exception:
+            pass
+    # 关联拜访记录的中间表
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS enterprise_visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                enterprise_id INTEGER NOT NULL,
+                visit_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (enterprise_id) REFERENCES enterprises(id),
+                FOREIGN KEY (visit_id) REFERENCES visits(id)
+            )
+        """)
+    except Exception:
+        pass
+    try:
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ent_visit ON enterprise_visits(enterprise_id, visit_id)")
+    except Exception:
         pass
 
 

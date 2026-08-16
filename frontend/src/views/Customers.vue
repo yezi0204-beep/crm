@@ -225,6 +225,32 @@
             </el-card>
           </div>
 
+          <!-- 关联企业信息 -->
+          <el-card class="profile-section" v-if="profileData.enterprise">
+            <template #header>
+              <span class="section-title">🏢 关联企业信息</span>
+              <el-button text size="small" @click="goToEnterprise" style="float:right;">查看企业详情</el-button>
+            </template>
+            <el-descriptions :column="3" border size="small">
+              <el-descriptions-item label="企业名称">{{ profileData.enterprise.name }}</el-descriptions-item>
+              <el-descriptions-item label="成立时间">{{ profileData.enterprise.established_date || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="公司位置">{{ profileData.enterprise.location || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="人员规模">{{ profileData.enterprise.personnel_size || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="注册资本">{{ profileData.enterprise.registered_capital || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="单位网址">{{ profileData.enterprise.website || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="关系状态">
+                <el-tag size="small">{{ profileData.enterprise.relationship_status || '未接触' }}</el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="联系人">{{ profileData.enterprise.contact_person || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="联系方式">{{ profileData.enterprise.contact_info || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="单位简介" :span="3">{{ profileData.enterprise.brief || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="业务范围" :span="3">{{ profileData.enterprise.business_scope || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="主要资质" :span="3">{{ profileData.enterprise.main_qualifications || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="主要产品和方案" :span="3">{{ profileData.enterprise.main_products || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="合作机会点" :span="3">{{ profileData.enterprise.cooperation_opportunities || '-' }}</el-descriptions-item>
+            </el-descriptions>
+          </el-card>
+
           <el-card class="profile-section">
             <template #header><span class="section-title">🕒 全生命周期轨迹</span></template>
             <el-timeline v-if="timelineEvents.length > 0">
@@ -261,8 +287,10 @@ import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
+import { useRouter } from 'vue-router'
 
 const authStore = useAuthStore()
+const router = useRouter()
 const customers = ref([])
 const showAddModal = ref(false)
 const formRef = ref(null)
@@ -525,6 +553,16 @@ const showProfile = async (row) => {
     showProfileDrawer.value = false
   } finally {
     profileLoading.value = false
+  }
+}
+
+// 跳转到企业信息库
+const goToEnterprise = () => {
+  if (profileData.value?.enterprise?.id) {
+    showProfileDrawer.value = false
+    router.push('/enterprises')
+  } else {
+    router.push('/enterprises')
   }
 }
 

@@ -102,6 +102,16 @@ const routes = [
         path: 'qualifications',
         name: 'Qualifications',
         component: () => import('../views/Qualifications.vue')
+      },
+      {
+        path: 'smart-import',
+        name: 'SmartImport',
+        component: () => import('../views/SmartImport.vue')
+      },
+      {
+        path: 'enterprises',
+        name: 'Enterprises',
+        component: () => import('../views/Enterprises.vue')
       }
     ]
   }
