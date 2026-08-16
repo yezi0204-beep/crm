@@ -19,6 +19,7 @@ agent_agent_bp = Blueprint('agent_agent', __name__)
 enterprises_bp = Blueprint('enterprises', __name__)
 products_bp = Blueprint('products', __name__)
 quotes_bp = Blueprint('quotes', __name__)
+marketing_bp = Blueprint('marketing', __name__)
 
 def register_blueprints(app):
     from .auth import register_routes as register_auth
@@ -40,6 +41,7 @@ def register_blueprints(app):
     from .enterprises import register_routes as register_enterprises
     from .products import register_routes as register_products
     from .quotes import register_routes as register_quotes
+    from .marketing import register_routes as register_marketing
 
     register_auth(app)
     register_customers(app)
@@ -60,6 +62,7 @@ def register_blueprints(app):
     register_enterprises(app)
     register_products(app)
     register_quotes(app)
+    register_marketing(app)
 
     from .smart_import import smart_import_bp
     app.register_blueprint(smart_import_bp)

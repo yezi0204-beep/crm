@@ -88,6 +88,7 @@ def _init_tables(db):
     _init_enterprise_table(cursor)
     _init_other_tables(cursor)
     _init_products_and_quotes_tables(cursor)
+    _init_marketing_tables(cursor)
     db.commit()
 
 
@@ -1041,6 +1042,113 @@ def _init_products_and_quotes_tables(cursor):
                 remark TEXT,
                 FOREIGN KEY (quote_id) REFERENCES quotes(id),
                 FOREIGN KEY (product_id) REFERENCES products(id)
+            )
+        """)
+    except Exception:
+        pass
+
+
+def _init_marketing_tables(cursor):
+    """营销管理表：活动、效果指标、触达受众、自动化规则。"""
+    # campaigns 表：营销活动主表
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT,
+                channel TEXT,
+                budget REAL DEFAULT 0,
+                actual_cost REAL DEFAULT 0,
+                start_date TEXT,
+                end_date TEXT,
+                status TEXT DEFAULT 'draft',
+                target_audience TEXT,
+                goal TEXT,
+                owner_id TEXT,
+                created_by TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                remark TEXT
+            )
+        """)
+    except Exception:
+        pass
+    # 为已有 campaigns 表补齐缺失字段
+    for col, decl in [
+        ('type', 'TEXT'),
+        ('channel', 'TEXT'),
+        ('budget', 'REAL DEFAULT 0'),
+        ('actual_cost', 'REAL DEFAULT 0'),
+        ('start_date', 'TEXT'),
+        ('end_date', 'TEXT'),
+        ('target_audience', 'TEXT'),
+        ('goal', 'TEXT'),
+        ('owner_id', 'TEXT'),
+        ('created_by', 'TEXT'),
+        ('updated_at', 'TEXT DEFAULT CURRENT_TIMESTAMP'),
+        ('remark', 'TEXT'),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE campaigns ADD COLUMN {col} {decl}")
+        except Exception:
+            pass
+
+    # campaign_metrics 表：营销效果指标（曝光/点击/线索/转化/营收）
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS campaign_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER NOT NULL,
+                metric_type TEXT NOT NULL,
+                metric_value REAL DEFAULT 0,
+                recorded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                recorded_by TEXT,
+                remark TEXT,
+                FOREIGN KEY (campaign_id) REFERENCES campaigns(id)
+            )
+        """)
+    except Exception:
+        pass
+
+    # campaign_audiences 表：营销活动触达受众记录
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS campaign_audiences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER NOT NULL,
+                cust_id INTEGER,
+                contact_name TEXT,
+                contact_info TEXT,
+                reach_status TEXT DEFAULT 'pending',
+                feedback TEXT,
+                reached_at TEXT,
+                converted_amount REAL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (campaign_id) REFERENCES campaigns(id),
+                FOREIGN KEY (cust_id) REFERENCES customers(id)
+            )
+        """)
+    except Exception:
+        pass
+
+    # campaign_automations 表：营销自动化规则（触发→动作）
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS campaign_automations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                trigger_type TEXT,
+                trigger_config TEXT,
+                action_type TEXT,
+                action_config TEXT,
+                status TEXT DEFAULT 'active',
+                owner_id TEXT,
+                last_run_at TEXT,
+                run_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                remark TEXT
             )
         """)
     except Exception:

@@ -71,7 +71,15 @@
             <span>拜访排班</span>
           </el-menu-item>
         </div>
-        
+
+        <div class="menu-group">
+          <div class="menu-group-title">📢 营销管理</div>
+          <el-menu-item index="/marketing">
+            <span class="menu-icon">📢</span>
+            <span>营销活动</span>
+          </el-menu-item>
+        </div>
+
         <div class="menu-group">
           <div class="menu-group-title">🌊 资源管理</div>
           <el-menu-item index="/pool">
