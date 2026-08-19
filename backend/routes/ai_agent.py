@@ -12,7 +12,9 @@
    - SSE 流式输出，用于查询意图的自然语言回答逐字显示
 4. 智能线索管理（POST /api/ai/leads/evaluate）
    - 结合历史成交数据由智能体评估线索意向分值
-   - 按行业/区域/工作量精准分配给最匹配的销售人员
+   - 复用 leads._assign_lead 多维度评分精准分配：综合销售人员的历史拜访案例、
+     商机推进情况、合同签订业绩，按行业匹配/历史业绩/商机转化/拜访经验/工作量
+     6个维度打分，科学推荐最匹配的负责人
 
 数据与 API 对接：智能体通过本模块直接读写 customers/follow_logs/business 等表，
 所有写操作复用既有约束（owner_id 隔离、update_customer_last_follow 等）。
@@ -504,31 +506,15 @@ def ai_leads_evaluate():
     db = get_db()
     cursor = db.cursor()
 
-    # 统计各销售人员当前商机数与负责行业，用于精准分配
-    # 用 user_roles 表查询（支持多角色），并列时 RANDOM() 随机分配
-    cursor.execute("""
-        SELECT u.username, u.name, COUNT(b.id) as biz_count
-        FROM users u
-        JOIN user_roles ur ON u.username = ur.username AND ur.role='销售'
-        LEFT JOIN business b ON b.owner_id = u.username AND b.status='active'
-        WHERE u.status='在职'
-        GROUP BY u.username
-        ORDER BY biz_count ASC, RANDOM()
-    """)
-    salespeople = [dict(r) for r in cursor.fetchall()]
-
-    # 历史成交行业分布（用于意向评估参考）
-    cursor.execute("""
-        SELECT industry, COUNT(*) as cnt FROM business
-        WHERE status='active' AND industry IS NOT NULL AND industry!=''
-        GROUP BY industry
-    """)
-    industry_stats = {r['industry']: r['cnt'] for r in cursor.fetchall()}
+    # 复用 leads 模块的销售画像加载与多维度分配逻辑
+    # 综合考虑销售人员的历史拜访案例、商机情况、合同签订情况科学推荐负责人
+    from .leads import _load_eval_context, _assign_lead
+    industry_stats, salespeople = _load_eval_context(cursor)
 
     results = []
     for lead in leads:
         score, reason = _evaluate_lead_intent(lead, industry_stats)
-        assignee = _assign_salesperson(lead, salespeople)
+        assignee = _assign_lead(lead, salespeople)
         results.append({
             'lead': lead,
             'intent_score': score,
@@ -571,16 +557,17 @@ def _evaluate_lead_intent(lead, industry_stats):
 
 
 def _assign_salesperson(lead, salespeople):
-    """按行业匹配 + 工作量均衡分配销售。"""
+    """[已废弃] 旧版仅按工作量分配；新逻辑请使用 leads._assign_lead。
+
+    保留函数签名仅为向后兼容，实际逻辑已委托给 leads 模块的多维度评分推荐：
+    综合销售人员的历史拜访案例、商机情况、合同签订情况科学推荐负责人。
+    """
     if not salespeople:
         return None
-    industry = (lead.get('industry') or '').strip()
-    region = (lead.get('region') or '').strip()
-    # 优先选当前商机最少（最空闲）的销售
     return {
         'username': salespeople[0]['username'],
         'name': salespeople[0]['name'],
-        'reason': f'当前商机数最少（{salespeople[0]["biz_count"]}单），工作量最均衡',
+        'reason': f'当前商机数最少（{salespeople[0].get("biz_count", 0)}单），工作量最均衡',
     }
 
 

@@ -32,26 +32,74 @@ def login():
 
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("SELECT username, password_hash, name, role, status, department FROM users WHERE username = ?", (username,))
+    cursor.execute("SELECT username, password_hash, name, role, status, department, profile_digest FROM users WHERE username = ?", (username,))
     row = cursor.fetchone()
 
     if row and check_password(password, row['password_hash']):
         if row['status'] == '离职':
             return jsonify({'code': 403, 'message': '该账号已离职，无法登录系统', 'data': None})
 
+        # ---- 7.1.2 完整性：校验用户资料是否被篡改 ----
+        try:
+            from security import get_integrity
+            integrity = get_integrity()
+            stored_digest = row['profile_digest']
+            if stored_digest:
+                ok = integrity.verify_profile_digest(
+                    username=row['username'], name=row['name'], role=row['role'],
+                    department=row['department'] or '', status=row['status'] or '在职',
+                    signature=stored_digest,
+                )
+                if not ok:
+                    return jsonify({
+                        'code': 401,
+                        'message': '身份信息完整性校验失败（可能已被篡改），请联系管理员',
+                        'data': None,
+                    })
+        except Exception:
+            pass
+
         LOGIN_ATTEMPTS.pop(ip_address, None)
         token = create_token(row['username'], row['name'], row['role'])
+
+        # ---- 7.1.3 真实性：签发数字证书身份令牌 ----
+        identity_token = None
+        identity_payload = None
+        try:
+            from security import get_authenticity
+            authenticity = get_authenticity()
+            identity_token = authenticity.issue_user_token(
+                username=row['username'],
+                name=row['name'],
+                role=row['role'],
+                ttl_seconds=86400,
+            )
+            identity_payload = authenticity.verify_user_token(identity_token)
+        except Exception:
+            pass
+
         record_operation_log(row['username'], '登录', '系统', f'用户 {row["name"]} 登录系统')
+
+        resp_data = {
+            'token': token,
+            'username': row['username'],
+            'name': row['name'],
+            'role': row['role'],
+            'department': row['department'] or '',
+        }
+        # 7.1.3 证书身份令牌（三段式：header/payload/signature）
+        if identity_token:
+            resp_data['identity_token'] = {
+                'header_b64': identity_token['header_b64'],
+                'payload_b64': identity_token['payload_b64'],
+                'signature_b64': identity_token['signature_b64'],
+            }
+            resp_data['identity_payload'] = identity_token['payload']
+
         return jsonify({
             'code': 200,
             'message': '登录成功',
-            'data': {
-                'token': token,
-                'username': row['username'],
-                'name': row['name'],
-                'role': row['role'],
-                'department': row['department'] or ''
-            }
+            'data': resp_data,
         })
 
     record_login_attempt(ip_address)

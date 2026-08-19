@@ -152,7 +152,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import * as echarts from 'echarts'
@@ -413,11 +413,15 @@ watch(timeRange, () => {
   fetchDashboardData()
 })
 
-onMounted(() => {
-  fetchDashboardData()
+onMounted(async () => {
+  // 关键：必须先初始化 ECharts（chart2 = echarts.init），
+  // 否则 fetchDashboardData 里的 updateFunnelChart() 会因 chart2==null 直接跳过，
+  // 导致看板永远只显示 mock 数据（100,50,35...）而不是真实商机统计。
+  initCharts()
+  await nextTick()
+  await fetchDashboardData()
   fetchRecentContracts()
   fetchAlerts()
-  initCharts()
   window.addEventListener('resize', handleResize)
 })
 

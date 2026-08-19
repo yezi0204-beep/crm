@@ -35,7 +35,7 @@
         :collapse="isCollapsed"
         @select="closeMobileSidebar"
       >
-        <div class="menu-group">
+        <div class="menu-group" v-if="!isHrRole">
           <div class="menu-group-title" v-show="!isCollapsed">📊 {{ t('menu.salesManagement') }}</div>
           <el-menu-item index="/dashboard">
             <span class="menu-icon">📊</span>
@@ -75,7 +75,7 @@
           </el-menu-item>
         </div>
 
-        <div class="menu-group">
+        <div class="menu-group" v-if="!isHrRole">
           <div class="menu-group-title" v-show="!isCollapsed">📢 {{ t('menu.marketingManagement') }}</div>
           <el-menu-item index="/marketing">
             <span class="menu-icon">📢</span>
@@ -83,7 +83,7 @@
           </el-menu-item>
         </div>
 
-        <div class="menu-group">
+        <div class="menu-group" v-if="!isHrRole">
           <div class="menu-group-title" v-show="!isCollapsed">🛠️ {{ t('menu.afterSales') }}</div>
           <el-menu-item index="/service">
             <span class="menu-icon">🛠️</span>
@@ -91,7 +91,7 @@
           </el-menu-item>
         </div>
 
-        <div class="menu-group">
+        <div class="menu-group" v-if="!isHrRole">
           <div class="menu-group-title" v-show="!isCollapsed">🌊 {{ t('menu.resourceManagement') }}</div>
           <el-menu-item index="/pool">
             <span class="menu-icon">🌊</span>
@@ -107,7 +107,7 @@
           </el-menu-item>
         </div>
 
-        <div class="menu-group">
+        <div class="menu-group" v-if="!isHrRole">
           <div class="menu-group-title" v-show="!isCollapsed">⚡ {{ t('menu.projectManagement') }}</div>
           <el-menu-item index="/workhours">
             <span class="menu-icon">⏱️</span>
@@ -120,6 +120,14 @@
         </div>
 
         <div class="menu-group">
+          <div class="menu-group-title" v-show="!isCollapsed">🧾 {{ t('menu.hrManagement') }}</div>
+          <el-menu-item index="/appraisal">
+            <span class="menu-icon">🧾</span>
+            <span>{{ t('menuItem.appraisal') }}</span>
+          </el-menu-item>
+        </div>
+
+        <div class="menu-group" v-if="!isHrRole">
           <div class="menu-group-title" v-show="!isCollapsed">🔧 {{ t('menu.systemManagement') }}</div>
           <el-menu-item index="/users" v-if="authStore.department === '应用中心' && authStore.role === '主任'">
             <span class="menu-icon">👥</span>
@@ -292,6 +300,9 @@ const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 const { language } = storeToRefs(settingsStore)
 const t = (key, params = null) => translate(language.value, key, params)
+
+// 人力角色：只能看到月度考核菜单
+const isHrRole = computed(() => authStore.role === '人力')
 
 const isCollapsed = ref(false)
 const isMobile = ref(false)

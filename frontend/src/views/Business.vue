@@ -749,17 +749,26 @@ const exportBusiness = () => {
   ElMessage.success('导出成功')
 }
 
-onMounted(() => {
+onMounted(async () => {
   // 从URL参数获取概率筛选条件（销售漏斗点击跳转）
-  const { prob_min, prob_max } = route.query
+  const { prob_min, prob_max, id } = route.query
   if (prob_min !== undefined && prob_max !== undefined) {
     probMin.value = Number(prob_min)
     probMax.value = Number(prob_max)
     statusFilter.value = 'active'
   }
-  fetchBusiness()
+  await fetchBusiness()
   fetchCustomers()
   fetchUsers()
+  // 从线索详情跳转过来时，自动打开对应商机的编辑对话框
+  if (id) {
+    const target = businessList.value.find(b => b.id === Number(id))
+    if (target) {
+      editBusiness(target)
+    } else {
+      ElMessage.info(`未找到商机 #${id}，可能已作废或归属他人`)
+    }
+  }
 })
 </script>
 

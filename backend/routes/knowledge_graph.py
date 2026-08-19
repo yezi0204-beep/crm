@@ -111,7 +111,7 @@ def _call_llm_for_graph(title, content):
                 {'role': 'user', 'content': prompt}
             ],
             'temperature': 0.3,
-            'max_tokens': 260000
+            'max_tokens': 200000
         }
 
         response = requests.post(

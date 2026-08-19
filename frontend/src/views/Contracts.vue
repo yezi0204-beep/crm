@@ -167,10 +167,12 @@
             />
           </template>
           
-          <el-table-column label="操作" min-width="180" fixed="right">
+          <el-table-column label="操作" min-width="280" fixed="right">
             <template #default="scope">
               <el-button size="small" @click="editContract(scope.row)">编辑</el-button>
               <el-button v-if="isAdmin" size="small" type="danger" @click="deleteContract(scope.row)">删除</el-button>
+              <el-button v-if="isAdmin" size="small" type="warning" @click="openCommission(scope.row)">分成</el-button>
+              <el-button v-if="scope.row.is_framework" size="small" type="success" @click="openAcceptance(scope.row)">验收</el-button>
               <el-button size="small" @click="previewFiles(scope.row)">预览</el-button>
             </template>
           </el-table-column>
@@ -302,7 +304,14 @@
             </el-form-item>
           </el-col>
         </el-row>
-        
+
+        <el-form-item label="框架合同">
+          <el-switch v-model="contractForm.is_framework" :active-value="1" :inactive-value="0" />
+          <span style="color: #909399; font-size: 12px; margin-left: 12px;">
+            框架合同按每月验收实际金额计入考核，非框架合同按合同总额一次性计入
+          </span>
+        </el-form-item>
+
         <el-form-item label="合同约定验收节点">
           <el-input v-model="contractForm.acceptance_nodes" type="textarea" :rows="3" />
         </el-form-item>
@@ -483,6 +492,159 @@
         <el-button v-if="importStep === 1" @click="showImportModal = false">取消</el-button>
       </template>
     </el-dialog>
+
+    <!-- 合同销售分成弹窗 -->
+    <el-dialog v-model="showCommissionModal" title="合同销售分成" width="680px" :close-on-click-modal="false">
+      <div v-if="commissionContract.name" style="margin-bottom: 16px; padding: 12px 16px; background: #f5f7fa; border-radius: 6px;">
+        <div style="font-weight: 700; font-size: 15px;">{{ commissionContract.name }}</div>
+        <div style="color: #909399; font-size: 13px; margin-top: 4px;">
+          合同金额：<strong style="color: #e6a23c;">{{ formatYuan(commissionContract.totalAmt) }}</strong> 元
+        </div>
+      </div>
+
+      <el-table :data="commissionRows" border stripe size="small" style="width: 100%;">
+        <el-table-column label="销售人员" min-width="160">
+          <template #default="{ row }">
+            <el-select v-model="row.username" filterable placeholder="选择销售" style="width: 100%;">
+              <el-option
+                v-for="u in salesUsers"
+                :key="u.username"
+                :label="`${u.name} (${u.username})`"
+                :value="u.username"
+              />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column label="分成比例(%)" width="160">
+          <template #default="{ row }">
+            <el-input-number v-model="row.ratio" :min="0" :max="100" :precision="2" :step="5" size="small" style="width: 100%;" />
+          </template>
+        </el-table-column>
+        <el-table-column label="分成金额(元)" width="140" align="right">
+          <template #default="{ row }">
+            <span style="color: #409eff; font-weight: 600;">
+              {{ formatYuan(commissionContract.totalAmt * (row.ratio || 0) / 100) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="80" align="center">
+          <template #default="{ $index }">
+            <el-button link type="danger" size="small" @click="commissionRows.splice($index, 1)">移除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div style="margin-top: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <el-button size="small" @click="addCommissionRow">+ 添加销售</el-button>
+        <div>
+          <span>比例合计：</span>
+          <strong :style="{ color: commissionTotalRatio === 100 ? '#67c23a' : '#f56c6c', fontSize: '16px' }">
+            {{ commissionTotalRatio.toFixed(2) }}%
+          </strong>
+          <el-tag v-if="commissionTotalRatio === 100" type="success" size="small" style="margin-left: 8px;">✓ 合规</el-tag>
+          <el-tag v-else type="danger" size="small" style="margin-left: 8px;">需等于 100%</el-tag>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="showCommissionModal = false">取消</el-button>
+        <el-button type="primary" :loading="savingCommission" @click="saveCommission">保存分成</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 框架合同验收记录弹窗 -->
+    <el-dialog v-model="showAcceptanceModal" title="框架合同验收记录" width="900px" :close-on-click-modal="false">
+      <div v-if="acceptanceContract.name" style="margin-bottom: 16px; padding: 12px 16px; background: #f5f7fa; border-radius: 6px;">
+        <div style="font-weight: 700; font-size: 15px;">
+          {{ acceptanceContract.name }}
+          <el-tag type="warning" size="small" style="margin-left: 8px;">框架合同</el-tag>
+        </div>
+        <div style="color: #909399; font-size: 13px; margin-top: 4px;">
+          合同总额：<strong>{{ formatYuan(acceptanceContract.totalAmt) }}</strong> 元
+          ｜ 累计验收：<strong style="color: #67c23a;">{{ formatYuan(acceptanceTotal) }}</strong> 元
+          ｜ 剩余：<strong style="color: #e6a23c;">{{ formatYuan(acceptanceContract.totalAmt - acceptanceTotal) }}</strong> 元
+        </div>
+      </div>
+
+      <!-- 新增验收记录表单 -->
+      <div style="margin-bottom: 16px; padding: 12px; border: 1px solid #ebeef5; border-radius: 6px;">
+        <div style="font-weight: 600; margin-bottom: 10px;">新增验收记录</div>
+        <el-row :gutter="12">
+          <el-col :span="6">
+            <el-date-picker v-model="newAcceptance.date" type="date" format="YYYY-MM-DD" value-format="YYYY-MM-DD"
+              placeholder="验收日期" style="width: 100%;" />
+          </el-col>
+          <el-col :span="6">
+            <el-input-number v-model="newAcceptance.amount" :min="0" :precision="2" :step="10000" placeholder="验收金额" style="width: 100%;" />
+          </el-col>
+          <el-col :span="8">
+            <el-input v-model="newAcceptance.note" placeholder="备注（可选）" />
+          </el-col>
+          <el-col :span="4">
+            <el-button type="primary" @click="addAcceptance" :loading="addingAcceptance">添加</el-button>
+          </el-col>
+        </el-row>
+        <!-- 本次验收分成分配 -->
+        <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed #ebeef5;">
+          <div style="display: flex; align-items: center; margin-bottom: 8px;">
+            <span style="font-weight: 600; font-size: 13px;">本次验收分成分配</span>
+            <el-button link type="primary" size="small" @click="addAccCommissionRow" style="margin-left: 12px;">+ 添加人员</el-button>
+            <span style="margin-left: auto; font-size: 13px;">
+              比例合计：<strong :style="{ color: newAcceptanceRatioSum === 100 ? '#67c23a' : '#f56c6c' }">{{ newAcceptanceRatioSum }}%</strong>
+              <template v-if="newAcceptance.amount > 0 && newAcceptanceRatioSum === 100">
+                ｜ 分配金额：<strong>{{ formatYuan(newAcceptance.amount) }}</strong> 元
+              </template>
+            </span>
+          </div>
+          <div v-for="(item, idx) in newAcceptance.commissions" :key="idx" style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <el-select v-model="item.username" placeholder="选择销售" filterable style="width: 180px;">
+              <el-option v-for="u in salesUsers" :key="u.username" :label="u.name + ' (' + u.username + ')'" :value="u.username" />
+            </el-select>
+            <el-input-number v-model="item.ratio" :min="0" :max="100" :precision="1" :step="10" style="width: 120px;" />
+            <span>%</span>
+            <span v-if="newAcceptance.amount > 0 && item.ratio > 0" style="color: #909399; font-size: 12px;">
+              = {{ formatYuan(newAcceptance.amount * item.ratio / 100) }} 元
+            </span>
+            <el-button link type="danger" size="small" @click="newAcceptance.commissions.splice(idx, 1)">移除</el-button>
+          </div>
+          <div v-if="!newAcceptance.commissions.length" style="color: #909399; font-size: 12px;">
+            不分配分成则按合同负责人独享 100% 计入考核
+          </div>
+        </div>
+      </div>
+
+      <!-- 验收记录列表 -->
+      <el-table :data="acceptanceRows" border stripe size="small" style="width: 100%;" empty-text="暂无验收记录">
+        <el-table-column prop="acceptance_date" label="验收日期" width="120" />
+        <el-table-column label="验收金额(元)" width="130" align="right">
+          <template #default="{ row }">
+            <strong style="color: #67c23a;">{{ formatYuan(row.acceptance_amount) }}</strong>
+          </template>
+        </el-table-column>
+        <el-table-column label="分成分配" min-width="250">
+          <template #default="{ row }">
+            <template v-if="row.commissions && row.commissions.length">
+              <el-tag v-for="c in row.commissions" :key="c.username" size="small" style="margin-right: 4px; margin-bottom: 2px;">
+                {{ getUserName(c.username) }}: {{ c.ratio }}%
+                <span v-if="row.acceptance_amount > 0" style="color: #909399;"> ({{ formatYuan(row.acceptance_amount * c.ratio / 100) }})</span>
+              </el-tag>
+            </template>
+            <span v-else style="color: #909399; font-size: 12px;">负责人独享 100%</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="note" label="备注" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="created_by" label="操作人" width="90" />
+        <el-table-column label="操作" width="70" align="center" v-if="isAdmin">
+          <template #default="{ row }">
+            <el-button link type="danger" size="small" @click="removeAcceptance(row.id)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <template #footer>
+        <el-button @click="showAcceptanceModal = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -563,6 +725,151 @@ const isAdminRole = computed(() => {
   return authStore.role === '主任' || authStore.role === '院长'
 })
 
+// ==================== 合同销售分成 ====================
+const showCommissionModal = ref(false)
+const savingCommission = ref(false)
+const commissionContract = reactive({ id: null, name: '', totalAmt: 0 })
+const commissionRows = ref([])
+const salesUsers = computed(() => {
+  // 包含 role=销售 或 user_roles 里包含销售角色 或 is_sales_override 的用户
+  return users.value.filter(u =>
+    u.role === '销售' ||
+    (u.roles && u.roles.includes('销售')) ||
+    u.is_sales_override === 1 || u.is_sales_override === true
+  )
+})
+const commissionTotalRatio = computed(() => {
+  return commissionRows.value.reduce((sum, r) => sum + (Number(r.ratio) || 0), 0)
+})
+
+async function openCommission(row) {
+  commissionContract.id = row.id
+  commissionContract.name = row.contract_name || row.contract_no || `合同#${row.id}`
+  commissionContract.totalAmt = Number(row.total_amt || 0)
+  commissionRows.value = []
+  showCommissionModal.value = true
+  try {
+    const res = await api.get(`/contracts/${row.id}/commissions`)
+    if (res && res.code === 200 && res.data) {
+      commissionRows.value = (res.data.commissions || []).map(c => ({
+        username: c.username, ratio: Number(c.ratio) || 0
+      }))
+    }
+  } catch (e) { /* noop */ }
+}
+
+function addCommissionRow() {
+  commissionRows.value.push({ username: '', ratio: 0 })
+}
+
+async function saveCommission() {
+  const items = commissionRows.value.filter(r => r.username)
+  const total = items.reduce((s, r) => s + (Number(r.ratio) || 0), 0)
+  if (items.length > 0 && Math.abs(total - 100) > 0.01) {
+    ElMessage.warning(`比例合计 ${total.toFixed(2)}%，必须等于 100%`)
+    return
+  }
+  savingCommission.value = true
+  try {
+    const res = await api.post(`/contracts/${commissionContract.id}/commissions`, {
+      commissions: items.map(r => ({ username: r.username, ratio: Number(r.ratio) || 0 }))
+    })
+    if (res && res.code === 200) {
+      ElMessage.success('分成保存成功')
+      showCommissionModal.value = false
+    } else {
+      ElMessage.error((res && res.message) || '保存失败')
+    }
+  } finally {
+    savingCommission.value = false
+  }
+}
+
+// ==================== 框架合同验收记录 ====================
+const showAcceptanceModal = ref(false)
+const addingAcceptance = ref(false)
+const acceptanceContract = reactive({ id: null, name: '', totalAmt: 0 })
+const acceptanceRows = ref([])
+const newAcceptance = reactive({ date: '', amount: 0, note: '', commissions: [] })
+const acceptanceTotal = computed(() => acceptanceRows.value.reduce((s, r) => s + (Number(r.acceptance_amount) || 0), 0))
+const newAcceptanceRatioSum = computed(() => newAcceptance.commissions.reduce((s, c) => s + (Number(c.ratio) || 0), 0))
+
+function getUserName(username) {
+  const u = users.value.find(x => x.username === username)
+  return u ? u.name : username
+}
+
+function addAccCommissionRow() {
+  newAcceptance.commissions.push({ username: '', ratio: 0 })
+}
+
+async function openAcceptance(row) {
+  acceptanceContract.id = row.id
+  acceptanceContract.name = row.contract_name || row.contract_no || `合同#${row.id}`
+  acceptanceContract.totalAmt = Number(row.total_amt || 0)
+  acceptanceRows.value = []
+  newAcceptance.date = ''
+  newAcceptance.amount = 0
+  newAcceptance.note = ''
+  newAcceptance.commissions = []
+  showAcceptanceModal.value = true
+  await loadAcceptances()
+}
+
+async function loadAcceptances() {
+  try {
+    const res = await api.get(`/contracts/${acceptanceContract.id}/acceptances`)
+    if (res && res.code === 200 && res.data) {
+      acceptanceRows.value = res.data.acceptances || []
+    }
+  } catch (e) { /* noop */ }
+}
+
+async function addAcceptance() {
+  if (!newAcceptance.date) { ElMessage.warning('请选择验收日期'); return }
+  if (!newAcceptance.amount || newAcceptance.amount <= 0) { ElMessage.warning('验收金额必须大于0'); return }
+  const items = newAcceptance.commissions.filter(c => c.username)
+  const totalRatio = items.reduce((s, c) => s + (Number(c.ratio) || 0), 0)
+  if (items.length > 0 && Math.abs(totalRatio - 100) > 0.01) {
+    ElMessage.warning(`分成比例合计 ${totalRatio.toFixed(1)}%，必须等于 100%`)
+    return
+  }
+  addingAcceptance.value = true
+  try {
+    const res = await api.post(`/contracts/${acceptanceContract.id}/acceptances`, {
+      acceptance_date: newAcceptance.date,
+      acceptance_amount: newAcceptance.amount,
+      note: newAcceptance.note,
+      commissions: items.map(c => ({ username: c.username, ratio: Number(c.ratio) || 0 }))
+    })
+    if (res && res.code === 200) {
+      ElMessage.success('验收记录添加成功')
+      newAcceptance.date = ''
+      newAcceptance.amount = 0
+      newAcceptance.note = ''
+      newAcceptance.commissions = []
+      await loadAcceptances()
+    } else {
+      ElMessage.error((res && res.message) || '添加失败')
+    }
+  } finally {
+    addingAcceptance.value = false
+  }
+}
+
+async function removeAcceptance(accId) {
+  try {
+    await ElMessageBox.confirm('确认删除该验收记录？', '提示', { type: 'warning' })
+  } catch { return }
+  const res = await api.delete(`/contracts/acceptances/${accId}`)
+  if (res && res.code === 200) {
+    ElMessage.success('删除成功')
+    await loadAcceptances()
+  } else {
+    ElMessage.error((res && res.message) || '删除失败')
+  }
+}
+
 // 按已选客户联动过滤的商机列表
 const filteredBusiness = computed(() => {
   if (!contractForm.cust_id) return []
@@ -587,7 +894,8 @@ const contractForm = reactive({
   payment_nodes: '',
   note: '',
   contract_file_path: '',
-  tech_agreement_file_path: ''
+  tech_agreement_file_path: '',
+  is_framework: 0
 })
 
 const contractFileList = ref([])
@@ -650,6 +958,11 @@ const rules = {
 
 const formatAmount = (value) => {
   return ((value || 0) / 10000).toFixed(4)
+}
+
+// 按元格式化（千分位），用于分成/验收弹窗
+const formatYuan = (value) => {
+  return (Number(value) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 const getPendingAmt = (row) => {
@@ -919,7 +1232,8 @@ const addContract = () => {
     acceptance_nodes: '',
     payment_nodes: '',
     contract_file_path: '',
-    tech_agreement_file_path: ''
+    tech_agreement_file_path: '',
+    is_framework: 0
   })
   contractFileList.value = []
   techFileList.value = []

@@ -21,6 +21,7 @@ products_bp = Blueprint('products', __name__)
 quotes_bp = Blueprint('quotes', __name__)
 marketing_bp = Blueprint('marketing', __name__)
 tickets_bp = Blueprint('tickets', __name__)
+security_bp = Blueprint('security', __name__)
 
 def register_blueprints(app):
     from .auth import register_routes as register_auth
@@ -44,6 +45,7 @@ def register_blueprints(app):
     from .quotes import register_routes as register_quotes
     from .marketing import register_routes as register_marketing
     from .tickets import register_routes as register_tickets
+    from .security_api import register_routes as register_security_api
 
     register_auth(app)
     register_customers(app)
@@ -66,6 +68,10 @@ def register_blueprints(app):
     register_quotes(app)
     register_marketing(app)
     register_tickets(app)
+    register_security_api(app)
 
     from .smart_import import smart_import_bp
     app.register_blueprint(smart_import_bp)
+
+    from .appraisal import appraisal_bp
+    app.register_blueprint(appraisal_bp, url_prefix='/api/appraisal')

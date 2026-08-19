@@ -132,6 +132,11 @@ const routes = [
         path: 'service',
         name: 'Service',
         component: () => import('../views/Service.vue')
+      },
+      {
+        path: 'appraisal',
+        name: 'Appraisal',
+        component: () => import('../views/Appraisal.vue')
       }
     ]
   }
@@ -171,6 +176,12 @@ router.beforeEach(async (to, from, next) => {
 
   if (to.path === '/leads' && !['主任', '院长'].includes(authStore.role)) {
     next('/dashboard')
+    return
+  }
+
+  // 人力角色只能访问月度考核页面
+  if (authStore.role === '人力' && to.path !== '/appraisal') {
+    next('/appraisal')
     return
   }
 

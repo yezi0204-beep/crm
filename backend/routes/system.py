@@ -74,6 +74,32 @@ def create_user():
             cursor.execute("INSERT OR IGNORE INTO user_roles (username, role) VALUES (?, ?)",
                            (data.get('username'), r))
 
+        # ---- 7.1.2 完整性 + 7.1.4 不可抵赖性：写入摘要与签名 ----
+        try:
+            from security import get_integrity, get_non_repudiation
+            integrity = get_integrity()
+            non_rep = get_non_repudiation()
+            status = '在职'
+            dept = data.get('department', '') or ''
+            profile_digest = integrity.compute_profile_digest(
+                username=data.get('username'), name=data.get('name'),
+                role=primary_role, department=dept, status=status,
+            )
+            signed = non_rep.sign_operation(
+                username=request.current_user['username'],
+                operation='创建用户',
+                module='系统',
+                detail=f'创建用户: {data.get("name")}',
+                extra={'target_username': data.get('username'), 'role': primary_role,
+                       'department': dept, 'status': status},
+            )
+            cursor.execute("""
+                UPDATE users SET profile_digest = ?, profile_signature = ?
+                WHERE username = ?
+            """, (profile_digest, signed['signature'], data.get('username')))
+        except Exception:
+            pass
+
         db.commit()
 
         return jsonify({'code': 200, 'message': '用户创建成功', 'data': None})
@@ -116,6 +142,37 @@ def update_user(username):
             hashed_pwd = hash_password(data.get('password'))
             cursor.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hashed_pwd, username))
 
+        # ---- 7.1.2 + 7.1.4：更新后重新计算完整性摘要与数字签名 ----
+        try:
+            from security import get_integrity, get_non_repudiation
+            integrity = get_integrity()
+            non_rep = get_non_repudiation()
+            cursor.execute("SELECT name, role, department, status FROM users WHERE username = ?", (username,))
+            r = cursor.fetchone()
+            if r:
+                name = r['name'] or ''
+                role = r['role'] or ''
+                dept = r['department'] or ''
+                status = r['status'] or '在职'
+                profile_digest = integrity.compute_profile_digest(
+                    username=username, name=name, role=role,
+                    department=dept, status=status,
+                )
+                signed = non_rep.sign_operation(
+                    username=request.current_user['username'],
+                    operation='更新用户',
+                    module='系统',
+                    detail=f'更新用户: {username}',
+                    extra={'target_username': username, 'name': name, 'role': role,
+                           'department': dept, 'status': status},
+                )
+                cursor.execute("""
+                    UPDATE users SET profile_digest = ?, profile_signature = ?
+                    WHERE username = ?
+                """, (profile_digest, signed['signature'], username))
+        except Exception:
+            pass
+
         db.commit()
 
         return jsonify({'code': 200, 'message': '用户更新成功', 'data': None})
@@ -142,6 +199,33 @@ def toggle_user_status(username):
             return jsonify({'code': 404, 'message': '用户不存在', 'data': None})
 
         cursor.execute("UPDATE users SET status = ? WHERE username = ?", (new_status, username))
+
+        # ---- 7.1.2 + 7.1.4：状态变更后重新计算完整性摘要与数字签名 ----
+        try:
+            from security import get_integrity, get_non_repudiation
+            integrity = get_integrity()
+            non_rep = get_non_repudiation()
+            cursor.execute("SELECT name, role, department FROM users WHERE username = ?", (username,))
+            r = cursor.fetchone()
+            if r:
+                profile_digest = integrity.compute_profile_digest(
+                    username=username, name=r['name'] or '', role=r['role'] or '',
+                    department=r['department'] or '', status=new_status,
+                )
+                signed = non_rep.sign_operation(
+                    username=request.current_user['username'],
+                    operation='用户状态变更',
+                    module='用户管理',
+                    detail=f'用户 {username} 状态变更为 {new_status}',
+                    extra={'target_username': username, 'status': new_status},
+                )
+                cursor.execute("""
+                    UPDATE users SET profile_digest = ?, profile_signature = ?
+                    WHERE username = ?
+                """, (profile_digest, signed['signature'], username))
+        except Exception:
+            pass
+
         db.commit()
 
         action = '标记离职' if new_status == '离职' else '恢复在职'

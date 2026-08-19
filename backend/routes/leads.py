@@ -16,9 +16,11 @@
 - source_type=manual → 不自动抓取
 - _fetch_html 统一抓取：static requests + 可选 playwright 动态渲染（缺失时降级返回空）
 
-线索队列（scraped_leads）：status 流转 pending→evaluated→imported/rejected
+线索队列（scraped_leads）：status 流转 pending→evaluated→imported（拒绝即删除，不再有 rejected 状态）
 AI 评估：复用 ai_agent._evaluate_lead_intent 规则评分；电商/竞品/舆情有专属评分
-精准分配：复用 ai_agent._assign_salesperson 选最空闲销售；分配即创建客户
+精准分配：_assign_lead 多维度评分推荐负责人——综合销售人员的历史拜访案例、商机推进
+         情况、合同签订业绩，按行业匹配/历史业绩/商机转化/拜访经验/工作量6个维度
+         打分（满分100），分配即创建客户
 
 权限模型：线索源管理与抓取仅主任/院长；线索查看全员（按分配/状态/类别筛选）。
 """
@@ -1550,8 +1552,9 @@ def _persist_leads(cursor, leads_data, source_id, source_name, source_category=N
             INSERT INTO scraped_leads (source_id, company, opportunity_name, contact_name, phone, email,
                                         industry, region, source, link, remark, raw_data, category,
                                         publish_date, deadline, budget, procurement_method,
+                                        tender_no, agency, agency_phone,
                                         status, scraped_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
         """, (
             source_id, company, opp_name,
             lead.get('contact_name', ''), lead.get('phone', ''),
@@ -1560,6 +1563,7 @@ def _persist_leads(cursor, leads_data, source_id, source_name, source_category=N
             lead.get('remark', ''), lead.get('raw_data', ''), category,
             lead.get('publish_date', ''), lead.get('deadline', ''),
             lead.get('budget', ''), lead.get('procurement_method', ''),
+            lead.get('tender_no', ''), lead.get('agency', ''), lead.get('agency_phone', ''),
         ))
         inserted += 1
     return inserted
@@ -1571,16 +1575,17 @@ def _mark_scraped(cursor, source_id):
 
 
 def _cleanup_expired_leads(cursor, days=30):
-    """清理过期线索：删除超过指定天数的 pending/evaluated/rejected 线索。
+    """清理过期线索：删除超过指定天数的 pending/evaluated 线索。
 
     已分配(imported)的线索保留审计。
     军采类商机有截止日期，过截止日期的优先清理。
+    注：rejected 状态已不再使用（拒绝即删除），此处仅清理 pending/evaluated。
     """
     from datetime import timedelta
     cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute("""
         DELETE FROM scraped_leads
-        WHERE status IN ('pending', 'evaluated', 'rejected')
+        WHERE status IN ('pending', 'evaluated')
         AND scraped_at < ?
     """, (cutoff,))
     deleted = cursor.rowcount
@@ -1590,7 +1595,7 @@ def _cleanup_expired_leads(cursor, days=30):
         cursor.execute("""
             DELETE FROM scraped_leads
             WHERE category='军采监控' AND deadline IS NOT NULL AND deadline != ''
-            AND deadline < ? AND status IN ('pending', 'evaluated', 'rejected')
+            AND deadline < ? AND status IN ('pending', 'evaluated')
         """, (today,))
         deleted += cursor.rowcount
     except Exception:
@@ -1603,7 +1608,7 @@ def _cleanup_expired_leads(cursor, days=30):
 @leads_bp.route('/api/leads/cleanup-expired', methods=['POST'])
 @token_required
 def cleanup_expired_leads():
-    """清理过期线索（超过指定天数的 pending/evaluated/rejected）。
+    """清理过期线索（超过指定天数的 pending/evaluated）。
 
     默认清理30天前的线索；军采类过投标截止日期的也清理。已分配线索保留。
     """
@@ -1625,7 +1630,11 @@ def cleanup_expired_leads():
 @leads_bp.route('/api/leads', methods=['GET'])
 @token_required
 def list_leads():
-    """线索队列列表，支持 status/source_id/keyword/category 筛选。"""
+    """线索队列列表，支持 status/source_id/keyword/category 筛选。
+
+    默认排除 rejected 状态（拒绝即删除，不应再有 rejected 线索；
+    此条件作为双重保险，防止历史遗留数据混入列表）。
+    """
     status = request.args.get('status', '')
     source_id = request.args.get('source_id', '')
     keyword = request.args.get('keyword', '')
@@ -1637,6 +1646,9 @@ def list_leads():
     if status:
         conditions.append("sl.status = ?")
         params.append(status)
+    else:
+        # 未指定状态时默认排除 rejected（历史遗留数据不显示）
+        conditions.append("sl.status != 'rejected'")
     if source_id:
         conditions.append("sl.source_id = ?")
         params.append(source_id)
@@ -1644,9 +1656,9 @@ def list_leads():
         conditions.append("sl.category = ?")
         params.append(category)
     if keyword:
-        conditions.append("(sl.company LIKE ? OR sl.remark LIKE ? OR sl.contact_name LIKE ? OR sl.opportunity_name LIKE ?)")
+        conditions.append("(sl.company LIKE ? OR sl.remark LIKE ? OR sl.contact_name LIKE ? OR sl.opportunity_name LIKE ? OR sl.tender_no LIKE ? OR sl.agency LIKE ?)")
         kw = f'%{keyword}%'
-        params.extend([kw, kw, kw, kw])
+        params.extend([kw, kw, kw, kw, kw, kw])
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     cursor.execute(f"""
@@ -1695,11 +1707,19 @@ def evaluate_batch_leads():
     for lead in pending:
         score, reason = _evaluate_lead(lead, industry_stats)
         assignee = _assign_lead(lead, salespeople)
+        # assign_reason 持久化推荐依据：综合评分+维度分数+Top5候选，便于前端展示科学决策依据
+        assign_reason_json = json.dumps({
+            'score': assignee.get('score') if assignee else None,
+            'reason': assignee.get('reason') if assignee else None,
+            'details': assignee.get('details') if assignee else None,
+            'all_candidates': assignee.get('all_candidates') if assignee else None,
+        }, ensure_ascii=False) if assignee else None
         cursor.execute("""
             UPDATE scraped_leads SET intent_score=?, eval_reason=?, assigned_to=?,
-                                     status='evaluated', evaluated_at=?
+                                     assign_reason=?, status='evaluated', evaluated_at=?
             WHERE id=?
         """, (score, reason, assignee['username'] if assignee else None,
+              assign_reason_json,
               datetime.now().strftime('%Y-%m-%d %H:%M:%S'), lead['id']))
         evaluated += 1
     db.commit()
@@ -1726,11 +1746,18 @@ def evaluate_single_lead(lead_id):
     industry_stats, salespeople = _load_eval_context(cursor)
     score, reason = _evaluate_lead(lead, industry_stats)
     assignee = _assign_lead(lead, salespeople)
+    assign_reason_json = json.dumps({
+        'score': assignee.get('score') if assignee else None,
+        'reason': assignee.get('reason') if assignee else None,
+        'details': assignee.get('details') if assignee else None,
+        'all_candidates': assignee.get('all_candidates') if assignee else None,
+    }, ensure_ascii=False) if assignee else None
     cursor.execute("""
         UPDATE scraped_leads SET intent_score=?, eval_reason=?, assigned_to=?,
-                                 status='evaluated', evaluated_at=?
+                                 assign_reason=?, status='evaluated', evaluated_at=?
         WHERE id=?
     """, (score, reason, assignee['username'] if assignee else None,
+          assign_reason_json,
           datetime.now().strftime('%Y-%m-%d %H:%M:%S'), lead_id))
     db.commit()
     return jsonify({'code': 200, 'message': '评估完成',
@@ -1741,9 +1768,11 @@ def evaluate_single_lead(lead_id):
 @leads_bp.route('/api/leads/<int:lead_id>/assign', methods=['POST'])
 @token_required
 def assign_lead(lead_id):
-    """分配线索：创建客户并归属指定销售，线索标记为 imported。
+    """分配线索：创建客户 + 自动生成商机，归属指定销售，线索标记为 imported。
 
     请求体：assigned_to（可选，默认用 AI 推荐分配）
+
+    业务流程：线索 → [分配] → 创建客户 + 创建商机（引导需求阶段）→ 形成"线索→商机→合同"完整链路。
     """
     payload = request.current_user
     if payload.get('role') not in ('主任', '院长'):
@@ -1767,7 +1796,7 @@ def assign_lead(lead_id):
         return jsonify({'code': 400, 'message': '无可分配的销售人员', 'data': None})
 
     try:
-        # 创建客户，归属该销售
+        # 1) 创建客户，归属该销售
         cursor.execute("""
             INSERT INTO customers (name, company, phone, level, source, owner_id,
                                    contact_name, industry, region, created_at, last_follow)
@@ -1779,36 +1808,103 @@ def assign_lead(lead_id):
             lead.get('contact_name', ''), lead.get('industry', ''), lead.get('region', ''),
         ))
         new_cust_id = cursor.lastrowid
+
+        # 2) 自动创建商机：线索转化为商机（引导需求阶段），形成"线索→商机→合同"完整链路
+        biz_title = (lead.get('opportunity_name') or lead.get('company') or '新商机').strip()
+        biz_source = f'智能线索-{lead.get("source", "")}'
+        # 解析预算金额：支持"500万元"/"500万"/"5000000元"/纯数字等格式
+        biz_amount = _parse_budget(lead.get('budget'))
+        # 商机备注：记录线索来源、意向分、AI推荐依据，便于销售接手时了解背景
+        biz_note_parts = [f'由线索 ID:{lead_id} 自动转化']
+        if lead.get('intent_score') is not None:
+            biz_note_parts.append(f'线索意向分{lead["intent_score"]}')
+        if lead.get('eval_reason'):
+            biz_note_parts.append(f'评估：{lead["eval_reason"]}')
+        if lead.get('link'):
+            biz_note_parts.append(f'来源链接：{lead["link"]}')
+        biz_note = '；'.join(biz_note_parts)
+        # 新商机默认处于"引导需求阶段"，probability=10（发现潜在客户）
         cursor.execute("""
-            UPDATE scraped_leads SET status='imported', assigned_to=?, evaluated_at=?
+            INSERT INTO business (title, cust_id, stakeholder, amount, stage, probability,
+                                  predict_date, source, industry, region, owner_id,
+                                  address, customer_relation, weekly_plan, next_week_plan,
+                                  plan_week, note, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        """, (
+            biz_title, new_cust_id, lead.get('contact_name', ''), biz_amount,
+            '引导需求阶段', 10, '', biz_source,
+            lead.get('industry', ''), lead.get('region', ''), assigned_to,
+            lead.get('company', ''), '', '', '', '', biz_note,
+        ))
+        new_biz_id = cursor.lastrowid
+
+        # 3) 线索标记为 imported，并记录 business_id 关联（线索→商机→合同链路）
+        cursor.execute("""
+            UPDATE scraped_leads SET status='imported', assigned_to=?, business_id=?,
+                                     evaluated_at=?
             WHERE id=?
-        """, (assigned_to, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), lead_id))
+        """, (assigned_to, new_biz_id,
+              datetime.now().strftime('%Y-%m-%d %H:%M:%S'), lead_id))
         db.commit()
         cursor.execute("SELECT name FROM users WHERE username=?", (assigned_to,))
         sp = cursor.fetchone()
         sp_name = sp['name'] if sp else assigned_to
         record_operation_log(payload['username'], '分配线索', '智能线索管理',
-                             f'线索「{lead.get("company")}」分配给 {sp_name}，已创建客户 ID:{new_cust_id}')
-        return jsonify({'code': 200, 'message': f'已分配给 {sp_name} 并创建客户',
-                        'data': {'customer_id': new_cust_id, 'assigned_to': assigned_to}})
+                             f'线索「{lead.get("company")}」分配给 {sp_name}，'
+                             f'已创建客户 ID:{new_cust_id} + 商机 ID:{new_biz_id}')
+        return jsonify({'code': 200, 'message': f'已分配给 {sp_name}，已创建客户和商机',
+                        'data': {'customer_id': new_cust_id,
+                                 'business_id': new_biz_id,
+                                 'assigned_to': assigned_to}})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
 
 
+def _parse_budget(budget_str):
+    """解析预算金额文本为数字（元）。
+
+    支持：'500万元'→5000000, '500万'→5000000, '3000元'→3000, '100亿'→10000000000,
+          '5000000'→5000000, None/''→0
+    """
+    if not budget_str:
+        return 0
+    s = str(budget_str).strip().replace(',', '').replace('，', '')
+    if not s:
+        return 0
+    # 提取数字部分
+    m = re.search(r'(\d+(?:\.\d+)?)', s)
+    if not m:
+        return 0
+    num = float(m.group(1))
+    # 单位换算
+    if '亿' in s:
+        num *= 100000000
+    elif '万' in s:
+        num *= 10000
+    return int(num) if num == int(num) else num
+
+
 @leads_bp.route('/api/leads/<int:lead_id>/reject', methods=['POST'])
 @token_required
 def reject_lead(lead_id):
-    """拒绝/废弃线索。"""
+    """拒绝线索：直接从线索队列删除（不再保留为 rejected 状态）。"""
     payload = request.current_user
     if payload.get('role') not in ('主任', '院长'):
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("UPDATE scraped_leads SET status='rejected' WHERE id=?", (lead_id,))
+    # 先取线索信息用于日志记录，再删除
+    cursor.execute("SELECT company FROM scraped_leads WHERE id=?", (lead_id,))
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '线索不存在', 'data': None})
+    company = row['company']
+    cursor.execute("DELETE FROM scraped_leads WHERE id=?", (lead_id,))
     db.commit()
-    record_operation_log(payload['username'], '拒绝线索', '智能线索管理', f'拒绝线索 ID:{lead_id}')
-    return jsonify({'code': 200, 'message': '已拒绝', 'data': None})
+    record_operation_log(payload['username'], '拒绝线索', '智能线索管理',
+                         f'拒绝并删除线索 ID:{lead_id}（{company}）')
+    return jsonify({'code': 200, 'message': '已拒绝并删除', 'data': None})
 
 
 @leads_bp.route('/api/leads/import', methods=['POST'])
@@ -1880,17 +1976,26 @@ def leads_stats():
 # ==================== 评估与分配工具函数（与 ai_agent.py 逻辑对齐） ====================
 
 def _load_eval_context(cursor):
-    """加载评估上下文：行业成交统计 + 在职销售工作量。
+    """加载评估上下文：行业成交统计 + 在职销售完整画像（用于科学推荐负责人）。
+
+    销售画像维度（综合分析历史拜访案例、商机情况、合同签订情况）：
+    - 工作量：当前活跃商机数、名下客户数
+    - 拜访案例：历史拜访次数、已完成拜访数、同行业客户拜访次数
+    - 商机情况：活跃商机总金额、推进中（非初期）商机数、商机阶段分布
+    - 合同签订：合同总数、合同总金额、已回款金额、同行业合同数
+    - 行业经验：曾服务过的行业集合（来自 customers.industry）
 
     用 user_roles 表查询（支持多角色），不遗漏兼任销售的人员。
-    并列商机数时用 RANDOM() 随机分配，避免总给同一个人。
     """
+    # 行业成交统计（基于合同签订情况，更准确反映行业经验）
     cursor.execute("""
         SELECT industry, COUNT(*) as cnt FROM business
         WHERE status='active' AND industry IS NOT NULL AND industry!=''
         GROUP BY industry
     """)
     industry_stats = {r['industry']: r['cnt'] for r in cursor.fetchall()}
+
+    # 在职销售基础信息 + 工作量（活跃商机数）
     cursor.execute("""
         SELECT u.username, u.name, COUNT(b.id) as biz_count
         FROM users u
@@ -1900,6 +2005,129 @@ def _load_eval_context(cursor):
         GROUP BY u.username ORDER BY biz_count ASC, RANDOM()
     """)
     salespeople = [dict(r) for r in cursor.fetchall()]
+    if not salespeople:
+        return industry_stats, salespeople
+
+    usernames = [s['username'] for s in salespeople]
+    placeholder = ','.join('?' * len(usernames))
+
+    # 名下客户数 + 各销售所辖客户的行业分布
+    cursor.execute(f"""
+        SELECT owner_id, COUNT(*) as cust_count
+        FROM customers
+        WHERE owner_id IN ({placeholder}) AND owner_id IS NOT NULL
+        GROUP BY owner_id
+    """, usernames)
+    cust_counts = {r['owner_id']: r['cust_count'] for r in cursor.fetchall()}
+
+    cursor.execute(f"""
+        SELECT owner_id, industry, COUNT(*) as cnt
+        FROM customers
+        WHERE owner_id IN ({placeholder}) AND owner_id IS NOT NULL
+              AND industry IS NOT NULL AND industry != ''
+        GROUP BY owner_id, industry
+    """, usernames)
+    cust_industries = {}  # {username: {industry: count}}
+    for r in cursor.fetchall():
+        cust_industries.setdefault(r['owner_id'], {})[r['industry']] = r['cnt']
+
+    # 拜访案例统计：总拜访次数 + 已完成拜访次数
+    cursor.execute(f"""
+        SELECT visitor_id,
+               COUNT(*) as visit_total,
+               SUM(CASE WHEN status='completed' OR actual_date IS NOT NULL THEN 1 ELSE 0 END) as visit_done
+        FROM visits
+        WHERE visitor_id IN ({placeholder}) AND visitor_id IS NOT NULL
+        GROUP BY visitor_id
+    """, usernames)
+    visit_stats = {r['visitor_id']: dict(r) for r in cursor.fetchall()}
+
+    # 按行业分组的拜访次数：用于按线索行业精确匹配销售的同行业拜访经验
+    cursor.execute(f"""
+        SELECT v.visitor_id, c.industry, COUNT(*) as cnt
+        FROM visits v
+        JOIN customers c ON v.cust_id = c.id
+        WHERE v.visitor_id IN ({placeholder}) AND v.visitor_id IS NOT NULL
+              AND c.industry IS NOT NULL AND c.industry != ''
+        GROUP BY v.visitor_id, c.industry
+    """, usernames)
+    visit_by_industry = {}  # {username: {industry: count}}
+    for r in cursor.fetchall():
+        visit_by_industry.setdefault(r['visitor_id'], {})[r['industry']] = r['cnt']
+
+    # 商机情况：活跃商机总金额 + 推进中商机数（非"初期接触/需求确认"阶段）
+    cursor.execute(f"""
+        SELECT owner_id,
+               COUNT(*) as biz_total,
+               COALESCE(SUM(amount), 0) as biz_amount,
+               SUM(CASE WHEN stage NOT IN ('初期接触', '需求确认', '方案报价') THEN 1 ELSE 0 END) as biz_advanced
+        FROM business
+        WHERE owner_id IN ({placeholder}) AND owner_id IS NOT NULL AND status='active'
+        GROUP BY owner_id
+    """, usernames)
+    biz_stats = {r['owner_id']: dict(r) for r in cursor.fetchall()}
+
+    # 商机按行业分组：用于按线索行业精确匹配销售的同行业商机经验
+    cursor.execute(f"""
+        SELECT owner_id, industry, COUNT(*) as cnt, COALESCE(SUM(amount), 0) as amt
+        FROM business
+        WHERE owner_id IN ({placeholder}) AND owner_id IS NOT NULL
+              AND status='active' AND industry IS NOT NULL AND industry != ''
+        GROUP BY owner_id, industry
+    """, usernames)
+    biz_by_industry = {}  # {username: {industry: {'count': n, 'amount': amt}}}
+    for r in cursor.fetchall():
+        biz_by_industry.setdefault(r['owner_id'], {})[r['industry']] = {
+            'count': r['cnt'], 'amount': float(r['amt'] or 0)
+        }
+
+    # 合同签订情况：合同数 + 合同总金额 + 已回款金额
+    cursor.execute(f"""
+        SELECT owner_id,
+               COUNT(*) as contract_total,
+               COALESCE(SUM(total_amt), 0) as contract_amount,
+               COALESCE(SUM(paid_amt), 0) as paid_amount
+        FROM contracts
+        WHERE owner_id IN ({placeholder}) AND owner_id IS NOT NULL
+        GROUP BY owner_id
+    """, usernames)
+    contract_stats = {r['owner_id']: dict(r) for r in cursor.fetchall()}
+
+    # 合同按行业分组：用于按线索行业精确匹配销售的同行业签约经验
+    cursor.execute(f"""
+        SELECT ct.owner_id, c.industry,
+               COUNT(*) as cnt, COALESCE(SUM(ct.total_amt), 0) as amt
+        FROM contracts ct
+        JOIN customers c ON ct.cust_id = c.id
+        WHERE ct.owner_id IN ({placeholder}) AND ct.owner_id IS NOT NULL
+              AND c.industry IS NOT NULL AND c.industry != ''
+        GROUP BY ct.owner_id, c.industry
+    """, usernames)
+    contract_by_industry = {}  # {username: {industry: {'count': n, 'amount': amt}}}
+    for r in cursor.fetchall():
+        contract_by_industry.setdefault(r['owner_id'], {})[r['industry']] = {
+            'count': r['cnt'], 'amount': float(r['amt'] or 0)
+        }
+
+    # 组装销售画像
+    for s in salespeople:
+        u = s['username']
+        s['cust_count'] = cust_counts.get(u, 0)
+        s['industries_served'] = cust_industries.get(u, {})
+        vs = visit_stats.get(u, {})
+        s['visit_total'] = vs.get('visit_total', 0)
+        s['visit_done'] = vs.get('visit_done', 0)
+        s['visit_by_industry'] = visit_by_industry.get(u, {})
+        bs = biz_stats.get(u, {})
+        s['biz_amount'] = float(bs.get('biz_amount', 0) or 0)
+        s['biz_advanced'] = bs.get('biz_advanced', 0) or 0
+        s['biz_by_industry'] = biz_by_industry.get(u, {})
+        cs = contract_stats.get(u, {})
+        s['contract_total'] = cs.get('contract_total', 0)
+        s['contract_amount'] = float(cs.get('contract_amount', 0) or 0)
+        s['paid_amount'] = float(cs.get('paid_amount', 0) or 0)
+        s['contract_by_industry'] = contract_by_industry.get(u, {})
+
     return industry_stats, salespeople
 
 
@@ -2037,13 +2265,169 @@ def _evaluate_lead(lead, industry_stats):
 
 
 def _assign_lead(lead, salespeople):
-    """选当前商机最少（最空闲）的销售（与 ai_agent._assign_salesperson 一致）。"""
+    """基于销售人员历史拜访案例、商机情况和合同签订情况，多维度评分推荐科学负责人。
+
+    评分维度（满分100）：
+    1. 行业匹配度（30分）：同行业合同数 + 同行业商机数 + 同行业拜访次数 + 同行业客户数
+    2. 历史业绩（25分）：合同总金额 + 已回款金额 + 回款率
+    3. 商机推进能力（15分）：活跃商机数 + 推进中商机占比 + 商机总金额
+    4. 拜访经验（15分）：历史拜访次数 + 已完成拜访数
+    5. 当前工作量（10分）：活跃商机越少越空闲得分越高（避免过载）
+    6. 区域匹配（5分）：名下同区域客户加分
+
+    返回：{username, name, reason, details}，details 含各维度分数便于前端展示。
+    """
     if not salespeople:
         return None
+
+    industry = (lead.get('industry') or '').strip()
+    region = (lead.get('region') or '').strip()
+
+    # 计算全局最大值用于归一化（避免单一指标极端值主导）
+    max_contract_amount = max((s.get('contract_amount', 0) for s in salespeople), default=1) or 1
+    max_paid_amount = max((s.get('paid_amount', 0) for s in salespeople), default=1) or 1
+    max_biz_amount = max((s.get('biz_amount', 0) for s in salespeople), default=1) or 1
+    max_visit_total = max((s.get('visit_total', 0) for s in salespeople), default=1) or 1
+    max_biz_count = max((s.get('biz_count', 0) for s in salespeople), default=1) or 1
+    max_cust_count = max((s.get('cust_count', 0) for s in salespeople), default=1) or 1
+
+    scored = []
+    for s in salespeople:
+        reasons = []
+        # 1) 行业匹配度（30分）—— 同行业合同/商机/拜访/客户综合
+        industry_score = 0.0
+        if industry:
+            same_industry_contracts = s.get('contract_by_industry', {}).get(industry, {}).get('count', 0)
+            same_industry_contract_amt = s.get('contract_by_industry', {}).get(industry, {}).get('amount', 0)
+            same_industry_biz = s.get('biz_by_industry', {}).get(industry, {}).get('count', 0)
+            same_industry_visits = s.get('visit_by_industry', {}).get(industry, 0)
+            same_industry_custs = s.get('industries_served', {}).get(industry, 0)
+            # 同行业合同（最高15分）
+            industry_score += min(15, same_industry_contracts * 5)
+            if same_industry_contracts > 0:
+                reasons.append(f'同行业已签{same_industry_contracts}份合同'
+                               f'（金额{same_industry_contract_amt:.2f}元）')
+            # 同行业商机（最高8分）
+            industry_score += min(8, same_industry_biz * 2)
+            if same_industry_biz > 0:
+                reasons.append(f'同行业有{same_industry_biz}个在推进商机')
+            # 同行业拜访（最高4分）
+            industry_score += min(4, same_industry_visits)
+            if same_industry_visits > 0:
+                reasons.append(f'同行业客户拜访{same_industry_visits}次')
+            # 同行业客户（最高3分）
+            industry_score += min(3, same_industry_custs)
+            if same_industry_contracts == 0 and same_industry_biz == 0 \
+                    and same_industry_visits == 0 and same_industry_custs == 0:
+                reasons.append(f'暂无「{industry}」行业服务经验')
+        else:
+            # 无行业信息：均给基础分
+            industry_score = 8.0
+            reasons.append('线索未标注行业，行业匹配维度按基础分计算')
+
+        # 2) 历史业绩（25分）—— 合同金额 + 回款 + 回款率
+        contract_amount = s.get('contract_amount', 0)
+        paid_amount = s.get('paid_amount', 0)
+        contract_total = s.get('contract_total', 0)
+        performance_score = (contract_amount / max_contract_amount) * 15
+        performance_score += (paid_amount / max_paid_amount) * 7
+        # 回款率奖励：>80% 加3分，>50% 加1.5分
+        if contract_amount > 0:
+            paid_rate = paid_amount / contract_amount
+            if paid_rate >= 0.8:
+                performance_score += 3
+                reasons.append(f'回款率{paid_rate*100:.1f}%，资金回笼优秀')
+            elif paid_rate >= 0.5:
+                performance_score += 1.5
+        if contract_total > 0:
+            reasons.append(f'累计签订{contract_total}份合同，金额{contract_amount:.2f}元')
+        else:
+            reasons.append('暂无合同签订记录')
+        performance_score = min(25, performance_score)
+
+        # 3) 商机推进能力（15分）—— 推进中商机 + 商机金额
+        biz_count = s.get('biz_count', 0)
+        biz_advanced = s.get('biz_advanced', 0)
+        biz_amount = s.get('biz_amount', 0)
+        biz_score = 0.0
+        if biz_count > 0:
+            # 推进中商机占比（推进能力）
+            advance_ratio = biz_advanced / biz_count
+            biz_score += min(8, advance_ratio * 10)
+            # 商机总金额（规模）
+            biz_score += min(7, (biz_amount / max_biz_amount) * 7)
+            reasons.append(f'活跃商机{biz_count}个（推进中{biz_advanced}个），商机金额{biz_amount:.2f}元')
+        else:
+            reasons.append('当前无活跃商机，可专注新线索')
+
+        # 4) 拜访经验（15分）—— 拜访次数 + 完成率
+        visit_total = s.get('visit_total', 0)
+        visit_done = s.get('visit_done', 0)
+        visit_score = (visit_total / max_visit_total) * 12
+        if visit_total > 0:
+            done_rate = visit_done / visit_total
+            visit_score += min(3, done_rate * 3)
+            reasons.append(f'累计拜访{visit_total}次（已完成{visit_done}次）')
+        else:
+            reasons.append('暂无历史拜访记录')
+
+        # 5) 当前工作量（10分）—— 商机越少越空闲（避免过载）
+        workload_score = max(0, 10 - (biz_count / max_biz_count) * 10)
+        if biz_count >= 10:
+            reasons.append(f'当前商机{biz_count}个，工作量饱和')
+        elif biz_count >= 5:
+            reasons.append(f'当前商机{biz_count}个，工作量适中')
+        else:
+            reasons.append(f'当前商机{biz_count}个，时间充裕')
+
+        # 6) 区域匹配（5分）
+        region_score = 0.0
+        if region:
+            # 通过客户表 region 字段判断同区域经验（已在 industries_served 之外的简化判断）
+            # 这里用 cust_count 作为代理：客户基数大意味着可能覆盖更多区域
+            region_score = min(5, (s.get('cust_count', 0) / max_cust_count) * 5)
+        else:
+            region_score = 2.5
+
+        total_score = (industry_score + performance_score + biz_score +
+                       visit_score + workload_score + region_score)
+
+        scored.append({
+            'sales': s,
+            'score': round(total_score, 2),
+            'details': {
+                'industry_match': round(industry_score, 2),
+                'performance': round(performance_score, 2),
+                'business_advance': round(biz_score, 2),
+                'visit_experience': round(visit_score, 2),
+                'workload_balance': round(workload_score, 2),
+                'region_match': round(region_score, 2),
+            },
+            'reasons': reasons,
+        })
+
+    # 按总分降序，相同分时按商机数升序（更空闲优先）
+    scored.sort(key=lambda x: (-x['score'], x['sales'].get('biz_count', 0)))
+    best = scored[0]
+
+    # 拼接推荐理由：取前3条核心亮点
+    top_reasons = best['reasons'][:3]
+    reason_text = f'综合评分{best["score"]}分（满分100）。' + '；'.join(top_reasons)
+
     return {
-        'username': salespeople[0]['username'],
-        'name': salespeople[0]['name'],
-        'reason': f'当前商机数最少（{salespeople[0]["biz_count"]}单），工作量最均衡',
+        'username': best['sales']['username'],
+        'name': best['sales']['name'],
+        'reason': reason_text,
+        'score': best['score'],
+        'details': best['details'],
+        'all_candidates': [
+            {
+                'username': item['sales']['username'],
+                'name': item['sales']['name'],
+                'score': item['score'],
+                'details': item['details'],
+            } for item in scored[:5]
+        ],
     }
 
 

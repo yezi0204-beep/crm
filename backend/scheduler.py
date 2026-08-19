@@ -3,13 +3,13 @@ import time
 import logging
 import sqlite3
 from datetime import datetime, timedelta
-from extensions import cleanup_inactive_customers, DB_PATH
+from extensions import DB_PATH
 
 logger = logging.getLogger(__name__)
 
 scheduler_thread = None
 scheduler_running = False
-_last_cleanup = None  # 上次执行客户清理时间
+_last_cleanup = None  # 上次执行过期线索清理时间
 
 
 def _open_db():
@@ -26,6 +26,10 @@ def scrape_due_lead_sources():
 
     供调度器定时调用，也可被 run_scrape_now 手动触发。
     返回本次抓取的线索总数。
+
+    重要：网络抓取（_scrape_source）必须在数据库事务之外进行，
+    否则 INSERT 开启的写锁会持续到 commit，期间任何并发写（如登录）
+    都会因等待锁超时报 "database is locked"。
     """
     try:
         from routes.leads import _scrape_source, _persist_leads, _mark_scraped
@@ -33,15 +37,16 @@ def scrape_due_lead_sources():
         logger.error(f"线索抓取模块加载失败: {e}")
         return 0
 
-    conn = _open_db()
-    cursor = conn.cursor()
     now = datetime.now()
-    total = 0
+
+    # ---- 第1步：短连接读取到期源，立即释放锁 ----
+    due_sources = []
+    conn = _open_db()
     try:
+        cursor = conn.cursor()
         cursor.execute("SELECT * FROM lead_sources WHERE enabled=1")
         sources = [dict(r) for r in cursor.fetchall()]
         for source in sources:
-            # 判断是否到期（last_scraped_at 为空或超过 interval_hours）
             due = True
             if source.get('last_scraped_at'):
                 try:
@@ -50,25 +55,43 @@ def scrape_due_lead_sources():
                     due = (now - last) >= interval
                 except Exception:
                     due = True
-            if not due:
-                continue
-            try:
-                leads_data, err = _scrape_source(source)
-                inserted = _persist_leads(cursor, leads_data, source['id'], source['name'])
-                _mark_scraped(cursor, source['id'])
-                total += inserted
-                if err:
-                    logger.warning(f"线索源「{source['name']}」抓取异常: {err}")
-                elif inserted > 0:
-                    logger.info(f"线索源「{source['name']}」抓取 {inserted} 条线索")
-            except Exception as e:
-                logger.error(f"线索源「{source.get('name')}」抓取失败: {e}")
-        conn.commit()
+            if due:
+                due_sources.append(source)
     except Exception as e:
-        conn.rollback()
-        logger.error(f"定时线索抓取错误: {e}")
+        logger.error(f"读取线索源失败: {e}")
     finally:
         conn.close()
+
+    # ---- 第2步：逐个网络抓取（不持任何 DB 锁）----
+    scraped_results = []  # [(source, leads_data, err), ...]
+    for source in due_sources:
+        try:
+            leads_data, err = _scrape_source(source)
+            scraped_results.append((source, leads_data, err))
+        except Exception as e:
+            logger.error(f"线索源「{source.get('name')}」抓取失败: {e}")
+            scraped_results.append((source, [], str(e)))
+
+    # ---- 第3步：逐个短事务写入（写锁只持毫秒级）----
+    total = 0
+    for source, leads_data, err in scraped_results:
+        wconn = _open_db()
+        try:
+            wcur = wconn.cursor()
+            inserted = _persist_leads(wcur, leads_data, source['id'], source['name'])
+            _mark_scraped(wcur, source['id'])
+            wconn.commit()
+            total += inserted
+            if err:
+                logger.warning(f"线索源「{source['name']}」抓取异常: {err}")
+            elif inserted > 0:
+                logger.info(f"线索源「{source['name']}」抓取 {inserted} 条线索")
+        except Exception as e:
+            wconn.rollback()
+            logger.error(f"线索源「{source.get('name')}」入库失败: {e}")
+        finally:
+            wconn.close()
+
     return total
 
 
@@ -89,15 +112,10 @@ def run_scheduler():
                 logger.error(f"线索抓取任务错误: {e}")
                 scraped = 0
 
-            # 2. 客户清理（每 24 小时一次）
+            # 2. 过期线索清理（每天一次：>30天的未分配线索 + 已过截止日期的军采线索）
+            # 注：公海池客户"超过100天自动删除"功能已取消，不再自动清理客户数据
             if _last_cleanup is None or (now - _last_cleanup) >= timedelta(hours=24):
                 logger.info(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 检查是否需要执行每日清理任务...")
-                deleted_count = cleanup_inactive_customers()
-                if deleted_count > 0:
-                    logger.info(f"已自动清理 {deleted_count} 个超过 100 天未跟进的客户")
-                else:
-                    logger.info("没有需要清理的客户")
-                # 过期线索清理（每天一次：>30天的未分配线索 + 已过截止日期的军采线索）
                 try:
                     from routes.leads import _cleanup_expired_leads
                     lead_conn = _open_db()
@@ -133,9 +151,13 @@ def stop_scheduler():
 
 
 def run_cleanup_now():
-    logger.info("手动触发清理任务")
-    deleted_count = cleanup_inactive_customers()
-    return deleted_count
+    """手动触发清理任务。
+
+    公海池客户"超过100天自动删除"功能已取消，不再清理客户数据。
+    保留函数签名以兼容 app.py 的 /api/system/cleanup 接口调用，但实际不执行任何删除操作。
+    """
+    logger.info("手动清理请求已忽略：公海池客户自动删除功能已停用")
+    return 0
 
 
 def run_scrape_now():

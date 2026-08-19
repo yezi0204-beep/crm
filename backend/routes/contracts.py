@@ -160,15 +160,15 @@ def create_contract():
             (b_id, cust_id, contract_no, party_a, project_order_no, total_amt, paid_amt, sign_date, owner_id, status,
              contract_name, classification, is_audit, pending_acceptance_amount,
              cost, gross_profit, acceptance_date, expected_income_date,
-             expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+             expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes, note, is_framework)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
         """, (
             b_id, cust_id, contract_no, data.get('party_a'), data.get('project_order_no'),
             data.get('total_amt'), 0, data.get('sign_date'), data.get('owner_id'), '执行中',
             data.get('contract_name'), data.get('classification'), data.get('is_audit'), data.get('pending_acceptance_amount'),
             data.get('cost'), data.get('gross_profit'), data.get('acceptance_date'), data.get('expected_income_date'),
             data.get('expected_income_year'), data.get('business_type'), data.get('acceptance_nodes'), data.get('payment_nodes'),
-            data.get('note')
+            data.get('note'), 1 if data.get('is_framework') else 0
         ))
         db.commit()
         contract_id = cursor.lastrowid
@@ -209,7 +209,7 @@ def update_contract(contract_id):
                 cost=?, gross_profit=?, acceptance_date=?, expected_income_date=?,
                 expected_income_year=?, business_type=?, status=?, owner_id=?,
                 cust_id=?, b_id=?,
-                acceptance_nodes=?, payment_nodes=?, note=?
+                acceptance_nodes=?, payment_nodes=?, note=?, is_framework=?
             WHERE id=?
         """, (
             data.get('contract_name'), data.get('contract_no'), data.get('party_a'), data.get('project_order_no'),
@@ -218,7 +218,8 @@ def update_contract(contract_id):
             data.get('acceptance_date'), data.get('expected_income_date'), data.get('expected_income_year'),
             data.get('business_type'), data.get('status'), data.get('owner_id'),
             cust_id, b_id,
-            data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'), contract_id
+            data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'),
+            1 if data.get('is_framework') else 0, contract_id
         ))
         db.commit()
 
@@ -255,6 +256,234 @@ def update_contract_owner(contract_id):
         db.commit()
 
         return jsonify({'code': 200, 'message': '负责人修改成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+# ==================== 合同销售分成 ====================
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/commissions', methods=['GET'])
+@token_required
+def get_contract_commissions(contract_id):
+    """获取合同的销售分成列表。"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id, total_amt, contract_name, owner_id FROM contracts WHERE id=?", (contract_id,))
+    c = cur.fetchone()
+    if not c:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    cur.execute(
+        "SELECT cc.username, cc.ratio, u.name "
+        "FROM contract_commissions cc LEFT JOIN users u ON cc.username = u.username "
+        "WHERE cc.contract_id=? ORDER BY cc.ratio DESC",
+        (contract_id,)
+    )
+    rows = [{'username': r['username'], 'name': r['name'] or r['username'], 'ratio': float(r['ratio'])}
+            for r in cur.fetchall()]
+    return jsonify({
+        'code': 200, 'message': 'OK',
+        'data': {
+            'contract_id': contract_id,
+            'contract_name': c['contract_name'],
+            'total_amt': float(c['total_amt'] or 0),
+            'owner_id': c['owner_id'],
+            'commissions': rows,
+        }
+    })
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/commissions', methods=['POST'])
+@token_required
+def save_contract_commissions(contract_id):
+    """保存合同销售分成（整体替换）。仅主任/院长。
+    body: {commissions: [{username, ratio}, ...]}  ratio之和必须=100
+    """
+    payload = request.current_user
+    if payload['role'] != '主任' and payload['role'] != '院长':
+        return jsonify({'code': 403, 'message': '无权设置分成', 'data': None})
+    data = request.get_json(silent=True) or {}
+    items = data.get('commissions') or []
+    if not isinstance(items, list):
+        return jsonify({'code': 400, 'message': 'commissions 必须是数组', 'data': None})
+    # 校验
+    total_ratio = 0
+    seen = set()
+    for item in items:
+        u = (item.get('username') or '').strip()
+        r = float(item.get('ratio') or 0)
+        if not u:
+            return jsonify({'code': 400, 'message': '分成人员用户名不能为空', 'data': None})
+        if r < 0 or r > 100:
+            return jsonify({'code': 400, 'message': f'比例 {r}% 超出范围(0-100)', 'data': None})
+        if u in seen:
+            return jsonify({'code': 400, 'message': f'人员 {u} 重复', 'data': None})
+        seen.add(u)
+        total_ratio += r
+    if items and abs(total_ratio - 100.0) > 0.01:
+        return jsonify({'code': 400, 'message': f'分成比例之和为 {total_ratio}%，必须等于 100%', 'data': None})
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT 1 FROM contracts WHERE id=?", (contract_id,))
+    if not cur.fetchone():
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    operator = payload['username']
+    try:
+        # 整体替换：先删后插
+        cur.execute("DELETE FROM contract_commissions WHERE contract_id=?", (contract_id,))
+        for item in items:
+            u = (item.get('username') or '').strip()
+            r = float(item.get('ratio') or 0)
+            cur.execute(
+                "INSERT INTO contract_commissions (contract_id, username, ratio, created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (contract_id, u, r, operator, now)
+            )
+        db.commit()
+        try:
+            record_operation_log(operator, '设置分成', '合同管理',
+                                 f'合同ID={contract_id} 设置销售分成：'
+                                 + ', '.join(f"{it['username']}={it.get('ratio',0)}%" for it in items)
+                                 if items else f'合同ID={contract_id} 清除分成')
+        except Exception:
+            pass
+        return jsonify({'code': 200, 'message': '分成保存成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+# ==================== 框架合同验收记录 ====================
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/acceptances', methods=['GET'])
+@token_required
+def get_acceptances(contract_id):
+    """获取框架合同的验收记录列表（含每次验收的分成分配）。"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id, is_framework, total_amt, contract_name FROM contracts WHERE id=?", (contract_id,))
+    c = cur.fetchone()
+    if not c:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    cur.execute(
+        "SELECT id, acceptance_date, acceptance_amount, note, created_by, created_at "
+        "FROM contract_acceptances WHERE contract_id=? ORDER BY acceptance_date DESC",
+        (contract_id,)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    # 查每条验收的分成
+    for r in rows:
+        cur.execute(
+            "SELECT username, ratio FROM acceptance_commissions WHERE acceptance_id=? ORDER BY ratio DESC",
+            (r['id'],)
+        )
+        r['commissions'] = [{'username': cr['username'], 'ratio': float(cr['ratio'])} for cr in cur.fetchall()]
+    total_accepted = sum(float(r['acceptance_amount'] or 0) for r in rows)
+    return jsonify({
+        'code': 200, 'message': 'OK',
+        'data': {
+            'contract_id': contract_id,
+            'contract_name': c['contract_name'],
+            'is_framework': int(c['is_framework'] or 0),
+            'total_amt': float(c['total_amt'] or 0),
+            'total_accepted': round(total_accepted, 2),
+            'acceptances': rows,
+        }
+    })
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/acceptances', methods=['POST'])
+@token_required
+def add_acceptance(contract_id):
+    """新增一条验收记录（可同时传入分成）。
+    body: {acceptance_date, acceptance_amount, note, commissions: [{username, ratio}]}
+    """
+    payload = request.current_user
+    data = request.get_json(silent=True) or {}
+    acc_date = (data.get('acceptance_date') or '').strip()
+    acc_amt = float(data.get('acceptance_amount') or 0)
+    if not acc_date:
+        return jsonify({'code': 400, 'message': '验收日期不能为空', 'data': None})
+    if acc_amt <= 0:
+        return jsonify({'code': 400, 'message': '验收金额必须大于0', 'data': None})
+    commissions = data.get('commissions') or []
+    # 校验分成
+    total_ratio = 0
+    seen = set()
+    for item in commissions:
+        u = (item.get('username') or '').strip()
+        r = float(item.get('ratio') or 0)
+        if not u:
+            return jsonify({'code': 400, 'message': '分成人员用户名不能为空', 'data': None})
+        if u in seen:
+            return jsonify({'code': 400, 'message': f'人员 {u} 重复', 'data': None})
+        seen.add(u)
+        total_ratio += r
+    if commissions and abs(total_ratio - 100.0) > 0.01:
+        return jsonify({'code': 400, 'message': f'分成比例之和为 {total_ratio}%，必须等于 100%', 'data': None})
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT 1 FROM contracts WHERE id=?", (contract_id,))
+    if not cur.fetchone():
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    operator = payload['username']
+    try:
+        cur.execute(
+            "INSERT INTO contract_acceptances (contract_id, acceptance_date, acceptance_amount, note, created_by, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (contract_id, acc_date, acc_amt, data.get('note', ''), operator, now)
+        )
+        acc_id = cur.lastrowid
+        # 写入验收级分成
+        for item in commissions:
+            u = (item.get('username') or '').strip()
+            r = float(item.get('ratio') or 0)
+            cur.execute(
+                "INSERT INTO acceptance_commissions (acceptance_id, username, ratio, created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (acc_id, u, r, operator, now)
+            )
+        db.commit()
+        try:
+            record_operation_log(operator, '新增验收', '合同管理',
+                                 f'合同ID={contract_id} 验收日期={acc_date} 金额={acc_amt}'
+                                 + (f' 分成={commissions}' if commissions else ''))
+        except Exception:
+            pass
+        return jsonify({'code': 200, 'message': '验收记录添加成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+@contracts_bp.route('/api/contracts/acceptances/<int:acc_id>', methods=['DELETE'])
+@token_required
+def delete_acceptance(acc_id):
+    """删除一条验收记录（同时删除其分成）。"""
+    payload = request.current_user
+    if payload['role'] != '主任' and payload['role'] != '院长':
+        return jsonify({'code': 403, 'message': '无权删除验收记录', 'data': None})
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT contract_id, acceptance_amount FROM contract_acceptances WHERE id=?", (acc_id,))
+    row = cur.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '验收记录不存在', 'data': None})
+    try:
+        cur.execute("DELETE FROM acceptance_commissions WHERE acceptance_id=?", (acc_id,))
+        cur.execute("DELETE FROM contract_acceptances WHERE id=?", (acc_id,))
+        db.commit()
+        try:
+            record_operation_log(payload['username'], '删除验收', '合同管理',
+                                 f'删除验收记录 ID={acc_id}（合同ID={row["contract_id"]} 金额={row["acceptance_amount"]}）')
+        except Exception:
+            pass
+        return jsonify({'code': 200, 'message': '删除成功', 'data': None})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})

@@ -83,17 +83,21 @@ MODULE_FIELDS = {
         'work_type':      ['工作类型', '类型'],
     },
     'scraped_leads': {
-        'company':          ['公司', '公司名称', '单位'],
-        'contact_name':     ['联系人', '姓名'],
-        'phone':            ['电话', '手机'],
+        'company':          ['招标单位', '公司', '公司名称', '单位'],
+        'contact_name':     ['招标联系人', '联系人', '姓名'],
+        'phone':            ['招标联系电话', '招标电话', '电话', '手机'],
         'email':            ['邮箱', '电子邮件'],
         'industry':         ['行业'],
         'region':           ['地区', '区域'],
         'source':           ['来源'],
-        'opportunity_name': ['商机名称', '项目名称', '项目名'],
-        'budget':           ['预算', '预算金额', '项目预算'],
-        'deadline':         ['截止日期', '截止时间', '报名截止'],
-        'publish_date':     ['发布日期', '公告日期'],
+        'opportunity_name': ['标题', '商机名称', '项目名称', '项目名', '招标标题'],
+        'tender_no':        ['招标编号', '标段编号', '项目编号', '采购编号'],
+        'budget':           ['招标估价', '招标预算', '预算', '预算金额', '项目预算', '项目估算'],
+        'deadline':         ['投标截止时间', '投标截止日期', '截止日期', '截止时间', '报名截止'],
+        'publish_date':     ['发布时间', '发布日期', '公告日期', '公告时间'],
+        'agency':           ['招标代理机构', '代理机构', '招标代理'],
+        'agency_phone':     ['招标代理机构联系电话', '代理机构电话', '代理机构联系电话', '代理联系电话'],
+        'link':             ['详情链接', '链接', '获取链接', '原文链接'],
         'remark':           ['备注', '说明'],
     },
     'enterprises': {
@@ -590,15 +594,18 @@ def _import_one_row(cursor, module, row_data, field_map, is_wan, username):
     elif module == 'scraped_leads':
         cursor.execute("""
             INSERT INTO scraped_leads (company, contact_name, phone, email, industry, region,
-                                       source, opportunity_name, budget, deadline, publish_date,
-                                       remark, status, scraped_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                                       source, opportunity_name, tender_no, budget, deadline, publish_date,
+                                       agency, agency_phone, link, remark,
+                                       status, category, scraped_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '招投标监控', ?, ?)
         """, (row_data.get('company', ''), row_data.get('contact_name', ''),
               row_data.get('phone', ''), row_data.get('email', ''),
               row_data.get('industry', ''), row_data.get('region', ''),
               row_data.get('source', '导入'), row_data.get('opportunity_name', ''),
-              row_data.get('budget', ''), row_data.get('deadline', ''),
-              row_data.get('publish_date', ''), row_data.get('remark', ''), now, now))
+              row_data.get('tender_no', ''), row_data.get('budget', ''),
+              row_data.get('deadline', ''), row_data.get('publish_date', ''),
+              row_data.get('agency', ''), row_data.get('agency_phone', ''),
+              row_data.get('link', ''), row_data.get('remark', ''), now, now))
 
     elif module == 'enterprises':
         cursor.execute("""

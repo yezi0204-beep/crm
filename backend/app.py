@@ -83,20 +83,21 @@ def trigger_cleanup():
     payload = verify_token(token)
     if not payload:
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
-    
+
     role = payload.get('role', '')
     if role not in ('主任', '院长'):
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
-    
-    deleted_count = run_cleanup_now()
-    
-    record_operation_log(payload['username'], '手动清理', '客户', 
-        f'手动清理了 {deleted_count} 个超过 100 天未跟进的客户')
-    
+
+    # 公海池客户"超过100天自动删除"功能已取消，不再清理客户数据
+    run_cleanup_now()
+
+    record_operation_log(payload['username'], '手动清理', '客户',
+        '公海池客户自动删除功能已停用，未执行清理操作')
+
     return jsonify({
-        'code': 200, 
-        'message': '清理完成', 
-        'data': {'deleted_count': deleted_count}
+        'code': 200,
+        'message': '公海池客户自动删除功能已停用，无需清理',
+        'data': {'deleted_count': 0}
     })
 
 import atexit

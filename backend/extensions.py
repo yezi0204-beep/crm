@@ -78,7 +78,11 @@ def _init_tables(db):
     _init_tokens_table(cursor)
     _init_business_table(cursor)
     _init_contracts_table(cursor)
+    _init_contract_acceptances_table(cursor)
+    _init_acceptance_commissions_table(cursor)
+    _init_contract_commissions_table(cursor)
     _init_operation_logs_table(cursor)
+    _init_monthly_targets_table(cursor)
     _init_visits_table(cursor)
     _init_user_roles_table(cursor)
     _init_knowledge_base_table(cursor)
@@ -90,7 +94,44 @@ def _init_tables(db):
     _init_products_and_quotes_tables(cursor)
     _init_marketing_tables(cursor)
     _init_service_tables(cursor)
+    _backfill_user_security_fields(cursor)
     db.commit()
+
+
+def _backfill_user_security_fields(cursor):
+    """为现存缺失安全字段的用户回填 profile_digest 与 profile_signature。"""
+    try:
+        from security import get_integrity, get_non_repudiation
+        integrity = get_integrity()
+        non_rep = get_non_repudiation()
+    except Exception as e:
+        print(f"[_backfill_user_security_fields] 加载安全模块跳过: {e}")
+        return
+    cursor.execute(
+        "SELECT id, username, name, role, department, status "
+        "FROM users WHERE profile_digest IS NULL OR profile_digest = ''"
+    )
+    rows = cursor.fetchall()
+    for row in rows:
+        uid, username, name, role, dept, status = (
+            row[0], row[1], row[2], row[3], row[4] or '', row[5] or '在职'
+        )
+        try:
+            digest = integrity.compute_profile_digest(
+                username=username, name=name, role=role,
+                department=dept, status=status,
+            )
+            signed = non_rep.sign_operation(
+                username='system_init', operation='初始化身份摘要与签名',
+                module='系统', detail=f'用户 {name}({username}) 资料安全字段初始化',
+                extra={'target_user': username, 'name': name, 'role': role},
+            )
+            cursor.execute(
+                "UPDATE users SET profile_digest = ?, profile_signature = ? WHERE id = ?",
+                (digest, signed['signature'], uid),
+            )
+        except Exception as e:
+            print(f"[_backfill_user_security_fields] 回填失败 user={username}: {e}")
 
 
 def _init_users_table(cursor):
@@ -120,6 +161,18 @@ def _init_users_table(cursor):
         ('status', "TEXT DEFAULT '在职'"),
         ('department', "TEXT DEFAULT ''"),
         ('created_at', 'TEXT DEFAULT CURRENT_TIMESTAMP'),
+        # ---- 身份安全扩展字段 ----
+        # 7.1.2 完整性：HMAC 摘要，防止身份信息被篡改
+        ('profile_digest', 'TEXT'),
+        # 7.1.4 不可抵赖性：资料变更时的数字签名
+        ('profile_signature', 'TEXT'),
+        # 7.1.1 机密性：AES-GCM 加密的敏感备注字段（联系方式等）
+        ('profile_encrypted', 'TEXT'),
+        # ---- 月度考核扩展字段 ----
+        ('basic_salary', 'REAL DEFAULT 0'),           # 基本工资（元）
+        ('base_performance', 'REAL DEFAULT 0'),       # 基础绩效工资（元）
+        ('annual_target_amount', 'REAL DEFAULT 0'),   # 年度新签合同额指标（元/年）
+        ('is_sales_override', 'INTEGER DEFAULT 0'),   # 是否强制按销售考核（身兼多职）0/1
     ]:
         try:
             cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
@@ -480,9 +533,32 @@ def _init_lead_tables(cursor):
         cursor.execute("ALTER TABLE scraped_leads ADD COLUMN procurement_method TEXT")
     except:
         pass
+    # 招标信息扩展字段：招标编号 / 招标代理机构 / 代理机构联系电话
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN tender_no TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN agency TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN agency_phone TEXT")
+    except:
+        pass
     # lead_sources 幂等新增 category（能力域：招投标监控/电商商机/企业客源/竞品情报/舆情痛点/RSS订阅）
     try:
         cursor.execute("ALTER TABLE lead_sources ADD COLUMN category TEXT")
+    except:
+        pass
+    # scraped_leads 幂等新增 assign_reason：存储 AI 推荐负责人的科学依据（综合评分+维度分数+理由）
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN assign_reason TEXT")
+    except:
+        pass
+    # scraped_leads 幂等新增 business_id：线索分配后自动生成的商机关联 ID（线索→商机→合同链路）
+    try:
+        cursor.execute("ALTER TABLE scraped_leads ADD COLUMN business_id INTEGER")
     except:
         pass
     # 回填已有源/线索的 category（旧 RSS 源归入招投标监控）
@@ -758,11 +834,91 @@ def _init_business_table(cursor):
         pass
 
 
+def _init_monthly_targets_table(cursor):
+    """月度指标覆盖表（年度指标可12个月分解手工覆盖）。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS monthly_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                target_amount REAL NOT NULL DEFAULT 0,
+                updated_by TEXT,
+                updated_at TEXT,
+                UNIQUE(username, year, month)
+            )
+        """)
+    except Exception:
+        pass
+
+
 def _init_contracts_table(cursor):
     """合同表迁移：新增 cust_id 字段，建立合同↔客户直接关联（与 business.cust_id 对齐）。"""
     try:
         cursor.execute("ALTER TABLE contracts ADD COLUMN cust_id INTEGER")
     except:
+        pass
+    # 框架合同标记：0=普通合同，1=框架合同（按月验收额计入考核）
+    try:
+        cursor.execute("ALTER TABLE contracts ADD COLUMN is_framework INTEGER DEFAULT 0")
+    except:
+        pass
+
+
+def _init_contract_acceptances_table(cursor):
+    """框架合同月度验收记录表：每次验收记录金额和日期，用于考核计算。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS contract_acceptances (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_id INTEGER NOT NULL,
+                acceptance_date TEXT NOT NULL,
+                acceptance_amount REAL NOT NULL DEFAULT 0,
+                note TEXT,
+                created_by TEXT,
+                created_at TEXT
+            )
+        """)
+    except Exception:
+        pass
+
+
+def _init_acceptance_commissions_table(cursor):
+    """验收记录级分成表：框架合同每次验收可单独分配销售分成比例。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS acceptance_commissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                acceptance_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                ratio REAL NOT NULL DEFAULT 0,
+                created_by TEXT,
+                created_at TEXT,
+                UNIQUE(acceptance_id, username)
+            )
+        """)
+    except Exception:
+        pass
+
+
+def _init_contract_commissions_table(cursor):
+    """合同销售分成表：一个合同可分配给多个销售，按比例分成。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS contract_commissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                ratio REAL NOT NULL DEFAULT 0,
+                created_by TEXT,
+                created_at TEXT,
+                updated_by TEXT,
+                updated_at TEXT,
+                UNIQUE(contract_id, username)
+            )
+        """)
+    except Exception:
         pass
 
 
@@ -786,6 +942,16 @@ def _init_operation_logs_table(cursor):
         cursor.execute("ALTER TABLE operation_logs ADD COLUMN is_read INTEGER DEFAULT 0")
     except:
         pass
+    # ---- 身份安全扩展字段（7.1.2 完整性 + 7.1.4 不可抵赖性）----
+    for col, decl in [
+        ('digest', 'TEXT'),       # SHA-256 摘要，检测篡改
+        ('signature', 'TEXT'),    # RSA-PSS 数字签名，不可抵赖
+        ('timestamp_utc', 'TEXT'),  # 签名时的 UTC 时间
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE operation_logs ADD COLUMN {col} {decl}")
+        except Exception:
+            pass
 
 
 def _init_visits_table(cursor):
@@ -1259,10 +1425,35 @@ def record_operation_log(username, operation, module, detail=''):
         db = get_db()
         cursor = db.cursor()
         ip_address = request.remote_addr if request else ''
+        created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # ---- 7.1.4 不可抵赖性 + 7.1.2 完整性：操作签名 ----
+        digest = ''
+        signature = ''
+        timestamp_utc = ''
+        try:
+            from security import get_integrity, get_non_repudiation
+            integrity = get_integrity()
+            non_rep = get_non_repudiation()
+            signed = non_rep.sign_operation(
+                username=username,
+                operation=operation,
+                module=module,
+                detail=detail,
+                extra={'ip': ip_address, 'created_at': created_at},
+            )
+            digest = signed['digest']
+            signature = signed['signature']
+            timestamp_utc = signed['timestamp']
+        except Exception:
+            pass
+
         cursor.execute("""
-            INSERT INTO operation_logs (username, operation, module, detail, ip_address, created_at, is_read)
-            VALUES (?, ?, ?, ?, ?, ?, 0)
-        """, (username, operation, module, detail, ip_address, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            INSERT INTO operation_logs (username, operation, module, detail, ip_address, created_at, is_read,
+                                        digest, signature, timestamp_utc)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+        """, (username, operation, module, detail, ip_address, created_at,
+              digest or None, signature or None, timestamp_utc or None))
         db.commit()
     except Exception as e:
         pass
@@ -1334,6 +1525,18 @@ def admin_required(f):
     return decorated
 
 
+def appraisal_viewer_required(f):
+    """月度考核查看权限：主任/院长/人力。人力只能查看总览，不能配置/导出。"""
+    @wraps(f)
+    @token_required
+    def decorated(*args, **kwargs):
+        payload = request.current_user
+        if payload['role'] not in ('主任', '院长', '人力'):
+            return jsonify({'code': 403, 'message': '权限不足', 'data': None})
+        return f(*args, **kwargs)
+    return decorated
+
+
 def check_login_rate_limit(ip_address):
     now = time.time()
     if ip_address in LOGIN_ATTEMPTS:
@@ -1354,49 +1557,6 @@ def reset_login_rate_limit(ip_address=None):
         LOGIN_ATTEMPTS.pop(ip_address, None)
     else:
         LOGIN_ATTEMPTS.clear()
-
-
-INACTIVE_DAYS = 100
-
-
-def cleanup_inactive_customers():
-    from datetime import datetime, timedelta
-    cutoff_date = (datetime.now() - timedelta(days=INACTIVE_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
-    
-    try:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT c.id, c.name, c.company, c.last_follow, c.created_at, c.owner_id
-            FROM customers c
-            WHERE (c.last_follow IS NOT NULL AND c.last_follow < ?)
-               OR (c.last_follow IS NULL AND c.created_at < ?)
-        """, (cutoff_date, cutoff_date))
-        
-        customers_to_delete = cursor.fetchall()
-        
-        deleted_count = 0
-        for customer in customers_to_delete:
-            cust_id = customer['id']
-            try:
-                cursor.execute("UPDATE business SET cust_id = NULL WHERE cust_id = ?", (cust_id,))
-                cursor.execute("DELETE FROM customers WHERE id = ?", (cust_id,))
-                deleted_count += 1
-            except Exception:
-                conn.rollback()
-        
-        if deleted_count > 0:
-            conn.commit()
-        else:
-            conn.rollback()
-        
-        conn.close()
-        return deleted_count
-    except Exception:
-        return 0
 
 
 def update_customer_last_follow(customer_id):

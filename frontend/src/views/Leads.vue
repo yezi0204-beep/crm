@@ -34,13 +34,6 @@
           <div class="stat-value">{{ stats.imported || 0 }}</div>
         </div>
       </div>
-      <div class="stat-card stat-rejected">
-        <div class="stat-icon">🚫</div>
-        <div class="stat-body">
-          <div class="stat-label">已拒绝</div>
-          <div class="stat-value">{{ stats.rejected || 0 }}</div>
-        </div>
-      </div>
       <div class="stat-card stat-avg">
         <div class="stat-icon">📊</div>
         <div class="stat-body">
@@ -79,7 +72,6 @@
             <el-option label="待评估" value="pending" />
             <el-option label="已评估" value="evaluated" />
             <el-option label="已分配" value="imported" />
-            <el-option label="已拒绝" value="rejected" />
           </el-select>
           <el-select v-model="filterSource" placeholder="全部来源" clearable @change="fetchLeads" style="width:180px">
             <el-option v-for="s in sources" :key="s.id" :label="s.name" :value="s.id" />
@@ -98,7 +90,7 @@
 
         <el-table :data="leads" v-loading="loading" stripe class="leads-table">
           <el-table-column type="index" label="#" width="50" />
-          <el-table-column label="能力域" width="120">
+          <el-table-column label="能力域" width="110">
             <template #default="{ row }">
               <span v-if="row.category" :class="['cat-badge', 'cb-' + categoryKey(row.category)]" :title="row.category">
                 {{ categoryIcon(row.category) }} {{ row.category }}
@@ -106,72 +98,77 @@
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="商机名称" min-width="220">
+          <el-table-column label="商机名称 / 招标单位" min-width="200">
             <template #default="{ row }">
               <div class="opp-cell">
                 <div class="opp-name">{{ row.opportunity_name || row.company || '—' }}</div>
-                <div class="company-sub">🏢 {{ row.company }}<span v-if="row.contact_name"> · 👤 {{ row.contact_name }}</span></div>
+                <div class="company-sub">🏢 {{ row.company }}<span v-if="row.contact_name"> · 👤 {{ row.contact_name }}</span><span v-if="row.phone"> · 📞 {{ row.phone }}</span></div>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="行业/区域" width="130">
+          <el-table-column label="行业/区域" width="110">
             <template #default="{ row }">
               <div>{{ row.industry || '—' }}</div>
               <div class="muted">{{ row.region || '—' }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="来源" width="110">
+          <el-table-column label="来源/链接" width="110">
             <template #default="{ row }">
-              <span class="source-tag">{{ row.source || row.source_name || '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="获取链接" width="100" align="center">
-            <template #default="{ row }">
-              <a v-if="row.link" :href="row.link" target="_blank" rel="noopener" class="link-btn" title="打开获取链接">
-                <span>🔗</span><span>查看</span>
+              <div class="source-tag">{{ row.source || row.source_name || '—' }}</div>
+              <a v-if="row.link" :href="row.link" target="_blank" rel="noopener" class="link-btn" title="打开招标详情链接">
+                <span>🔗</span><span>详情链接</span>
               </a>
-              <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="采购详情" width="170">
+          <el-table-column label="招标详情" min-width="180">
             <template #default="{ row }">
-              <div v-if="row.procurement_method || row.budget || row.deadline || row.publish_date" class="proc-detail">
-                <div v-if="row.procurement_method" class="proc-method">📋 {{ row.procurement_method }}</div>
-                <div v-if="row.budget" class="proc-budget">💰 {{ row.budget }}</div>
-                <div v-if="row.deadline" :class="['proc-deadline', { 'proc-expired': isExpired(row.deadline) }]">⏰ {{ row.deadline }}</div>
-                <div v-else-if="row.publish_date" class="proc-publish muted">📅 {{ row.publish_date }}</div>
+              <div v-if="row.tender_no || row.publish_date || row.deadline || row.budget || row.agency" class="tender-detail">
+                <div v-if="row.tender_no" class="tender-no">🔖 {{ row.tender_no }}</div>
+                <div v-if="row.publish_date" class="tender-date muted">📅 {{ row.publish_date }}</div>
+                <div v-if="row.deadline" :class="['tender-date', { 'proc-expired': isExpired(row.deadline) }]">⏰ {{ row.deadline }}</div>
+                <div v-if="row.budget" class="tender-budget">💰 {{ row.budget }}</div>
+                <div v-if="row.agency" class="tender-agency">📑 {{ row.agency }}<span v-if="row.agency_phone"> · ☎️ {{ row.agency_phone }}</span></div>
               </div>
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="意向分" width="100" align="center">
+          <el-table-column label="意向分" width="80" align="center">
             <template #default="{ row }">
               <span v-if="row.intent_score !== null && row.intent_score !== undefined"
                     :class="['score-badge', scoreClass(row.intent_score)]">{{ row.intent_score }}</span>
               <span v-else class="muted">未评估</span>
             </template>
           </el-table-column>
-          <el-table-column label="评估理由" min-width="180" show-overflow-tooltip>
+          <el-table-column label="评估理由" min-width="150" show-overflow-tooltip>
             <template #default="{ row }">
               <span v-if="row.eval_reason" class="reason-text">{{ row.eval_reason }}</span>
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="推荐分配" width="110">
+          <el-table-column label="推荐分配" width="120">
             <template #default="{ row }">
-              <span v-if="row.assigned_name" class="assignee">{{ row.assigned_name }}</span>
+              <div v-if="row.assigned_name" class="assignee-cell">
+                <el-tooltip v-if="rowAssignReason(row)" placement="top" :show-after="300">
+                  <template #content>
+                    <div style="max-width:360px; line-height:1.6">
+                      <div><b>综合评分：{{ rowAssignReason(row).score }} 分</b>（满分100）</div>
+                      <div v-if="rowAssignReason(row).reason" style="margin-top:4px; color:#fff">{{ rowAssignReason(row).reason }}</div>
+                    </div>
+                  </template>
+                  <span class="assignee">{{ row.assigned_name }}</span>
+                  <span class="assign-score">{{ rowAssignReason(row).score }}分</span>
+                </el-tooltip>
+                <span v-else class="assignee">{{ row.assigned_name }}</span>
+              </div>
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="90" align="center">
+          <el-table-column label="状态" width="80" align="center">
             <template #default="{ row }">
               <span :class="['status-badge', 'st-' + row.status]">{{ statusLabel(row.status) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="抓取时间" width="150">
-            <template #default="{ row }">{{ formatDate(row.scraped_at) }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="240" fixed="right">
+          <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
               <el-button text size="small" @click="handleEvaluate(row)" v-if="row.status === 'pending'">评估</el-button>
               <el-button text size="small" type="primary" @click="openAssignDialog(row)" v-if="row.status === 'evaluated'">分配</el-button>
@@ -251,7 +248,7 @@
     </el-tabs>
 
     <!-- 分配对话框 -->
-    <el-dialog v-model="assignVisible" title="分配线索" width="500px" :close-on-click-modal="false" :close-on-press-escape="false">
+    <el-dialog v-model="assignVisible" title="分配线索" width="560px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-if="currentLead" class="assign-content">
         <div class="assign-info">
           <div class="info-row opp-title" v-if="currentLead.opportunity_name"><span class="info-label">商机：</span>{{ currentLead.opportunity_name }}</div>
@@ -259,8 +256,15 @@
           <div class="info-row"><span class="info-label">意向分：</span>
             <span :class="['score-badge', scoreClass(currentLead.intent_score)]">{{ currentLead.intent_score }}</span>
           </div>
-          <div class="info-row" v-if="currentLead.assigned_name"><span class="info-label">AI推荐：</span>{{ currentLead.assigned_name }}</div>
+          <div class="info-row" v-if="currentLead.assigned_name">
+            <span class="info-label">AI推荐：</span>
+            <span class="assignee">{{ currentLead.assigned_name }}</span>
+            <span v-if="currentAssignReason" class="assign-score">综合 {{ currentAssignReason.score }} 分</span>
+          </div>
           <div class="info-row reason" v-if="currentLead.eval_reason"><span class="info-label">评估理由：</span>{{ currentLead.eval_reason }}</div>
+          <div class="info-row reason" v-if="currentAssignReason?.reason">
+            <span class="info-label">推荐依据：</span>{{ currentAssignReason.reason }}
+          </div>
         </div>
         <el-form label-width="90px" style="margin-top:16px">
           <el-form-item label="分配给">
@@ -269,7 +273,7 @@
             </el-select>
           </el-form-item>
         </el-form>
-        <div class="assign-tip">分配后将自动创建客户并归属该销售，线索标记为已分配</div>
+        <div class="assign-tip">分配后将自动创建客户 + 商机（引导需求阶段）并归属该销售，线索标记为已分配</div>
       </div>
       <template #footer>
         <el-button @click="assignVisible = false">取消</el-button>
@@ -278,7 +282,7 @@
     </el-dialog>
 
     <!-- 线索详情对话框 -->
-    <el-dialog v-model="detailVisible" title="线索详情" width="600px" :close-on-click-modal="false" :close-on-press-escape="false">
+    <el-dialog v-model="detailVisible" title="线索详情" width="760px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div v-if="currentLead" class="detail-content">
         <div class="detail-section">
           <div class="info-row opp-title" v-if="currentLead.opportunity_name"><span class="info-label">商机名称：</span>{{ currentLead.opportunity_name }}</div>
@@ -297,6 +301,13 @@
             <a v-if="currentLead.link" :href="currentLead.link" target="_blank" rel="noopener" class="link-btn">{{ currentLead.link }}</a>
             <span v-else class="muted">—</span>
           </div>
+          <!-- 招标信息专属字段 -->
+          <div v-if="currentLead.tender_no" class="info-row"><span class="info-label">招标编号：</span>{{ currentLead.tender_no }}</div>
+          <div v-if="currentLead.agency" class="info-row"><span class="info-label">招标代理机构：</span>{{ currentLead.agency }}</div>
+          <div v-if="currentLead.agency_phone" class="info-row"><span class="info-label">代理机构电话：</span>{{ currentLead.agency_phone }}</div>
+          <div v-if="currentLead.publish_date" class="info-row"><span class="info-label">发布时间：</span>{{ currentLead.publish_date }}</div>
+          <div v-if="currentLead.deadline" class="info-row"><span class="info-label">投标截止时间：</span>{{ currentLead.deadline }}</div>
+          <div v-if="currentLead.budget" class="info-row"><span class="info-label">招标估价：</span>{{ currentLead.budget }}</div>
           <!-- 能力域专属字段 -->
           <div v-if="currentLead.category === '电商商机' && currentRaw.rank" class="info-row">
             <span class="info-label">榜单排名：</span>#{{ currentRaw.rank }}
@@ -327,8 +338,57 @@
           </div>
           <div class="info-row reason" v-if="currentLead.eval_reason"><span class="info-label">评估理由：</span>{{ currentLead.eval_reason }}</div>
           <div class="info-row"><span class="info-label">推荐分配：</span>{{ currentLead.assigned_name || '—' }}</div>
+          <div class="info-row" v-if="currentLead.business_id">
+            <span class="info-label">已转商机：</span>
+            <a class="link-btn" @click="goToBusiness(currentLead.business_id)">
+              商机 #{{ currentLead.business_id }}（引导需求阶段）
+            </a>
+          </div>
           <div class="info-row"><span class="info-label">状态：</span>
             <span :class="['status-badge', 'st-' + currentLead.status]">{{ statusLabel(currentLead.status) }}</span>
+          </div>
+        </div>
+        <!-- AI 推荐负责人分析：综合历史拜访案例、商机情况、合同签订情况的多维度科学推荐 -->
+        <div class="detail-section" v-if="currentAssignReason">
+          <div class="section-title">
+            AI 推荐负责人分析
+            <span class="section-hint">（基于销售历史拜访/商机/合同数据多维度评分）</span>
+          </div>
+          <div class="assign-analysis">
+            <div class="analysis-summary">
+              <div class="summary-score">
+                <div class="score-num">{{ currentAssignReason.score }}</div>
+                <div class="score-unit">分 / 满分100</div>
+              </div>
+              <div class="summary-reason">{{ currentAssignReason.reason }}</div>
+            </div>
+            <div class="analysis-dimensions" v-if="currentAssignReason.details">
+              <div class="dim-title">维度得分明细</div>
+              <div class="dim-bar" v-for="(val, key) in currentAssignReason.details" :key="key">
+                <div class="dim-label">{{ dimensionLabels[key] || key }}</div>
+                <div class="dim-track">
+                  <div class="dim-fill" :style="{ width: dimPercent(val, key) + '%' }"></div>
+                </div>
+                <div class="dim-value">{{ val }}<span class="dim-max">/{{ dimMax(key) }}</span></div>
+              </div>
+            </div>
+            <div class="analysis-candidates" v-if="currentAssignReason.all_candidates?.length">
+              <div class="dim-title">Top5 候选人对比</div>
+              <el-table :data="currentAssignReason.all_candidates" size="small" border>
+                <el-table-column label="排名" type="index" width="55" align="center" />
+                <el-table-column label="销售" width="100">
+                  <template #default="{ row }">{{ row.name }}</template>
+                </el-table-column>
+                <el-table-column label="综合分" width="75" align="center">
+                  <template #default="{ row }">
+                    <span :class="['cand-score', row.username === currentLead.assigned_to ? 'cand-best' : '']">{{ row.score }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column v-for="(label, key) in dimensionLabels" :key="key" :label="label" align="center" min-width="68">
+                  <template #default="{ row }">{{ row.details?.[key] ?? '—' }}</template>
+                </el-table-column>
+              </el-table>
+            </div>
           </div>
         </div>
         <div class="detail-section" v-if="currentLead.raw_data">
@@ -394,15 +454,95 @@
       </template>
     </el-dialog>
 
-    <!-- 手动导入对话框 -->
-    <el-dialog v-model="importVisible" title="手动导入线索" width="640px" :close-on-click-modal="false" :close-on-press-escape="false">
-      <div class="import-tip">
-        请输入 JSON 数组，每条线索包含 company(必填)/contact_name/phone/email/industry/region/source/remark 字段。
-      </div>
-      <el-input v-model="importText" type="textarea" :rows="12" placeholder='[{"company":"示例科技","contact_name":"张总","phone":"13800000000","industry":"信息技术","region":"全国","source":"手动导入","remark":"有采购需求"}]' />
+    <!-- 导入线索对话框（JSON / 表格上传双模式） -->
+    <el-dialog v-model="importVisible" title="导入线索" width="860px" :close-on-click-modal="false" :close-on-press-escape="false" top="6vh">
+      <el-tabs v-model="importTab" class="import-tabs">
+        <el-tab-pane label="📋 表格导入（Excel / CSV）" name="excel">
+          <div class="excel-import">
+            <div class="import-upload-area" @click="$refs.fileInput?.click()" @dragover.prevent @drop.prevent="handleDrop">
+              <el-upload
+                :show-file-list="false"
+                :before-upload="beforeFileUpload"
+                accept=".xlsx,.xls,.csv"
+                :auto-upload="false"
+                ref="fileInput"
+              >
+                <el-icon class="upload-icon" style="font-size: 48px; color: #3b82f6;"><Upload /></el-icon>
+                <div class="upload-text">
+                  <div class="upload-title">点击或拖拽 Excel / CSV 文件到此处</div>
+                  <div class="upload-tip">
+                    支持列头：标题 / 发布时间 / 招标编号 / 地区 / 投标截止时间 / 招标估价 / 招标单位 / 招标联系人 / 招标联系电话 / 招标代理机构 / 代理电话 / 详情链接，或通用公司/商机名等。
+                  </div>
+                </div>
+              </el-upload>
+            </div>
+            <div v-if="currentFile" class="file-info-bar">
+              <span>📄 {{ currentFile.name }}</span>
+              <span class="size">{{ formatSize(currentFile.size) }}</span>
+              <el-button text size="small" @click="clearUploaded">重新选择</el-button>
+            </div>
+
+            <div v-if="parseLoading" class="parse-loading">
+              <el-icon class="is-loading" style="font-size: 22px;"><Loading /></el-icon>
+              <span>正在解析表格结构...</span>
+            </div>
+
+            <div v-else-if="parseResult" class="parse-result">
+              <div class="parse-summary">
+                <el-tag type="success" effect="plain">
+                  ✅ 自动识别模块：{{ parseResult.module_names?.[parseResult.sheets?.[0]?.detected_module] || parseResult.sheets?.[0]?.detected_module }}
+                </el-tag>
+                <el-tag v-if="parseResult.sheets?.[0]?.is_ambiguous" type="warning" effect="plain">
+                  ⚠️ 匹配歧义，请在下方手动选择模块
+                </el-tag>
+                <span class="parse-stats">
+                  共 {{ currentSheet.total_rows }} 行 · 有效 {{ currentSheet.valid_count }} · 无效 {{ currentSheet.invalid_count }}
+                </span>
+                <div v-if="parseResult.sheets?.[0]?.module_scores?.length" class="module-switcher">
+                  <span>切换模块：</span>
+                  <el-select v-model="activeModule" size="small" style="width: 160px" @change="switchModule">
+                    <el-option
+                      v-for="m in parseResult.sheets[0].module_scores"
+                      :key="m.module"
+                      :label="`${m.name}(${m.score})`"
+                      :value="m.module"
+                    />
+                  </el-select>
+                </div>
+              </div>
+
+              <div class="preview-title">数据预览（前 50 行）</div>
+              <el-table :data="mappedPreview" stripe border size="small" max-height="320" class="preview-table">
+                <el-table-column label="行号" type="index" width="60" />
+                <el-table-column v-for="col in previewColumns" :key="col.key" :prop="col.key" :label="col.label" min-width="130" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <span :class="{ 'invalid-value': !row.__valid && !row._meta_ok }">{{ row[col.key] }}</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div v-if="parseResult.sheets?.[0]?.unmapped_columns?.length" class="unmapped-tip">
+                ⚠️ 未自动匹配的列：{{ parseResult.sheets[0].unmapped_columns.map(c => c.header).join('、') }}
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="🧾 JSON 文本导入" name="json">
+          <div class="import-tip">
+            请输入 JSON 数组，每条线索包含 company(必填)/contact_name/phone/email/industry/region/source/remark 字段。
+          </div>
+          <el-input v-model="importText" type="textarea" :rows="12" placeholder='[{"company":"示例科技","contact_name":"张总","phone":"13800000000","industry":"信息技术","region":"全国","source":"手动导入","remark":"有采购需求"}]' />
+        </el-tab-pane>
+      </el-tabs>
+
       <template #footer>
         <el-button @click="importVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleImport" :loading="importing">导入</el-button>
+        <el-button v-if="importTab === 'excel' && parseResult"
+                   type="primary" @click="confirmExcelImport" :loading="excelExecuting">
+          确认导入（{{ selectedCount }} 行）
+        </el-button>
+        <el-button v-if="importTab === 'json'" type="primary" @click="handleImport" :loading="importing">导入</el-button>
       </template>
     </el-dialog>
   </div>
@@ -411,10 +551,13 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Upload, Loading } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
+const router = useRouter()
 const activeTab = ref('queue')
 const loading = ref(false)
 const loadingSources = ref(false)
@@ -422,6 +565,173 @@ const evaluating = ref(false)
 const scraping = ref(false)
 const assigning = ref(false)
 const importing = ref(false)
+
+// ==================== 导入：通用状态 ====================
+const importVisible = ref(false)
+const importTab = ref('excel')  // 'excel' | 'json'
+const importText = ref('')
+
+// ==================== 导入：表格上传（smart-import） ====================
+const currentFile = ref(null)
+const parseLoading = ref(false)
+const excelExecuting = ref(false)
+const parseResult = ref(null)
+const activeModule = ref('scraped_leads')
+
+const currentSheet = computed(() => parseResult.value?.sheets?.[0] || { headers: [], rows: [], field_map: {} })
+
+const headerLabelCache = {
+  opportunity_name: '商机名称/标题', tender_no: '招标编号', publish_date: '发布时间',
+  deadline: '投标截止时间', budget: '招标估价', company: '招标单位',
+  contact_name: '招标联系人', phone: '联系电话', email: '邮箱',
+  region: '地区', agency: '代理机构', agency_phone: '代理电话',
+  link: '详情链接', industry: '行业', source: '来源', remark: '备注',
+}
+const FIELD_LABEL = (f) => headerLabelCache[f] || f
+
+const previewColumns = computed(() => {
+  const fm = currentSheet.value.all_field_maps?.[activeModule.value] || currentSheet.value.field_map || {}
+  const pairs = Object.entries(fm).sort((a, b) => (Number(a[0]) || 0) - (Number(b[0]) || 0))
+  const headers = currentSheet.value.headers || []
+  return pairs.map(([k, v]) => {
+    const colIdx = Number(k)
+    return { key: v, label: `${FIELD_LABEL(v)} · ${headers[colIdx] || ''}` || v }
+  })
+})
+
+const mappedPreview = computed(() => {
+  const rows = currentSheet.value.rows || []
+  const fm = currentSheet.value.all_field_maps?.[activeModule.value] || currentSheet.value.field_map || {}
+  return rows.slice(0, 50).map(r => {
+    const data = r.data || {}
+    const mapped = { __valid: r.valid, __errors: r.errors }
+    Object.entries(fm).forEach(([colIdx, fieldName]) => {
+      mapped[fieldName] = data[fieldName] != null ? data[fieldName]
+        : (r.raw && r.raw[Number(colIdx)] != null ? r.raw[Number(colIdx)] : '—')
+    })
+    return mapped
+  })
+})
+
+const selectedCount = computed(() => {
+  const rows = currentSheet.value.rows || []
+  return rows.filter(r => r.selected !== false).length
+})
+
+const formatSize = (bytes) => {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let i = 0
+  let n = bytes
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
+  return `${n.toFixed(2)} ${units[i]}`
+}
+
+const beforeFileUpload = (file) => {
+  if (!/\.(xlsx|xls|csv)$/i.test(file.name || '')) {
+    ElMessage.error('只支持 .xlsx / .xls / .csv 文件')
+    return false
+  }
+  currentFile.value = file
+  runParse(file)
+  return false  // 禁止 el-upload 自动上传
+}
+
+const handleDrop = (e) => {
+  const files = e.dataTransfer?.files
+  if (!files || !files.length) return
+  const file = files[0]
+  if (!/\.(xlsx|xls|csv)$/i.test(file.name || '')) {
+    ElMessage.error('只支持 .xlsx / .xls / .csv 文件')
+    return
+  }
+  currentFile.value = file
+  runParse(file)
+}
+
+const clearUploaded = () => {
+  currentFile.value = null
+  parseResult.value = null
+  activeModule.value = 'scraped_leads'
+}
+
+const runParse = async (file) => {
+  parseLoading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await api.post('/smart-import/parse', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    if (resp.code !== 200) throw new Error(resp.message || '解析失败')
+    parseResult.value = resp.data
+    // 自动选中线索模块（scraped_leads）作为默认；若识别到其他模块也回退到 scraped_leads
+    const firstSheet = resp.data.sheets?.[0]
+    const detected = firstSheet?.detected_module
+    if (detected && ['scraped_leads', 'customers', 'business', 'enterprises'].includes(detected)) {
+      activeModule.value = detected
+    } else {
+      activeModule.value = 'scraped_leads'
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '解析失败')
+  } finally {
+    parseLoading.value = false
+  }
+}
+
+const switchModule = (mod) => {
+  activeModule.value = mod
+}
+
+const confirmExcelImport = async () => {
+  const sheet = currentSheet.value
+  if (!sheet || !sheet.rows?.length) { ElMessage.warning('无数据可导入'); return }
+  if (!activeModule.value) { ElMessage.warning('请选择导入模块'); return }
+  const fm = sheet.all_field_maps?.[activeModule.value] || sheet.field_map
+  const sheetsPayload = [{
+    sheet_name: sheet.sheet_name || 'Sheet1',
+    module: activeModule.value,
+    field_map: fm,
+    rows: sheet.rows.map(r => ({
+      row_index: r.row_index, data: r.data, selected: r.selected !== false
+    }))
+  }]
+  excelExecuting.value = true
+  try {
+    const resp = await api.post('/smart-import/execute', {
+      sheets: sheetsPayload, is_wan: false
+    })
+    if (resp.code === 200) {
+      const { total_success, total_fail } = resp.data || {}
+      ElMessage.success(`导入完成：成功 ${total_success} 条，失败 ${total_fail} 条`)
+      importVisible.value = false
+      clearUploaded()
+      fetchLeads()
+      fetchStats()
+    } else {
+      ElMessage.error(resp.message || '导入失败')
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '导入失败')
+  } finally {
+    excelExecuting.value = false
+  }
+}
+
+// ==================== 导入：JSON 文本（旧功能保留） ====================
+const handleImport = async () => {
+  let leadsData
+  try { leadsData = JSON.parse(importText.value) } catch (e) { ElMessage.error('JSON 格式错误'); return }
+  if (!Array.isArray(leadsData)) { ElMessage.warning('请输入 JSON 数组'); return }
+  importing.value = true
+  try {
+    const resp = await api.post('/leads/import', { leads: leadsData })
+    if (resp.code === 200) { ElMessage.success(resp.message); importVisible.value = false; fetchLeads(); fetchStats() }
+    else ElMessage.error(resp.message)
+  } catch (e) { ElMessage.error('导入失败') }
+  finally { importing.value = false }
+}
 
 const leads = ref([])
 const sources = ref([])
@@ -468,21 +778,55 @@ const currentRaw = computed(() => {
   try { return JSON.parse(currentLead.value.raw_data) } catch (e) { return {} }
 })
 
+// 解析 AI 推荐负责人的科学依据（综合评分+6维度分数+Top5候选）
+const currentAssignReason = computed(() => {
+  if (!currentLead.value?.assign_reason) return null
+  try { return JSON.parse(currentLead.value.assign_reason) } catch (e) { return null }
+})
+
+// 表格行内解析 assign_reason（用于"推荐分配"列显示综合评分）
+const rowAssignReason = (row) => {
+  if (!row?.assign_reason) return null
+  try { return JSON.parse(row.assign_reason) } catch (e) { return null }
+}
+
+// 维度中文名映射
+const dimensionLabels = {
+  industry_match: '行业匹配',
+  performance: '历史业绩',
+  business_advance: '商机推进',
+  visit_experience: '拜访经验',
+  workload_balance: '工作量均衡',
+  region_match: '区域匹配'
+}
+// 各维度满分（与后端 _assign_lead 权重对齐）
+const dimensionMax = {
+  industry_match: 30,
+  performance: 25,
+  business_advance: 15,
+  visit_experience: 15,
+  workload_balance: 10,
+  region_match: 5
+}
+const dimMax = (key) => dimensionMax[key] || 100
+const dimPercent = (val, key) => {
+  const max = dimensionMax[key] || 100
+  return Math.min(100, Math.round((val / max) * 100))
+}
+
 const assignVisible = ref(false)
 const detailVisible = ref(false)
 const sourceVisible = ref(false)
-const importVisible = ref(false)
 const currentLead = ref(null)
 const assignForm = ref({ assigned_to: '' })
 const sourceForm = ref(defaultSourceForm())
-const importText = ref('')
 
 function defaultSourceForm() {
   return { id: null, name: '', source_type: 'ai_search', url: '', config: '', keywords: '',
            industry: '信息技术', region: '全国', interval_hours: 24, enabled: true, category: '招投标监控' }
 }
 
-const statusLabel = (s) => ({ pending: '待评估', evaluated: '已评估', imported: '已分配', rejected: '已拒绝' }[s] || s)
+const statusLabel = (s) => ({ pending: '待评估', evaluated: '已评估', imported: '已分配' }[s] || s)
 const typeLabel = (t) => ({ rss: 'RSS', api: 'API', html: 'HTML', ai_search: 'AI搜索', sample: '示例', manual: '手动' }[t] || t)
 
 const setCategory = (cat) => {
@@ -624,7 +968,12 @@ const handleAssign = async () => {
   try {
     const resp = await api.post(`/leads/${currentLead.value.id}/assign`, { assigned_to: assignForm.value.assigned_to })
     if (resp.code === 200) {
-      ElMessage.success(resp.message)
+      // 分配成功：已自动创建客户 + 商机，提示完整链路信息
+      const d = resp.data || {}
+      const parts = [resp.message]
+      if (d.customer_id) parts.push(`客户#${d.customer_id}`)
+      if (d.business_id) parts.push(`商机#${d.business_id}`)
+      ElMessage.success(parts.join('，'))
       assignVisible.value = false
       fetchLeads(); fetchStats()
     } else ElMessage.error(resp.message)
@@ -632,11 +981,18 @@ const handleAssign = async () => {
   finally { assigning.value = false }
 }
 
+// 跳转到商机详情页（线索转化的商机）
+const goToBusiness = (bizId) => {
+  detailVisible.value = false
+  router.push({ path: '/business', query: { id: bizId } })
+}
+
 const handleReject = async (row) => {
   try {
-    await ElMessageBox.confirm(`确定拒绝线索「${row.company}」？`, '提示', { type: 'warning' })
+    // 拒绝即删除：提示用户该操作不可恢复
+    await ElMessageBox.confirm(`确定拒绝线索「${row.company}」？拒绝后将自动删除该线索，操作不可恢复。`, '拒绝并删除线索', { type: 'warning', confirmButtonText: '确认拒绝', cancelButtonText: '取消' })
     const resp = await api.post(`/leads/${row.id}/reject`)
-    if (resp.code === 200) { ElMessage.success('已拒绝'); fetchLeads(); fetchStats() }
+    if (resp.code === 200) { ElMessage.success('已拒绝并删除'); fetchLeads(); fetchStats() }
     else ElMessage.error(resp.message)
   } catch (e) { /* cancelled */ }
 }
@@ -714,20 +1070,12 @@ const deleteSource = async (row) => {
   } catch (e) { /* cancelled */ }
 }
 
-// ==================== 导入 ====================
-const openImportDialog = () => { importText.value = ''; importVisible.value = true }
-
-const handleImport = async () => {
-  let leadsData
-  try { leadsData = JSON.parse(importText.value) } catch (e) { ElMessage.error('JSON 格式错误'); return }
-  if (!Array.isArray(leadsData)) { ElMessage.warning('请输入 JSON 数组'); return }
-  importing.value = true
-  try {
-    const resp = await api.post('/leads/import', { leads: leadsData })
-    if (resp.code === 200) { ElMessage.success(resp.message); importVisible.value = false; fetchLeads(); fetchStats() }
-    else ElMessage.error(resp.message)
-  } catch (e) { ElMessage.error('导入失败') }
-  finally { importing.value = false }
+// ==================== 导入（旧文本模式合并至顶部统一实现，此处仅保留 openImportDialog） ====================
+const openImportDialog = () => {
+  importText.value = ''
+  clearUploaded()
+  importTab.value = 'excel'
+  importVisible.value = true
 }
 
 onMounted(() => { fetchData() })
@@ -748,7 +1096,6 @@ onMounted(() => { fetchData() })
 .stat-pending .stat-icon { background: #fef3c7; } .stat-pending .stat-value { color: #d97706; }
 .stat-evaluated .stat-icon { background: #dbeafe; } .stat-evaluated .stat-value { color: #2563eb; }
 .stat-imported .stat-icon { background: #d1fae5; } .stat-imported .stat-value { color: #059669; }
-.stat-rejected .stat-icon { background: #fee2e2; } .stat-rejected .stat-value { color: #dc2626; }
 .stat-avg .stat-icon { background: #ede9fe; } .stat-avg .stat-value { color: #7c3aed; }
 .stat-sources .stat-icon { background: #e0f2fe; } .stat-sources .stat-value { color: #0284c7; }
 .stat-body { display: flex; flex-direction: column; }
@@ -778,6 +1125,17 @@ onMounted(() => { fetchData() })
 .proc-deadline.proc-expired { color: #dc2626; text-decoration: line-through; }
 .proc-publish { font-size: 12px; }
 .muted { color: #94a3b8; font-size: 12px; }
+
+/* 联系信息（商机名称子行） */
+.company-sub { font-size: 12px; color: #64748b; margin-top: 2px; word-break: break-all; }
+
+/* 招标详情列（编号/发布/截止/估价/代理） */
+.tender-detail { line-height: 1.7; }
+.tender-no { font-size: 12px; color: #7c3aed; font-weight: 600; }
+.tender-date { font-size: 12px; color: #059669; }
+.tender-date.muted { color: #94a3b8; }
+.tender-budget { font-size: 12px; color: #d97706; }
+.tender-agency { font-size: 12px; color: #334155; }
 .mono { font-family: monospace; font-size: 12px; }
 .remark-text { font-size: 13px; color: #475569; }
 .src-name { font-weight: 600; color: #1e293b; }
@@ -824,7 +1182,6 @@ onMounted(() => { fetchData() })
 .st-pending { background: #fef3c7; color: #d97706; }
 .st-evaluated { background: #dbeafe; color: #2563eb; }
 .st-imported { background: #d1fae5; color: #059669; }
-.st-rejected { background: #fee2e2; color: #dc2626; }
 
 .type-badge { font-size: 11px; padding: 2px 8px; border-radius: 8px; font-weight: 500; }
 .tp-rss { background: #ede9fe; color: #7c3aed; }
@@ -850,7 +1207,78 @@ onMounted(() => { fetchData() })
 .detail-section { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px dashed #e2e8f0; }
 .detail-section:last-child { border-bottom: none; }
 .section-title { font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 10px; }
+.section-hint { font-size: 12px; color: #94a3b8; font-weight: normal; }
 .raw-data { background: #f8fafc; padding: 12px; border-radius: 8px; font-size: 12px; color: #475569; max-height: 200px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
 
+/* 表格"推荐分配"列：姓名 + 综合评分徽章 */
+.assignee-cell { display: inline-flex; align-items: center; gap: 6px; }
+.assign-score {
+  display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px;
+  font-weight: 600; color: #fff; background: #3b82f6;
+}
+
+/* 详情对话框：AI 推荐负责人分析区块 */
+.assign-analysis { display: flex; flex-direction: column; gap: 16px; }
+.analysis-summary {
+  display: flex; gap: 16px; align-items: center; padding: 12px 14px;
+  background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
+  border-radius: 10px; border: 1px solid #dbeafe;
+}
+.summary-score {
+  flex-shrink: 0; text-align: center; padding: 6px 14px;
+  background: #fff; border-radius: 10px; border: 1px solid #bfdbfe;
+}
+.score-num { font-size: 26px; font-weight: 700; color: #2563eb; line-height: 1.1; }
+.score-unit { font-size: 11px; color: #64748b; margin-top: 2px; }
+.summary-reason { font-size: 13px; color: #1e293b; line-height: 1.6; flex: 1; }
+.analysis-dimensions, .analysis-candidates { display: flex; flex-direction: column; gap: 8px; }
+.dim-title { font-size: 13px; font-weight: 600; color: #475569; }
+.dim-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.dim-label { width: 80px; color: #64748b; flex-shrink: 0; }
+.dim-track {
+  flex: 1; height: 8px; background: #f1f5f9; border-radius: 4px; overflow: hidden;
+}
+.dim-fill {
+  height: 100%; background: linear-gradient(90deg, #60a5fa, #3b82f6);
+  border-radius: 4px; transition: width 0.4s ease;
+}
+.dim-value { width: 56px; text-align: right; color: #1e293b; font-weight: 600; flex-shrink: 0; }
+.dim-max { color: #94a3b8; font-weight: normal; font-size: 11px; }
+.cand-score { font-weight: 600; color: #475569; }
+.cand-best { color: #fff; background: #10b981; padding: 2px 8px; border-radius: 8px; }
+
 .import-tip { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; line-height: 1.5; }
+
+/* 表格导入对话框 */
+.import-tabs :deep(.el-tabs__content) { min-height: 320px; }
+.excel-import { display: flex; flex-direction: column; gap: 14px; }
+.import-upload-area {
+  border: 2px dashed #cbd5e1; border-radius: 12px; padding: 28px 16px; cursor: pointer;
+  background: #f8fafc; display: flex; justify-content: center; text-align: center; transition: all 0.2s;
+}
+.import-upload-area:hover { border-color: #3b82f6; background: #eff6ff; }
+.upload-text { margin-left: 14px; }
+.upload-title { font-size: 15px; font-weight: 600; color: #1e293b; margin-bottom: 6px; }
+.upload-tip { font-size: 12px; color: #64748b; line-height: 1.6; }
+
+.file-info-bar {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  border-radius: 8px; background: #f1f5f9; border: 1px solid #e2e8f0; font-size: 13px; color: #334155;
+}
+.file-info-bar .size { color: #64748b; margin-right: auto; }
+
+.parse-loading { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 32px; color: #64748b; }
+
+.parse-result { display: flex; flex-direction: column; gap: 12px; }
+.parse-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.parse-stats { margin-left: auto; color: #64748b; font-size: 13px; }
+.module-switcher { display: inline-flex; align-items: center; gap: 8px; margin-left: 4px; font-size: 13px; color: #475569; }
+
+.preview-title { font-size: 13px; font-weight: 600; color: #334155; margin: 4px 0 0; }
+.preview-table .invalid-value { color: #dc2626; background: #fee2e2; border-radius: 4px; padding: 2px 4px; }
+
+.unmapped-tip {
+  margin-top: 4px; font-size: 12px; color: #92400e; background: #fffbeb;
+  padding: 8px 12px; border-radius: 6px; border: 1px solid #fde68a;
+}
 </style>
