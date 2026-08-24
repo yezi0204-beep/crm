@@ -44,19 +44,25 @@
         <el-row :gutter="16" class="stat-row" style="margin-bottom: 16px;">
           <el-col :span="6">
             <el-card shadow="hover" class="stat-card card-primary">
-              <div class="stat-label">{{ t('appraisal.cardSalesCount') }}</div>
-              <div class="stat-value">{{ stats.salesCount }}</div>
+              <div class="stat-label">部门当月指标</div>
+              <div class="stat-value">{{ formatMoney(overview.dept_monthly_target) }}</div>
+              <div style="color:#909399; font-size:12px; margin-top:4px;">
+                {{ overview.year }}年{{ overview.month }}月
+              </div>
             </el-card>
           </el-col>
           <el-col :span="6">
             <el-card shadow="hover" class="stat-card card-success">
-              <div class="stat-label">{{ t('appraisal.cardDeptCount') }}</div>
-              <div class="stat-value">{{ stats.deptCount }}</div>
+              <div class="stat-label">部门累计新签</div>
+              <div class="stat-value highlight">{{ formatMoney(overview.dept_cumulative_actual) }}</div>
+              <div style="color:#909399; font-size:12px; margin-top:4px;">
+                2月至{{ overview.month }}月累计
+              </div>
             </el-card>
           </el-col>
           <el-col :span="6">
             <el-card shadow="hover" class="stat-card card-warning">
-              <div class="stat-label">部门月度完成率</div>
+              <div class="stat-label">部门当月完成率</div>
               <div class="stat-value highlight">{{ formatPct(overview.dept_rate_pct) }}</div>
               <el-progress
                 :percentage="clampRate(overview.dept_rate_pct)"
@@ -163,9 +169,12 @@
                 <strong style="color:#409eff;">{{ formatMoney(row.total_pay) }}</strong>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="100" fixed="right" v-if="isAdmin">
+            <el-table-column label="操作" width="160" fixed="right" v-if="canViewAppraisal">
               <template #default="{row}">
-                <el-button link type="primary" size="small" @click="openConfig(row)">
+                <el-button link type="primary" size="small" @click="openDetails(row)">
+                  明细
+                </el-button>
+                <el-button v-if="isAdmin" link type="warning" size="small" @click="openConfig(row)">
                   {{ t('appraisal.configure') }}
                 </el-button>
               </template>
@@ -434,6 +443,8 @@
               </el-descriptions-item>
               <el-descriptions-item :label="t('appraisal.cumActual')">
                 {{ formatMoney(mine?.cumulative_actual_amt) }}
+                <el-button link type="primary" size="small" style="margin-left:8px;"
+                  @click="openDetails(mine)">查看明细</el-button>
               </el-descriptions-item>
               <el-descriptions-item :label="t('appraisal.basicSalary')">
                 {{ formatMoney(mine?.basic_salary) }}
@@ -458,6 +469,103 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 明细抽屉 -->
+    <el-drawer
+      v-model="detailsDrawer"
+      :title="detailsTitle"
+      direction="rtl"
+      size="70%"
+      destroy-on-close
+    >
+      <div v-loading="loadingDetails">
+        <!-- 公式说明 -->
+        <el-card shadow="never" style="margin-bottom:16px;" v-if="detailsData?.formula_explain?.length">
+          <template #header><strong>计算公式</strong></template>
+          <div v-for="(f, i) in detailsData.formula_explain" :key="i"
+               style="font-family: monospace; font-size: 13px; line-height: 2; color: #303133;">
+            {{ f }}
+          </div>
+        </el-card>
+
+        <!-- 汇总 -->
+        <el-card shadow="never" style="margin-bottom:16px;">
+          <el-descriptions :column="3" border size="small">
+            <el-descriptions-item label="姓名">{{ detailsData?.name }}</el-descriptions-item>
+            <el-descriptions-item label="角色">{{ detailsData?.role }}</el-descriptions-item>
+            <el-descriptions-item label="身份">
+              <el-tag size="small" :type="detailsData?.is_director ? 'warning' : (detailsData?.is_sales ? 'danger' : 'info')">
+                {{ detailsData?.is_director ? '主任(部门)' : (detailsData?.is_sales ? '销售' : '非销售') }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="考核月份">{{ detailsData?.year }}年{{ detailsData?.month }}月</el-descriptions-item>
+            <el-descriptions-item label="累计实际">
+              <span style="color:#e6a23c; font-weight:700; font-size:16px;">{{ formatMoney(detailsData?.total) }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="明细笔数">{{ detailsData?.items?.length || 0 }} 笔</el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
+        <!-- 主任：部门成员明细 -->
+        <el-card v-if="detailsData?.is_director && detailsData?.dept_members?.length"
+                 shadow="never" style="margin-bottom:16px;">
+          <template #header><strong>部门成员累计实际</strong>（主任=部门所有销售之和）</template>
+          <el-table :data="detailsData.dept_members" border size="small">
+            <el-table-column prop="name" label="姓名" width="100" />
+            <el-table-column label="累计实际" width="120" align="right">
+              <template #default="{row}">
+                <strong style="color:#e6a23c;">{{ formatMoney(row.total) }}</strong>
+              </template>
+            </el-table-column>
+            <el-table-column label="明细笔数" width="80" align="center">
+              <template #default="{row}">{{ row.items.length }} 笔</template>
+            </el-table-column>
+            <el-table-column prop="username" label="用户名" />
+          </el-table>
+        </el-card>
+
+        <!-- 项目明细表 -->
+        <el-card shadow="never">
+          <template #header><strong>项目明细与分成</strong></template>
+          <el-table :data="detailsData?.items" border stripe size="small" empty-text="暂无明细">
+            <el-table-column label="类型" width="130">
+              <template #default="{row}">
+                <el-tag size="small" :type="row.is_framework ? 'warning' : 'primary'">{{ row.type_name }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="contract_no" label="合同编号" width="130" show-overflow-tooltip />
+            <el-table-column prop="contract_name" label="合同名称" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="sign_date" label="签订/验收日期" width="120">
+              <template #default="{row}">{{ (row.sign_date||'').slice(0,10) }}</template>
+            </el-table-column>
+            <el-table-column label="基数" width="100" align="right">
+              <template #default="{row}">{{ formatMoney(row.base_amount) }}</template>
+            </el-table-column>
+            <el-table-column prop="base_label" label="基数类型" width="80" align="center" />
+            <el-table-column label="分成比例" width="90" align="right">
+              <template #default="{row}">{{ row.my_ratio }}%</template>
+            </el-table-column>
+            <el-table-column label="分成金额" width="120" align="right">
+              <template #default="{row}">
+                <strong style="color:#e6a23c;">{{ formatMoney(row.my_amount) }}</strong>
+              </template>
+            </el-table-column>
+            <el-table-column prop="formula" label="计算公式" min-width="200">
+              <template #default="{row}">
+                <code style="font-size:12px; color:#606266;">{{ row.formula }}</code>
+              </template>
+            </el-table-column>
+            <el-table-column label="分成方式" width="90" align="center">
+              <template #default="{row}">
+                <el-tag size="small" :type="row.commission_type==='none' ? 'info' : 'success'">
+                  {{ row.commission_type==='contract' ? '合同级' : (row.commission_type==='acceptance' ? '验收级' : '独享') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -494,6 +602,8 @@ const overview = reactive({
   year: now.getFullYear(), month: now.getMonth()+1,
   avg_sales_rate_pct: 0,
   dept_rate_pct: null,
+  dept_monthly_target: 0,
+  dept_cumulative_actual: 0,
   rows: []
 })
 
@@ -587,6 +697,8 @@ async function loadOverview() {
       overview.month = res.data.month
       overview.avg_sales_rate_pct = res.data.avg_sales_rate_pct || 0
       overview.dept_rate_pct = res.data.dept_rate_pct ?? null
+      overview.dept_monthly_target = res.data.dept_monthly_target || 0
+      overview.dept_cumulative_actual = res.data.dept_cumulative_actual || 0
       overview.rows = res.data.rows || []
     } else {
       ElMessage.error((res && res.message) || t('appraisal.loadFail'))
@@ -598,6 +710,37 @@ async function loadOverview() {
 
 // --- 年度完成率趋势 ---
 const loadingYearly = ref(false)
+
+// --- 明细抽屉 ---
+const detailsDrawer = ref(false)
+const loadingDetails = ref(false)
+const detailsData = ref(null)
+const detailsTitle = computed(() => {
+  if (!detailsData.value) return '考核明细'
+  const d = detailsData.value
+  return `${d.name} - ${d.year}年${d.month}月考核明细`
+})
+
+async function openDetails(row) {
+  if (!row || !row.username) return
+  detailsDrawer.value = true
+  loadingDetails.value = true
+  detailsData.value = null
+  try {
+    const { year, month } = pickYM(yearMonthPicker.value)
+    const res = await api.get(`/appraisal/details/${encodeURIComponent(row.username)}`, { year, month })
+    if (res && res.code === 200 && res.data) {
+      detailsData.value = res.data
+    } else {
+      ElMessage.error((res && res.message) || '加载明细失败')
+    }
+  } catch (e) {
+    ElMessage.error('加载明细失败')
+  } finally {
+    loadingDetails.value = false
+  }
+}
+
 const yearlyYearPicker = ref(String(now.getFullYear()))
 const yearlyData = ref({ dept_rates: {}, sales_trend: [] })
 

@@ -160,15 +160,17 @@ def create_contract():
             (b_id, cust_id, contract_no, party_a, project_order_no, total_amt, paid_amt, sign_date, owner_id, status,
              contract_name, classification, is_audit, pending_acceptance_amount,
              cost, gross_profit, acceptance_date, expected_income_date,
-             expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes, note, is_framework)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+             expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes, note, is_framework,
+             income, tax_amount, business_direction)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
         """, (
             b_id, cust_id, contract_no, data.get('party_a'), data.get('project_order_no'),
             data.get('total_amt'), 0, data.get('sign_date'), data.get('owner_id'), '执行中',
             data.get('contract_name'), data.get('classification'), data.get('is_audit'), data.get('pending_acceptance_amount'),
             data.get('cost'), data.get('gross_profit'), data.get('acceptance_date'), data.get('expected_income_date'),
             data.get('expected_income_year'), data.get('business_type'), data.get('acceptance_nodes'), data.get('payment_nodes'),
-            data.get('note'), 1 if data.get('is_framework') else 0
+            data.get('note'), 1 if data.get('is_framework') else 0,
+            data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction')
         ))
         db.commit()
         contract_id = cursor.lastrowid
@@ -209,7 +211,8 @@ def update_contract(contract_id):
                 cost=?, gross_profit=?, acceptance_date=?, expected_income_date=?,
                 expected_income_year=?, business_type=?, status=?, owner_id=?,
                 cust_id=?, b_id=?,
-                acceptance_nodes=?, payment_nodes=?, note=?, is_framework=?
+                acceptance_nodes=?, payment_nodes=?, note=?, is_framework=?,
+                income=?, tax_amount=?, business_direction=?
             WHERE id=?
         """, (
             data.get('contract_name'), data.get('contract_no'), data.get('party_a'), data.get('project_order_no'),
@@ -219,7 +222,9 @@ def update_contract(contract_id):
             data.get('business_type'), data.get('status'), data.get('owner_id'),
             cust_id, b_id,
             data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'),
-            1 if data.get('is_framework') else 0, contract_id
+            1 if data.get('is_framework') else 0,
+            data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction'),
+            contract_id
         ))
         db.commit()
 
@@ -407,8 +412,8 @@ def add_acceptance(contract_id):
     acc_amt = float(data.get('acceptance_amount') or 0)
     if not acc_date:
         return jsonify({'code': 400, 'message': '验收日期不能为空', 'data': None})
-    if acc_amt <= 0:
-        return jsonify({'code': 400, 'message': '验收金额必须大于0', 'data': None})
+    if acc_amt == 0:
+        return jsonify({'code': 400, 'message': '收入不能为0（正数为验收，负数为核减）', 'data': None})
     commissions = data.get('commissions') or []
     # 校验分成
     total_ratio = 0
@@ -821,3 +826,345 @@ def download_contract_file():
 
 def register_routes(app):
     app.register_blueprint(contracts_bp)
+
+
+# ==================== 验收管理 ====================
+
+@contracts_bp.route('/api/acceptances', methods=['GET'])
+@token_required
+def get_acceptance_list():
+    """验收列表：每笔验收记录一行，附带合同上下文与累计已验收额。"""
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("""
+        SELECT ca.id AS acceptance_id, ca.acceptance_date, ca.acceptance_amount, ca.note,
+               ca.created_by, ca.created_at,
+               c.id AS contract_id, c.contract_name, c.contract_no, c.party_a,
+               c.total_amt, c.income, c.tax_amount, c.business_direction, c.status,
+               (SELECT COALESCE(SUM(ca2.acceptance_amount), 0)
+                FROM contract_acceptances ca2
+                WHERE ca2.contract_id = c.id) AS cumulative_accepted
+        FROM contract_acceptances ca
+        JOIN contracts c ON ca.contract_id = c.id
+        ORDER BY ca.acceptance_date DESC, c.sign_date DESC
+    """)
+    rows = [dict(r) for r in cursor.fetchall()]
+    for r in rows:
+        total = float(r.get('total_amt') or 0)
+        cum = float(r.get('cumulative_accepted') or 0)
+        r['pending_acceptance_amount'] = round(total - cum, 2)
+    return jsonify({'code': 200, 'data': rows})
+
+
+@contracts_bp.route('/api/acceptances/import', methods=['POST'])
+@token_required
+def import_acceptances():
+    """导入验收数据：每行创建一笔验收记录，并可选更新合同级字段(收入/税额/业务方向)。
+    必填：合同编号、验收日期、验收金额(万)。可选：验收情况、收入(万)、税额(万)、业务方向。
+    """
+    payload = request.current_user
+    username = payload['username']
+
+    data = request.get_json(silent=True)
+    # 兼容前端发送裸数组或 {rows: [...]} 两种形式
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = data.get('rows') or data.get('data') or []
+    else:
+        rows = []
+    if not rows:
+        return jsonify({'code': 400, 'message': '无有效数据', 'data': None})
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # 预加载所有合同编号 → id 映射
+    cursor.execute("SELECT id, contract_no FROM contracts WHERE contract_no IS NOT NULL")
+    no_map = {r['contract_no']: r['id'] for r in cursor.fetchall()}
+
+    # 防重复：同一合同 + 验收日期 已存在则跳过
+    cursor.execute("SELECT contract_id, acceptance_date FROM contract_acceptances")
+    existing = {(r['contract_id'], r['acceptance_date']) for r in cursor.fetchall()}
+
+    def _parse_amt(val):
+        if val is None or val == '':
+            return None
+        try:
+            return float(val)  # 元，无需单位转换
+        except Exception:
+            return None
+
+    def _parse_date(val):
+        if not val:
+            return None
+        if isinstance(val, datetime):
+            return val.strftime('%Y-%m-%d')
+        return str(val)[:10]
+
+    success_count = 0
+    fail_count = 0
+    results = []
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    for item in rows:
+        row_data = item.get('data', item) if isinstance(item, dict) else {}
+        row_index = item.get('row_index', 0) if isinstance(item, dict) else 0
+
+        contract_no = str(row_data.get('contract_no') or '').strip()
+        if not contract_no:
+            fail_count += 1
+            results.append({'row_index': row_index, 'success': False, 'message': '合同编号为空'})
+            continue
+
+        contract_id = no_map.get(contract_no)
+        if not contract_id:
+            fail_count += 1
+            results.append({'row_index': row_index, 'success': False, 'message': f'合同编号不存在：{contract_no}'})
+            continue
+
+        acc_date = _parse_date(row_data.get('acceptance_date'))
+        acc_amt_yuan = _parse_amt(row_data.get('acceptance_amount'))
+        if not acc_date:
+            fail_count += 1
+            results.append({'row_index': row_index, 'success': False, 'message': '验收日期为空或格式错误'})
+            continue
+        if acc_amt_yuan is None or acc_amt_yuan == 0:
+            fail_count += 1
+            results.append({'row_index': row_index, 'success': False, 'message': '收入为空或为0（正数验收，负数核减）'})
+            continue
+
+        if (contract_id, acc_date) in existing:
+            fail_count += 1
+            results.append({'row_index': row_index, 'success': False, 'message': f'该合同已有 {acc_date} 的验收记录，跳过'})
+            continue
+
+        note = str(row_data.get('note') or row_data.get('acceptance_note') or '').strip()
+
+        try:
+            # 1) 创建验收记录
+            cursor.execute(
+                "INSERT INTO contract_acceptances (contract_id, acceptance_date, acceptance_amount, note, created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (contract_id, acc_date, acc_amt_yuan, note, username, now)
+            )
+            existing.add((contract_id, acc_date))
+
+            # 2) 可选：更新合同级字段（税额/业务方向）。
+            # 收入即验收金额，已记录在 contract_acceptances，不再单独存 contracts.income
+            contract_updates = {}
+            for field, parser in [
+                ('tax_amount', _parse_amt),
+                ('business_direction', lambda v: str(v).strip() if v else None),
+            ]:
+                if field in row_data:
+                    parsed = parser(row_data[field])
+                    if parsed is not None:
+                        contract_updates[field] = parsed
+            if contract_updates:
+                set_clauses = ', '.join(f'{k}=?' for k in contract_updates)
+                params = list(contract_updates.values()) + [contract_id]
+                cursor.execute(f"UPDATE contracts SET {set_clauses} WHERE id=?", params)
+
+            success_count += 1
+            results.append({'row_index': row_index, 'success': True, 'message': '验收记录已创建'})
+        except Exception as e:
+            fail_count += 1
+            results.append({'row_index': row_index, 'success': False, 'message': str(e)})
+
+    db.commit()
+    if success_count > 0:
+        record_operation_log(username, '导入', '验收管理', f'导入验收记录：成功{success_count}条，失败{fail_count}条')
+
+    return jsonify({
+        'code': 200,
+        'message': '导入完成',
+        'data': {
+            'total': len(rows),
+            'success_count': success_count,
+            'fail_count': fail_count,
+            'results': results
+        }
+    })
+
+
+@contracts_bp.route('/api/acceptances/import-parse', methods=['POST'])
+@token_required
+def parse_acceptance_excel():
+    """解析验收导入Excel文件，返回预览数据。"""
+    if 'file' not in request.files:
+        return jsonify({'code': 400, 'message': '请选择文件', 'data': None})
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'code': 400, 'message': '请选择文件', 'data': None})
+
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        return jsonify({'code': 400, 'message': '仅支持Excel文件（.xlsx/.xls）', 'data': None})
+
+    try:
+        from openpyxl import load_workbook
+        import re
+
+        wb = load_workbook(BytesIO(file.read()), data_only=True)
+        ws = wb.active
+
+        def _norm(h):
+            """规范化表头：去除所有空白字符（含全角空格、换行、制表符）。"""
+            if h is None:
+                return ''
+            s = str(h)
+            # 去除全角空格、普通空格、换行、回车、制表符及不可见字符
+            s = re.sub(r'[\s\u3000\xa0\u200b\ufeff]+', '', s)
+            return s
+
+        # 字段匹配规则（精确匹配优先，再按包含关键词回退）
+        # 收入即验收金额：收入列的值直接作为本次验收金额
+        field_rules = [
+            ('contract_no', ['合同编号', '合同号', '编号', '合同Code']),
+            ('contract_name', ['合同名称', '合同名']),
+            ('party_a', ['甲方']),
+            ('total_amt', ['合同额(万)', '合同总额(万)', '合同额', '合同金额(万)', '合同金额', '合同总价(万)']),
+            ('tax_amount', ['税额(万)', '税额', '税金']),
+            ('acceptance_date', ['验收日期', '验收时间']),
+            ('acceptance_amount', ['收入(万)', '收入', '验收金额(万)', '验收金额', '验收额(万)', '验收额', '本次验收金额']),
+            ('note', ['验收情况', '验收备注', '备注', '说明']),
+            ('pending_acceptance_amount', ['待验收合同额(万)', '待验收合同额', '待验收金额(万)', '待验收']),
+            ('business_direction', ['业务方向']),
+        ]
+
+        def _match_field(norm_header):
+            """返回该规范化表头对应的字段 key，无匹配返回 None。"""
+            # 先精确匹配
+            for key, aliases in field_rules:
+                if norm_header in aliases:
+                    return key
+            # 再包含匹配（如表头为"合同编号 "已去除空白，或"甲方单位"含"甲方"）
+            for key, aliases in field_rules:
+                for alias in aliases:
+                    if alias and alias in norm_header:
+                        return key
+            return None
+
+        # 自动定位表头行：扫描前 5 行，找到含"合同编号"特征的那一行
+        header_row_idx = None
+        max_scan = min(5, ws.max_row or 1)
+        for r in range(1, max_scan + 1):
+            row_vals = [(_norm(c.value)) for c in ws[r]]
+            # 检测是否有合同编号特征列
+            matched = False
+            for v in row_vals:
+                if v and ('合同编号' in v or '合同号' in v or v == '编号'):
+                    matched = True
+                    break
+            if matched:
+                header_row_idx = r
+                break
+
+        if header_row_idx is None:
+            # 回退：默认第1行为表头
+            header_row_idx = 1
+
+        raw_headers = [cell.value for cell in ws[header_row_idx]]
+        norm_headers = [_norm(h) for h in raw_headers]
+        col_map = {}
+        for idx, nh in enumerate(norm_headers):
+            if not nh:
+                continue
+            key = _match_field(nh)
+            if key and key not in col_map:
+                col_map[key] = idx
+
+        if 'contract_no' not in col_map:
+            detected = [h for h in norm_headers if h]
+            return jsonify({
+                'code': 400,
+                'message': f'缺少必要列：合同编号。检测到的表头(第{header_row_idx}行)：{detected}',
+                'data': None
+            })
+        if 'acceptance_date' not in col_map:
+            return jsonify({'code': 400, 'message': '缺少必要列：验收日期', 'data': None})
+        if 'acceptance_amount' not in col_map:
+            return jsonify({'code': 400, 'message': '缺少必要列：收入', 'data': None})
+
+        # 查询数据库已存在的验收记录（合同编号+验收日期），用于重复检测
+        try:
+            db = get_db()
+            cur = db.cursor()
+            cur.execute(
+                "SELECT c.contract_no, ca.acceptance_date FROM contract_acceptances ca "
+                "JOIN contracts c ON ca.contract_id = c.id WHERE c.contract_no IS NOT NULL"
+            )
+            db_existing = {(r['contract_no'], r['acceptance_date']) for r in cur.fetchall()}
+        except Exception:
+            db_existing = set()
+
+        rows = []
+        valid_count = 0
+        # 文件内重复检测：记录本文件中已出现过的 (合同编号, 验收日期)
+        file_seen = set()
+
+        for row_idx in range(header_row_idx + 1, ws.max_row + 1):
+            row_data = {}
+            errors = []
+
+            for key, idx in col_map.items():
+                value = ws.cell(row=row_idx, column=idx + 1).value
+                if key == 'acceptance_date' and value:
+                    if isinstance(value, datetime):
+                        value = value.strftime('%Y-%m-%d')
+                    else:
+                        value = str(value)[:10]
+                row_data[key] = value
+
+            contract_no = str(row_data.get('contract_no') or '').strip()
+            if not contract_no:
+                errors.append('合同编号不能为空')
+
+            acc_date = row_data.get('acceptance_date')
+            if not acc_date:
+                errors.append('验收日期不能为空')
+
+            acc_amt = row_data.get('acceptance_amount')
+            if acc_amt is None or acc_amt == '':
+                errors.append('收入不能为空')
+            else:
+                try:
+                    if float(acc_amt) == 0:
+                        errors.append('收入不能为0（正数验收，负数核减）')
+                except Exception:
+                    errors.append('收入格式错误')
+
+            # 重复检测：合同编号+验收日期 在数据库或本文件中已存在
+            dup_key = (contract_no, str(acc_date).strip() if acc_date else '')
+            if contract_no and acc_date:
+                if dup_key in db_existing:
+                    errors.append('系统中已存在该合同此日期的验收记录（重复导入）')
+                elif dup_key in file_seen:
+                    errors.append('文件内重复：该合同此日期已在本文件中出现')
+
+            valid = len(errors) == 0
+            if valid:
+                valid_count += 1
+                file_seen.add(dup_key)
+
+            rows.append({
+                'row_index': row_idx,
+                'data': row_data,
+                'valid': valid,
+                'errors': errors
+            })
+
+        return jsonify({
+            'code': 200,
+            'message': '解析成功',
+            'data': {
+                'total': len(rows),
+                'valid_count': valid_count,
+                'invalid_count': len(rows) - valid_count,
+                'rows': rows
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 500, 'message': f'解析失败：{str(e)}', 'data': None})

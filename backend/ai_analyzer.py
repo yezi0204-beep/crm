@@ -92,8 +92,7 @@ def analyze_document_llm(title, content, doc_type='other'):
                 {'role': 'user', 'content': prompt}
             ],
             'temperature': 0.3,
-            # Qwen reasoning模型会先消耗token做思考，需要更大的额度才能输出content
-            'max_tokens': 4000
+            'max_tokens': 180000
         }
         # 部分vLLM部署的Qwen3支持通过extra_body禁用thinking以加速响应
         try:

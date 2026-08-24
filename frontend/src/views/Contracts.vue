@@ -88,11 +88,11 @@
               </template>
             </el-table-column>
             
-            <el-table-column 
-              v-else-if="col.prop === 'pending_amt'" 
-              :prop="col.prop" 
-              :label="col.label" 
-              :min-width="col.width || 110" 
+            <el-table-column
+              v-else-if="col.prop === 'pending_amt'"
+              :prop="col.prop"
+              :label="col.label"
+              :min-width="col.width || 110"
               sortable="custom"
               :sort-order="sortField === 'pending_amt' ? sortOrder : undefined"
             >
@@ -100,6 +100,18 @@
                 <span :class="{ 'pending-highlight': getPendingAmt(scope.row) > 0.01 }">
                   {{ formatAmount(getPendingAmt(scope.row)) }}
                 </span>
+              </template>
+            </el-table-column>
+
+            <el-table-column
+              v-else-if="col.prop === 'income' || col.prop === 'tax_amount' || col.prop === 'pending_acceptance_amount'"
+              :prop="col.prop"
+              :label="col.label"
+              :min-width="col.width || 110"
+              sortable="custom"
+            >
+              <template #default="scope">
+                {{ formatAmount(scope.row[col.prop]) }}
               </template>
             </el-table-column>
             
@@ -262,7 +274,25 @@
             </el-form-item>
           </el-col>
         </el-row>
-        
+
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="收入(万)">
+              <el-input-number v-model="contractForm.income" :min="0" :step="0.01" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="税额(万)">
+              <el-input-number v-model="contractForm.tax_amount" :min="0" :step="0.01" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="待验收合同额(万)">
+              <el-input-number v-model="contractForm.pending_acceptance_amount" :min="0" :step="0.01" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
         <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="业态">
@@ -274,6 +304,14 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
+            <el-form-item label="业务方向">
+              <el-input v-model="contractForm.business_direction" placeholder="如：智能制造、智慧城市..." />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        
+        <el-row :gutter="20">
+          <el-col :span="12">
             <el-form-item label="项目密级">
               <el-select v-model="contractForm.classification">
                 <el-option label="绝密" value="绝密" />
@@ -284,9 +322,6 @@
               </el-select>
             </el-form-item>
           </el-col>
-        </el-row>
-        
-        <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="合同状态">
               <el-select v-model="contractForm.status">
@@ -296,14 +331,13 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="12">
-            <el-form-item label="负责人">
-              <el-select v-model="contractForm.owner_id">
-                <el-option v-for="user in users" :key="user.username" :label="user.name" :value="user.username" />
-              </el-select>
-            </el-form-item>
-          </el-col>
         </el-row>
+
+        <el-form-item label="负责人">
+          <el-select v-model="contractForm.owner_id">
+            <el-option v-for="user in users" :key="user.username" :label="user.name" :value="user.username" />
+          </el-select>
+        </el-form-item>
 
         <el-form-item label="框架合同">
           <el-switch v-model="contractForm.is_framework" :active-value="1" :inactive-value="0" />
@@ -687,10 +721,14 @@ const allColumns = [
   { prop: 'project_order_no', label: '项目令号', width: 120 },
   { prop: 'party_a', label: '甲方', width: '', minWidth: 120 },
   { prop: 'total_amt', label: '合同总额(万)', width: 110 },
+  { prop: 'income', label: '收入(万)', width: 110 },
+  { prop: 'tax_amount', label: '税额(万)', width: 110 },
+  { prop: 'pending_acceptance_amount', label: '待验收合同额(万)', width: 140 },
   { prop: 'paid_amt', label: '已回款(万)', width: 110 },
   { prop: 'pending_amt', label: '待回款(万)', width: 110 },
   { prop: 'sign_date', label: '签约日期', width: 110 },
   { prop: 'business_type', label: '业态', width: 90 },
+  { prop: 'business_direction', label: '业务方向', width: 120 },
   { prop: 'classification', label: '密级', width: 80 },
   { prop: 'owner_name', label: '负责人', width: 90 },
   { prop: 'acceptance_nodes', label: '验收节点', width: 120 },
@@ -700,8 +738,9 @@ const allColumns = [
 ]
 
 const visibleColumns = ref([
-  'contract_name', 'contract_no', 'project_order_no', 'party_a', 'total_amt', 
-  'paid_amt', 'pending_amt', 'sign_date', 'business_type', 
+  'contract_name', 'contract_no', 'project_order_no', 'party_a', 'total_amt',
+  'income', 'tax_amount', 'pending_acceptance_amount',
+  'paid_amt', 'pending_amt', 'sign_date', 'business_type', 'business_direction',
   'classification', 'owner_name', 'acceptance_nodes', 'payment_nodes', 'note', 'status'
 ])
 
@@ -883,8 +922,12 @@ const contractForm = reactive({
   party_a: '',
   project_order_no: '',
   total_amt: 0,
+  income: 0,
+  tax_amount: 0,
+  pending_acceptance_amount: 0,
   sign_date: '',
   business_type: '',
+  business_direction: '',
   classification: '',
   status: '执行中',
   owner_id: '',
@@ -1140,7 +1183,10 @@ const saveContract = async () => {
     if (valid) {
       const payload = {
         ...contractForm,
-        total_amt: (contractForm.total_amt || 0) * 10000
+        total_amt: (contractForm.total_amt || 0) * 10000,
+        income: (contractForm.income || 0) * 10000,
+        tax_amount: (contractForm.tax_amount || 0) * 10000,
+        pending_acceptance_amount: (contractForm.pending_acceptance_amount || 0) * 10000
       }
       
       if (!contractForm.id) {
@@ -1175,6 +1221,9 @@ const saveContract = async () => {
 const editContract = (row) => {
   Object.assign(contractForm, row)
   contractForm.total_amt = (row.total_amt || 0) / 10000
+  contractForm.income = (row.income || 0) / 10000
+  contractForm.tax_amount = (row.tax_amount || 0) / 10000
+  contractForm.pending_acceptance_amount = (row.pending_acceptance_amount || 0) / 10000
   contractFileList.value = []
   techFileList.value = []
   if (row.contract_file_path) {

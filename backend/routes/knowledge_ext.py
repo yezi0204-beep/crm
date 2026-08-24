@@ -454,33 +454,6 @@ def upload_documents():
         except Exception as e:
             results.append({'filename': original_filename, 'status': 'indexed_failed', 'doc_id': doc_id})
 
-        # 自动触发AI分析
-        try:
-            if content and not content.startswith('[文件') and len(content.strip()) > 20:
-                analysis = analyze_document(title, content, doc_type)
-                if analysis:
-                    analysis_json = json.dumps(analysis, ensure_ascii=False)
-                    cursor.execute("""
-                        UPDATE knowledge_documents
-                        SET analysis_result = ?, analysis_status = 'completed',
-                            analyzed_at = ?, updated_at = ?
-                        WHERE id = ?
-                    """, (analysis_json, analysis.get('analyzed_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-                          datetime.now().strftime('%Y-%m-%d %H:%M:%S'), doc_id))
-                    # 如果没有摘要，用AI分析的摘要填充
-                    if analysis.get('summary') and not summary:
-                        cursor.execute("UPDATE knowledge_documents SET summary = ? WHERE id = ?",
-                                       (analysis['summary'][:500], doc_id))
-                    # 如果没有标签，用AI标签填充
-                    if analysis.get('tags') and not tags:
-                        cursor.execute("UPDATE knowledge_documents SET tags = ? WHERE id = ?",
-                                       (','.join(analysis['tags'][:3]), doc_id))
-                    db.commit()
-                    results[-1]['analyzed'] = True
-                    results[-1]['analysis_method'] = analysis.get('analysis_method', 'rules')
-        except Exception as e:
-            results[-1]['analyzed'] = False
-
     record_operation_log(username, '批量导入', '知识库', f'批次{batch_id} 上传{len(results)}个文件')
 
     return jsonify({
@@ -1146,25 +1119,29 @@ def get_knowledge_stats():
 @knowledge_ext_bp.route('/api/knowledge/documents/<int:doc_id>/analyze', methods=['POST'])
 @token_required
 def analyze_single_document(doc_id):
-    """分析单个文档，返回结构化分析结果。"""
+    """分析单个文档，返回结构化分析结果。
+    三步式：短连接读文档 → LLM分析(不持锁) → 短事务写结果
+    """
     data = request.current_user
     username = data.get('username', '')
 
+    # 第1步：短事务读取文档内容（SELECT 不持有写锁，读取后连接可复用）
     db = get_db()
     cursor = db.cursor()
-
-    cursor.execute("SELECT * FROM knowledge_documents WHERE id = ?", (doc_id,))
+    cursor.execute("SELECT title, content, doc_type FROM knowledge_documents WHERE id = ?", (doc_id,))
     doc = cursor.fetchone()
     if not doc:
         return jsonify({'code': 404, 'message': '文档不存在', 'data': None})
 
     doc_dict = dict(doc)
+    # 第2步：LLM分析（SELECT 未持有写锁，不影响其他请求的写入）
     analysis = analyze_document(
         doc_dict.get('title', ''),
         doc_dict.get('content', ''),
         doc_dict.get('doc_type', 'other')
     )
 
+    # 第3步：短事务写结果（毫秒级写锁）
     if analysis:
         analysis_json = json.dumps(analysis, ensure_ascii=False)
         cursor.execute("""
@@ -1196,45 +1173,47 @@ def analyze_single_document(doc_id):
 @knowledge_ext_bp.route('/api/knowledge/documents/batch-analyze', methods=['POST'])
 @token_required
 def batch_analyze_documents():
-    """批量分析文档。"""
+    """批量分析文档。
+    三步式：短连接读取文档列表 → 逐个LLM分析(不持锁) → 每个分析后短事务写入
+    """
     data = request.current_user
     username = data.get('username', '')
     req_data = request.get_json(silent=True) or {}
 
     doc_ids = req_data.get('doc_ids', [])
+    # 第1步：短事务读取待分析文档列表
+    db = get_db()
+    cursor = db.cursor()
     if not doc_ids:
-        # 未指定ID时，分析所有未分析的文档
-        db = get_db()
-        cursor = db.cursor()
         cursor.execute("""
-            SELECT id FROM knowledge_documents
-            WHERE analysis_status IS NULL OR analysis_status != 'completed'
+            SELECT id, title, content, doc_type FROM knowledge_documents
+            WHERE (analysis_status IS NULL OR analysis_status != 'completed')
             AND content IS NOT NULL AND content != ''
             LIMIT 50
         """)
-        doc_ids = [row['id'] for row in cursor.fetchall()]
+        docs_to_analyze = [dict(row) for row in cursor.fetchall()]
+    else:
+        placeholders = ','.join('?' * len(doc_ids[:50]))
+        cursor.execute(f"SELECT id, title, content, doc_type FROM knowledge_documents WHERE id IN ({placeholders})",
+                       doc_ids[:50])
+        docs_to_analyze = [dict(row) for row in cursor.fetchall()]
+        docs_to_analyze = [d for d in docs_to_analyze if d.get('content')]
 
-    if not doc_ids:
+    if not docs_to_analyze:
         return jsonify({'code': 200, 'message': '没有需要分析的文档', 'data': {'analyzed': 0}})
 
-    db = get_db()
-    cursor = db.cursor()
+    # 第2步：逐个LLM分析（SELECT未持写锁，不影响其他请求；每个分析后立即commit短事务写入）
     results = []
     analyzed_count = 0
-
-    for doc_id in doc_ids[:50]:  # 最多50个
-        cursor.execute("SELECT * FROM knowledge_documents WHERE id = ?", (doc_id,))
-        doc = cursor.fetchone()
-        if not doc or not doc['content']:
-            continue
-
-        doc_dict = dict(doc)
+    for doc_dict in docs_to_analyze:
+        doc_id = doc_dict['id']
         analysis = analyze_document(
             doc_dict.get('title', ''),
             doc_dict.get('content', ''),
             doc_dict.get('doc_type', 'other')
         )
 
+        # 第3步：每个文档分析完后，短事务写入并commit（毫秒级写锁）
         if analysis:
             analysis_json = json.dumps(analysis, ensure_ascii=False)
             cursor.execute("""
@@ -1244,10 +1223,10 @@ def batch_analyze_documents():
                 WHERE id = ?
             """, (analysis_json, analysis.get('analyzed_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
                   datetime.now().strftime('%Y-%m-%d %H:%M:%S'), doc_id))
+            db.commit()
             analyzed_count += 1
             results.append({'id': doc_id, 'title': doc_dict.get('title', ''), 'analysis': analysis})
 
-    db.commit()
     record_operation_log(username, '批量分析', '知识库文档', f'分析{analyzed_count}个文档')
 
     return jsonify({

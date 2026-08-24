@@ -864,6 +864,21 @@ def _init_contracts_table(cursor):
         cursor.execute("ALTER TABLE contracts ADD COLUMN is_framework INTEGER DEFAULT 0")
     except:
         pass
+    # 收入（不含税合同额）
+    try:
+        cursor.execute("ALTER TABLE contracts ADD COLUMN income REAL DEFAULT 0")
+    except:
+        pass
+    # 税额
+    try:
+        cursor.execute("ALTER TABLE contracts ADD COLUMN tax_amount REAL DEFAULT 0")
+    except:
+        pass
+    # 业务方向
+    try:
+        cursor.execute("ALTER TABLE contracts ADD COLUMN business_direction TEXT")
+    except:
+        pass
 
 
 def _init_contract_acceptances_table(cursor):

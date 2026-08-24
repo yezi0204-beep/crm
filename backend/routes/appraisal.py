@@ -24,11 +24,10 @@ MIN_RATE_PCT = 0.00
 
 
 def _is_dept_director(row):
-    """部门主任：role='主任' 且 is_sales_override=1 且设置了年度指标（承担部门指标）。
-    未设指标的主任不按部门主任处理（按普通销售/非销售身份计算）。"""
+    """部门主任：role='主任' 且设置了年度指标（承担部门指标）。
+    部门月度指标=主任月度指标，部门年度指标=主任年度指标。
+    不再要求 is_sales_override=1。"""
     if (row.get('role') or '') != '主任':
-        return False
-    if not row.get('is_sales_override'):
         return False
     annual = float(row.get('annual_target_amount') or 0)
     return annual > 0
@@ -133,6 +132,215 @@ def _get_user_cumulative_actual(cur, username, year, month):
     return round(normal_share + normal_solo + fw_acc_share + fw_contract_share + fw_solo, 2)
 
 
+def _get_user_cumulative_details(cur, username, year, month):
+    """返回用户累计实际明细列表，每项包含合同/验收信息、分成信息、计算公式。
+    返回结构:
+      {
+        "total": 123456.78,
+        "items": [
+          {
+            "type": "normal_share",       // 分类: normal_share/normal_solo/fw_acc_share/fw_contract_share/fw_solo
+            "type_name": "普通合同-分成",
+            "contract_id": 10,
+            "contract_no": "HT2024-001",
+            "contract_name": "XX项目",
+            "is_framework": 0,
+            "sign_date": "2026-02-15",
+            "base_amount": 1000000.00,    // 合同总额或验收额
+            "base_label": "合同额",
+            "commission_type": "contract", // contract/acceptance/none
+            "commission_members": [        // 分成人员列表
+              {"username":"sales_a","name":"销售A","ratio":60.0,"amount":600000.00},
+            ],
+            "my_ratio": 60.0,             // 当前用户分成的比例
+            "my_amount": 600000.00,       // 当前用户分到的金额
+            "formula": "1000000 × 60% = 600000"  // 计算公式
+          },
+          ...
+        ]
+      }
+    """
+    start = f'{int(year):04d}-02-01'
+    end = f'{int(year):04d}-{int(month):02d}-31'
+    items = []
+    total = 0.0
+
+    # ① 普通合同 + 合同级分成
+    cur.execute(
+        "SELECT c.id, c.contract_no, c.contract_name, c.total_amt, c.sign_date, "
+        "c.is_framework, cc.ratio, cc.username as comm_user, u.name as comm_name "
+        "FROM contracts c JOIN contract_commissions cc ON c.id = cc.contract_id "
+        "LEFT JOIN users u ON cc.username = u.username "
+        "WHERE cc.username = ? AND substr(c.sign_date,1,10) >= ? AND substr(c.sign_date,1,10) <= ? "
+        "AND c.sign_date IS NOT NULL "
+        "AND COALESCE(c.is_framework, 0) = 0 "
+        "ORDER BY c.sign_date",
+        (username, start, end)
+    )
+    for r in cur.fetchall():
+        base = float(r['total_amt'] or 0)
+        ratio = float(r['ratio'] or 0)
+        amt = round(base * ratio / 100.0, 2)
+        total += amt
+        items.append({
+            'type': 'normal_share',
+            'type_name': '普通合同-分成',
+            'contract_id': r['id'],
+            'contract_no': r['contract_no'] or '',
+            'contract_name': r['contract_name'] or '',
+            'is_framework': 0,
+            'sign_date': r['sign_date'] or '',
+            'base_amount': round(base, 2),
+            'base_label': '合同额',
+            'commission_type': 'contract',
+            'commission_members': [{'username': username, 'name': r['comm_name'] or username, 'ratio': ratio, 'amount': amt}],
+            'my_ratio': ratio,
+            'my_amount': amt,
+            'formula': f'{base:.2f} × {ratio}% = {amt:.2f}',
+        })
+
+    # ② 普通合同 + 无分成（owner独享）
+    cur.execute(
+        "SELECT c.id, c.contract_no, c.contract_name, c.total_amt, c.sign_date, c.is_framework "
+        "FROM contracts c "
+        "WHERE c.owner_id = ? AND substr(c.sign_date,1,10) >= ? AND substr(c.sign_date,1,10) <= ? "
+        "AND c.sign_date IS NOT NULL "
+        "AND c.id NOT IN (SELECT DISTINCT contract_id FROM contract_commissions) "
+        "AND COALESCE(c.is_framework, 0) = 0 "
+        "ORDER BY c.sign_date",
+        (username, start, end)
+    )
+    for r in cur.fetchall():
+        base = float(r['total_amt'] or 0)
+        amt = round(base, 2)
+        total += amt
+        items.append({
+            'type': 'normal_solo',
+            'type_name': '普通合同-独享',
+            'contract_id': r['id'],
+            'contract_no': r['contract_no'] or '',
+            'contract_name': r['contract_name'] or '',
+            'is_framework': 0,
+            'sign_date': r['sign_date'] or '',
+            'base_amount': amt,
+            'base_label': '合同额',
+            'commission_type': 'none',
+            'commission_members': [],
+            'my_ratio': 100.0,
+            'my_amount': amt,
+            'formula': f'{amt:.2f} × 100% = {amt:.2f}',
+        })
+
+    # ③ 框架合同 + 验收级分成
+    cur.execute(
+        "SELECT ca.id as acc_id, ca.acceptance_amount, ca.acceptance_date, ca.note as acc_note, "
+        "c.id, c.contract_no, c.contract_name, c.is_framework, "
+        "ac.ratio, ac.username as comm_user, u.name as comm_name "
+        "FROM contract_acceptances ca "
+        "JOIN contracts c ON ca.contract_id = c.id "
+        "JOIN acceptance_commissions ac ON ca.id = ac.acceptance_id "
+        "LEFT JOIN users u ON ac.username = u.username "
+        "WHERE ac.username = ? AND substr(ca.acceptance_date,1,10) >= ? AND substr(ca.acceptance_date,1,10) <= ? "
+        "AND COALESCE(c.is_framework, 0) = 1 "
+        "ORDER BY ca.acceptance_date",
+        (username, start, end)
+    )
+    for r in cur.fetchall():
+        base = float(r['acceptance_amount'] or 0)
+        ratio = float(r['ratio'] or 0)
+        amt = round(base * ratio / 100.0, 2)
+        total += amt
+        items.append({
+            'type': 'fw_acc_share',
+            'type_name': '框架合同-验收分成',
+            'contract_id': r['id'],
+            'contract_no': r['contract_no'] or '',
+            'contract_name': r['contract_name'] or '',
+            'is_framework': 1,
+            'sign_date': r['acceptance_date'] or '',
+            'base_amount': round(base, 2),
+            'base_label': '验收额',
+            'commission_type': 'acceptance',
+            'commission_members': [{'username': username, 'name': r['comm_name'] or username, 'ratio': ratio, 'amount': amt}],
+            'my_ratio': ratio,
+            'my_amount': amt,
+            'formula': f'{base:.2f} × {ratio}% = {amt:.2f}',
+        })
+
+    # ④ 框架合同 + 合同级分成但无验收级分成
+    cur.execute(
+        "SELECT ca.id as acc_id, ca.acceptance_amount, ca.acceptance_date, "
+        "c.id, c.contract_no, c.contract_name, c.is_framework, "
+        "cc.ratio, cc.username as comm_user, u.name as comm_name "
+        "FROM contract_acceptances ca "
+        "JOIN contracts c ON ca.contract_id = c.id "
+        "JOIN contract_commissions cc ON c.id = cc.contract_id "
+        "LEFT JOIN users u ON cc.username = u.username "
+        "WHERE cc.username = ? AND substr(ca.acceptance_date,1,10) >= ? AND substr(ca.acceptance_date,1,10) <= ? "
+        "AND COALESCE(c.is_framework, 0) = 1 "
+        "AND ca.id NOT IN (SELECT DISTINCT acceptance_id FROM acceptance_commissions) "
+        "ORDER BY ca.acceptance_date",
+        (username, start, end)
+    )
+    for r in cur.fetchall():
+        base = float(r['acceptance_amount'] or 0)
+        ratio = float(r['ratio'] or 0)
+        amt = round(base * ratio / 100.0, 2)
+        total += amt
+        items.append({
+            'type': 'fw_contract_share',
+            'type_name': '框架合同-合同分成',
+            'contract_id': r['id'],
+            'contract_no': r['contract_no'] or '',
+            'contract_name': r['contract_name'] or '',
+            'is_framework': 1,
+            'sign_date': r['acceptance_date'] or '',
+            'base_amount': round(base, 2),
+            'base_label': '验收额',
+            'commission_type': 'contract',
+            'commission_members': [{'username': username, 'name': r['comm_name'] or username, 'ratio': ratio, 'amount': amt}],
+            'my_ratio': ratio,
+            'my_amount': amt,
+            'formula': f'{base:.2f} × {ratio}% = {amt:.2f}',
+        })
+
+    # ⑤ 框架合同 + 无任何分成（owner独享验收额）
+    cur.execute(
+        "SELECT ca.id as acc_id, ca.acceptance_amount, ca.acceptance_date, "
+        "c.id, c.contract_no, c.contract_name, c.is_framework "
+        "FROM contract_acceptances ca "
+        "JOIN contracts c ON ca.contract_id = c.id "
+        "WHERE c.owner_id = ? AND substr(ca.acceptance_date,1,10) >= ? AND substr(ca.acceptance_date,1,10) <= ? "
+        "AND c.id NOT IN (SELECT DISTINCT contract_id FROM contract_commissions) "
+        "AND ca.id NOT IN (SELECT DISTINCT acceptance_id FROM acceptance_commissions) "
+        "AND COALESCE(c.is_framework, 0) = 1 "
+        "ORDER BY ca.acceptance_date",
+        (username, start, end)
+    )
+    for r in cur.fetchall():
+        base = float(r['acceptance_amount'] or 0)
+        amt = round(base, 2)
+        total += amt
+        items.append({
+            'type': 'fw_solo',
+            'type_name': '框架合同-独享',
+            'contract_id': r['id'],
+            'contract_no': r['contract_no'] or '',
+            'contract_name': r['contract_name'] or '',
+            'is_framework': 1,
+            'sign_date': r['acceptance_date'] or '',
+            'base_amount': amt,
+            'base_label': '验收额',
+            'commission_type': 'none',
+            'commission_members': [],
+            'my_ratio': 100.0,
+            'my_amount': amt,
+            'formula': f'{amt:.2f} × 100% = {amt:.2f}',
+        })
+
+    return {'total': round(total, 2), 'items': items}
+
+
 def _load_monthly_overrides(cur, username, year):
     """返回 {1: amount, 2: amount, ...}，只包含覆盖过的月份。"""
     cur.execute(
@@ -213,8 +421,8 @@ def build_monthly_rows(cur, year, month):
         if is_sales and cum_target > 0 and not is_director:
             sales_rates_with_target.append(rate)
 
-    # 主任的实际 = 部门所有非主任销售的实际之和
-    dept_actual = sum(r['cumulative_actual_amt'] for r in rows if r['is_sales'] and not r['is_director'])
+    # 部门累计新签 = 所有应用中心人员的业绩累计之和（主任+销售+非销售）
+    dept_actual = sum(r['cumulative_actual_amt'] for r in rows)
     for r in rows:
         if r['is_director']:
             r['cumulative_actual_amt'] = round(dept_actual, 2)
@@ -232,9 +440,9 @@ def build_monthly_rows(cur, year, month):
     else:
         avg_sales_rate = 0.0
 
-    # 补齐非销售 rate 和 薪资
+    # 补齐非销售 rate 和 薪资（主任的 rate 已按部门完成率算好，不被覆盖）
     for r in rows:
-        if not r['is_sales']:
+        if not r['is_sales'] and not r['is_director']:
             r['rate_pct'] = round(avg_sales_rate, 2)
         rate = r['rate_pct'] or 0
         r['perf_pay'] = round(r['base_performance'] * rate / 100.0, 2)
@@ -243,11 +451,15 @@ def build_monthly_rows(cur, year, month):
     # 汇总行兼容字段：actual_amt/target_amt 为累计值（已赋值）
     # 部门完成率 = 主任的完成率（主任承担部门指标）；无主任则为 None
     dept_rate = None
+    dept_monthly_target = 0.0
+    dept_cumulative_actual = 0.0
     for r in rows:
         if r['is_director']:
             dept_rate = r['rate_pct']
+            dept_monthly_target = r['monthly_target_amt']
+            dept_cumulative_actual = r['cumulative_actual_amt']
             break
-    return rows, round(avg_sales_rate, 2), dept_rate
+    return rows, round(avg_sales_rate, 2), dept_rate, round(dept_monthly_target, 2), round(dept_cumulative_actual, 2)
 
 
 # ========== 接口 ==========
@@ -265,7 +477,7 @@ def monthly_overview():
         return jsonify({'code': 400, 'message': '月份需在1-12之间', 'data': None})
     db = get_db()
     cur = db.cursor()
-    rows, avg_rate, dept_rate = build_monthly_rows(cur, year, month)
+    rows, avg_rate, dept_rate, dept_target, dept_actual = build_monthly_rows(cur, year, month)
     return jsonify({
         'code': 200,
         'message': 'OK',
@@ -273,6 +485,8 @@ def monthly_overview():
             'year': year, 'month': month,
             'avg_sales_rate_pct': avg_rate,
             'dept_rate_pct': dept_rate,
+            'dept_monthly_target': dept_target,
+            'dept_cumulative_actual': dept_actual,
             'rows': rows,
         }
     })
@@ -295,7 +509,7 @@ def mine_appraisal():
     cur = db.cursor()
 
     # 先拿所有应用中心的销售均值，再构造自己的行（自己非应用中心销售角色也算销售）
-    all_rows, avg_sales_rate, dept_rate = build_monthly_rows(cur, year, month)
+    all_rows, avg_sales_rate, dept_rate, _dt, _da = build_monthly_rows(cur, year, month)
     # 看是否在 rows 里（应用中心）
     my_row = next((r for r in all_rows if r['username'] == username), None)
     if not my_row:
@@ -348,6 +562,86 @@ def mine_appraisal():
     })
 
 
+@appraisal_bp.route('/details/<username>', methods=['GET'])
+@appraisal_viewer_required
+def user_details(username):
+    """GET ?year=2026&month=8  返回指定用户的累计实际明细（项目明细+分成明细+计算公式）。
+    主任/院长/人力可查看任意用户；普通用户只能查自己。
+    """
+    try:
+        year = int(request.args.get('year') or datetime.now().year)
+        month = int(request.args.get('month') or datetime.now().month)
+    except ValueError:
+        return jsonify({'code': 400, 'message': '年月参数非法', 'data': None})
+    if month < 1 or month > 12:
+        return jsonify({'code': 400, 'message': '月份需在1-12之间', 'data': None})
+    me = request.current_user
+    # 普通用户（非主任/院长/人力）只能查自己
+    if me['username'] != username and me.get('role') not in ('主任', '院长', '人力'):
+        return jsonify({'code': 403, 'message': '只能查看自己的明细', 'data': None})
+
+    db = get_db()
+    cur = db.cursor()
+    # 查用户基本信息
+    cur.execute("SELECT username, name, role, department FROM users WHERE username=?", (username,))
+    u = cur.fetchone()
+    if not u:
+        return jsonify({'code': 404, 'message': '用户不存在', 'data': None})
+    u = dict(u)
+    # 判断身份
+    is_sales = _is_sales_user(u)
+    is_director = _is_dept_director(u)
+    # 获取明细
+    details = _get_user_cumulative_details(cur, username, year, month)
+
+    # 如果是主任，附加部门所有销售的明细汇总
+    dept_members = []
+    if is_director:
+        cur.execute(
+            "SELECT username, name FROM users WHERE department=? AND status='在职' "
+            "ORDER BY username",
+            (u.get('department') or '',)
+        )
+        for r in cur.fetchall():
+            member = dict(r)
+            member_details = _get_user_cumulative_details(cur, member['username'], year, month)
+            dept_members.append({
+                'username': member['username'],
+                'name': member['name'],
+                'total': member_details['total'],
+                'items': member_details['items'],
+            })
+
+    # 构造公式说明
+    formula_explain = []
+    if details['items']:
+        amounts = ' + '.join([f"{it['my_amount']:.2f}" for it in details['items']])
+        formula_explain.append(f"累计实际 = {amounts} = {details['total']:.2f}")
+    else:
+        formula_explain.append(f"累计实际 = 0.00（{year}年{month}月无符合条件的合同/验收记录）")
+
+    if is_director:
+        dept_total = sum(m['total'] for m in dept_members)
+        formula_explain.insert(0, f"部门累计实际 = 部门所有销售累计实际之和 = {dept_total:.2f}")
+
+    return jsonify({
+        'code': 200, 'message': 'OK',
+        'data': {
+            'year': year, 'month': month,
+            'username': username,
+            'name': u.get('name') or username,
+            'role': u.get('role') or '',
+            'department': u.get('department') or '',
+            'is_sales': is_sales,
+            'is_director': is_director,
+            'total': details['total'],
+            'items': details['items'],
+            'dept_members': dept_members,
+            'formula_explain': formula_explain,
+        }
+    })
+
+
 @appraisal_bp.route('/export', methods=['GET'])
 @admin_required
 def export_monthly():
@@ -368,7 +662,7 @@ def export_monthly():
 
     db = get_db()
     cur = db.cursor()
-    rows, avg_rate, dept_rate = build_monthly_rows(cur, year, month)
+    rows, avg_rate, dept_rate, _dt, _da = build_monthly_rows(cur, year, month)
 
     wb = Workbook()
     ws = wb.active
@@ -445,7 +739,7 @@ def yearly_trend():
     sales_map = {}    # {username: {"name":..., "rates": {1: rate, ...}}}
 
     for m in range(1, 13):
-        rows, _avg, dept_rate = build_monthly_rows(cur, year, m)
+        rows, _avg, dept_rate, _dt, _da = build_monthly_rows(cur, year, m)
         dept_rates[m] = dept_rate
         for r in rows:
             if not r['is_sales']:

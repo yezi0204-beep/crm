@@ -58,33 +58,66 @@ RELATION_TYPES = {
 
 
 # ============ LLM 实体提取提示词 ============
-ENTITY_EXTRACTION_PROMPT = """你是一名知识图谱专家。请从以下文档中提取实体和关系，并以JSON格式返回。
+ENTITY_EXTRACTION_PROMPT = """你是一名CRM知识图谱专家。请从以下业务文档中提取实体和关系，以JSON格式返回。
 
-文档标题：{title}
-文档内容：
+【文档标题】{title}
+【文档内容】
 {content}
 
-请以JSON格式返回以下结构：
+【实体类型说明】（仅限以下类型，必须准确分类）
+- person: 具体的人名（如"张伟"、"李明主任"），不含代词
+- organization: 公司/机构全称或简称（如"华为公司"、"中船701所"、"应用中心"），不含"该公司"等代词
+- product: 具体产品/系统名称（如"XX雷达模拟器"、"数据管理平台"），不含单独的"系统""平台"等通用词
+- technology: 具体技术名称（如"人工智能""大数据分析"），不含单独的"技术""方案"
+- customer: 客户单位名称（如"海军装备部""某研究院"）
+- competitor: 竞争对手公司名称
+- project: 具体项目名称（如"XX型号研制项目"），不含单独的"项目"二字
+- contract: 具体合同名称或编号（如"XX采购合同""合同编号HT-2024-001"）
+- business: 具体商机名称（如"XX系统采购商机"）
+- qualification: 具体资质名称（如"武器装备科研生产许可证""ISO9001认证"）
+- location: 具体地点（如"北京""武汉光谷"）
+- other: 以上无法覆盖的具体命名实体
+
+【关系类型说明】（仅限以下类型）
+- works_at: 任职于（人→组织）
+- owns: 拥有（组织→产品/资质/项目）
+- produces: 生产/研发（组织→产品）
+- uses: 使用（组织/人→产品/技术）
+- competes_with: 竞争（组织↔组织）
+- partner_of: 合作（组织↔组织/人）
+- manages: 管理（人→项目/组织）
+- signs: 签署（组织/人→合同）
+- visits: 拜访（人→组织/地点）
+- follows_up: 跟进（人→商机/客户）
+- has_qualification: 具备资质（组织→资质）
+- located_at: 位于（组织/地点→地点）
+- involves: 涉及（项目/合同→组织/产品）
+- related_to: 相关（兜底关系）
+- other: 其他关系
+
+【提取规则】（必须严格遵守）
+1. 只提取文档中**明确出现**的实体，绝不臆造或推测
+2. 实体名称必须是文档中的**原始名称**，不要改写、缩写或扩展
+3. **禁止提取**：代词（该公司、该系统、我们、他们）、通用名词（系统、平台、技术、项目、合同）、动词、形容词
+4. 实体名称长度≥2个字符，且必须是具体专有名词
+5. 同一实体只提取一次，使用文档中首次出现的完整名称
+6. 关系必须有明确的源实体和目标实体，且两者都已提取
+7. 关系描述要具体，说明关系的依据（如"张伟于2024年3月拜访了XX公司"）
+8. 如果文档是拜访记录，重点提取人、客户组织、产品
+9. 如果文档是合同，重点提取合同方、合同金额关联的产品/项目
+10. 如果文档无任何可提取实体，返回空数组
+
+【返回格式】（严格JSON，不要markdown代码块，不要额外文字）
 {{
   "entities": [
-    {{"name": "实体名称", "type": "实体类型", "description": "简短描述"}},
-    ...
+    {{"name": "实体名称", "type": "实体类型", "description": "简短描述（含上下文依据）"}},
+    {{"name": "张伟", "type": "person", "description": "文档中提到的销售人员"}}
   ],
   "relations": [
-    {{"source": "源实体名称", "target": "目标实体名称", "type": "关系类型", "description": "关系描述"}},
-    ...
+    {{"source": "张伟", "target": "XX公司", "type": "visits", "description": "张伟于3月拜访XX公司"}},
+    {{"source": "XX公司", "target": "数据平台", "type": "uses", "description": "XX公司使用数据平台"}}
   ]
 }}
-
-实体类型可选值：person(人物), organization(组织/公司), product(产品/系统), technology(技术), customer(客户), competitor(竞争对手), project(项目), contract(合同), business(商机), qualification(资质), location(地点), other(其他)
-
-关系类型可选值：works_at(任职于), owns(拥有), produces(生产), uses(使用), competes_with(竞争), partner_of(合作), manages(管理), signs(签署), visits(拜访), follows_up(跟进), has_qualification(具备资质), located_at(位于), involves(涉及), related_to(相关), other(其他关系)
-
-注意：
-- 只提取文档中明确提到的实体和关系，不要臆造
-- 实体名称要简洁明确
-- 关系描述要具体
-- 如果没有实体或关系，返回空数组
 """
 
 
@@ -107,11 +140,11 @@ def _call_llm_for_graph(title, content):
         payload = {
             'model': LLM_MODEL,
             'messages': [
-                {'role': 'system', 'content': '你是专业的知识图谱构建专家。请严格按照JSON格式返回实体和关系，不要添加任何额外文字，不要使用markdown代码块。'},
+                {'role': 'system', 'content': '你是CRM领域的知识图谱构建专家，擅长从销售拜访记录、合同、商机等业务文档中精准提取实体和关系。请严格按照JSON格式返回，不要添加任何额外文字，不要使用markdown代码块。'},
                 {'role': 'user', 'content': prompt}
             ],
-            'temperature': 0.3,
-            'max_tokens': 200000
+            'temperature': 0.1,
+            'max_tokens': 180000
         }
 
         response = requests.post(
@@ -138,14 +171,19 @@ def _call_llm_for_graph(title, content):
             # 解析 JSON
             try:
                 result = json.loads(cleaned)
-                return result
             except json.JSONDecodeError:
                 # 尝试提取 JSON
                 json_match = re.search(r'\{[\s\S]*\}', cleaned)
                 if json_match:
-                    result = json.loads(json_match.group())
-                    return result
-                return None
+                    try:
+                        result = json.loads(json_match.group())
+                    except json.JSONDecodeError:
+                        return None
+                else:
+                    return None
+
+            # 后处理：清洗和过滤实体/关系
+            return _postprocess_extraction(result)
         else:
             print(f"[KnowledgeGraph] LLM error: {response.status_code}, {response.text[:200]}")
             return None
@@ -154,8 +192,159 @@ def _call_llm_for_graph(title, content):
         return None
 
 
+# ============ 实体后处理（清洗/过滤/归一化） ============
+
+# 停用词：这些词不应作为实体名称
+_STOPWORDS = {
+    # 通用名词
+    '系统', '平台', '软件', '产品', '设备', '装备', '技术', '方案', '架构',
+    '项目', '工程', '计划', '合同', '协议', '契约', '商机', '机会',
+    '公司', '集团', '部门', '中心', '单位', '机构', '组织',
+    '客户', '用户', '对方', '甲方', '乙方', '丙方',
+    # 代词
+    '该公司', '该系统', '该平台', '该产品', '该技术', '该项目', '该合同',
+    '我们', '他们', '你们', '其', '此', '该', '本',
+    # 通用动词/形容词
+    '管理', '使用', '拥有', '生产', '研发', '销售', '采购', '合作', '竞争',
+    '位于', '涉及', '相关', '其他', '签署', '拜访', '跟进',
+    # 通用后缀（单独出现时无意义）
+    '有限', '股份',
+}
+
+# 实体类型有效值
+_VALID_ENTITY_TYPES = set(ENTITY_TYPES.keys())
+# 关系类型有效值
+_VALID_RELATION_TYPES = set(RELATION_TYPES.keys())
+
+
+def _is_valid_entity_name(name):
+    """检查实体名称是否有效（非空、非停用词、长度>=2、非纯通用词）。"""
+    if not name:
+        return False
+    name = name.strip()
+    if len(name) < 2:
+        return False
+    if name in _STOPWORDS:
+        return False
+    # 纯数字或纯标点
+    if re.match(r'^[\d\s\W]+$', name):
+        return False
+    # 以"该"开头的代词
+    if name.startswith('该') or name.startswith('本') or name.startswith('其'):
+        # 例外：本部、本公司等如果是组织名可以保留，但太短的不行
+        if len(name) <= 2:
+            return False
+    return True
+
+
+def _normalize_entity_name(name):
+    """归一化实体名称：去除首尾空白、引号、括号。"""
+    name = name.strip()
+    # 去除首尾引号
+    name = name.strip('"\'""''「」『』')
+    # 去除首尾括号
+    if name.startswith('(') and name.endswith(')'):
+        name = name[1:-1].strip()
+    if name.startswith('（') and name.endswith('）'):
+        name = name[1:-1].strip()
+    return name
+
+
+def _postprocess_extraction(result):
+    """对LLM返回的提取结果进行后处理：清洗、过滤、去重、归一化。"""
+    if not result or not isinstance(result, dict):
+        return {'entities': [], 'relations': []}
+
+    raw_entities = result.get('entities', []) or []
+    raw_relations = result.get('relations', []) or []
+    if not isinstance(raw_entities, list):
+        raw_entities = []
+    if not isinstance(raw_relations, list):
+        raw_relations = []
+
+    # === 实体清洗 ===
+    seen_names = {}  # name(lower) -> entity dict，用于去重
+    cleaned_entities = []
+    for ent in raw_entities:
+        if not isinstance(ent, dict):
+            continue
+        name = _normalize_entity_name(str(ent.get('name', '')))
+        etype = str(ent.get('type', 'other')).strip().lower()
+        desc = str(ent.get('description', '')).strip()
+
+        # 类型校验，无效类型归为 other
+        if etype not in _VALID_ENTITY_TYPES:
+            etype = 'other'
+
+        # 名称有效性校验
+        if not _is_valid_entity_name(name):
+            continue
+
+        # 去重：同名称+同类型只保留第一个（description更长的优先）
+        key = name.lower()
+        if key in seen_names:
+            existing = seen_names[key]
+            # 如果新描述更长，替换
+            if len(desc) > len(existing.get('description', '')):
+                existing['description'] = desc
+            # 如果已有类型更具体（非other），保留已有；否则用新类型
+            if existing.get('type') == 'other' and etype != 'other':
+                existing['type'] = etype
+            continue
+
+        new_ent = {'name': name, 'type': etype, 'description': desc}
+        seen_names[key] = new_ent
+        cleaned_entities.append(new_ent)
+
+    # === 关系清洗 ===
+    entity_name_set = {e['name'].lower() for e in cleaned_entities}
+    name_to_canonical = {e['name'].lower(): e['name'] for e in cleaned_entities}
+    cleaned_relations = []
+    seen_rel_keys = set()
+    for rel in raw_relations:
+        if not isinstance(rel, dict):
+            continue
+        source = _normalize_entity_name(str(rel.get('source', '')))
+        target = _normalize_entity_name(str(rel.get('target', '')))
+        rtype = str(rel.get('type', 'related_to')).strip().lower()
+        rdesc = str(rel.get('description', '')).strip()
+
+        # 类型校验
+        if rtype not in _VALID_RELATION_TYPES:
+            rtype = 'related_to'
+
+        # 源和目标必须都在已提取的实体中
+        src_lower = source.lower()
+        tgt_lower = target.lower()
+        if src_lower not in entity_name_set or tgt_lower not in entity_name_set:
+            continue
+        # 自环排除
+        if src_lower == tgt_lower:
+            continue
+
+        # 归一化为标准实体名
+        source = name_to_canonical[src_lower]
+        target = name_to_canonical[tgt_lower]
+
+        # 关系去重（source+target+type）
+        rel_key = (src_lower, tgt_lower, rtype)
+        if rel_key in seen_rel_keys:
+            continue
+        seen_rel_keys.add(rel_key)
+
+        cleaned_relations.append({
+            'source': source, 'target': target,
+            'type': rtype, 'description': rdesc
+        })
+
+    return {'entities': cleaned_entities, 'relations': cleaned_relations}
+
+
 def _rule_based_extraction(title, content):
-    """规则模式实体提取（LLM不可用时的降级方案）。"""
+    """规则模式实体提取（LLM不可用时的降级方案）。
+    使用更精确的正则 + 前缀清洗，避免提取"系统""平台"等无意义通用词，
+    并去除正则贪婪匹配导致的多余前缀（如"该系统由北京某研究所"→"北京某研究所"）。
+    """
     entities = []
     relations = []
 
@@ -163,66 +352,141 @@ def _rule_based_extraction(title, content):
         return {'entities': entities, 'relations': relations}
 
     text = content
+    seen_names = set()
 
-    # 提取可能的人名（简单规则：2-4字的中文姓名模式）
-    name_pattern = r'(?:客户|联系人|负责人|对方|甲方|乙方)\s*[:：]?\s*([\u4e00-\u9fa5]{2,4})'
-    for match in re.finditer(name_pattern, text):
-        name = match.group(1)
-        if name not in [e['name'] for e in entities]:
-            entities.append({'name': name, 'type': 'person', 'description': f'从"{match.group(0)}"提取'})
+    # 多字符分隔词：用 rfind 截取（不会误匹配实体名内部的字）
+    _MULTI_SEPS = [
+        '正在', '已经', '使用', '采购', '研发', '生产', '拥有', '具备', '位于',
+        '涉及', '管理', '购买', '提供', '开发', '研制', '设计', '集成', '部署',
+        '实施', '维护', '运营', '建设', '成立', '注册', '拜访', '访问', '计划',
+        '负责', '属于', '来自', '称为', '叫做', '名为',
+    ]
+    # 单字符前缀词：只去除开头（避免误匹配实体名中间的字，如"华为有限"中的"有"）
+    _SINGLE_SEPS = ['该', '本', '其', '某', '由', '在', '对', '向', '从', '给',
+                    '和', '与', '及', '或', '的', '了', '是', '有', '将', '要',
+                    '被', '把', '让', '使', '到', '去', '过', '着', '地']
 
-    # 提取公司名
-    org_pattern = r'([\u4e00-\u9fa5]+(?:公司|集团|科技|有限公司|股份|有限))'
+    # 动词/介词字符集——实体名中间出现这些说明正则匹配越界了，应整条丢弃
+    _BAD_VERBS = set('来回到去给带让使被把将要对会能可应需想要需且但而并以及或')
+
+    def _trim_prefix(name):
+        """去除名称开头的介词/动词前缀（循环去除，只处理开头不碰中间）。"""
+        result = name
+        all_seps = _MULTI_SEPS + _SINGLE_SEPS
+        for _ in range(6):  # 最多迭代6次
+            changed = False
+            for sep in all_seps:
+                if result.startswith(sep) and len(result) > len(sep) + 1:
+                    result = result[len(sep):]
+                    changed = True
+                    break
+            if not changed:
+                break
+        return result
+
+    def _is_clean_entity(name):
+        """检查实体名是否'干净'：不含动词/介词（说明正则没越界匹配句子）。"""
+        if not name or len(name) < 2:
+            return False
+        # 实体名中间不应出现动词/介词
+        bad_count = sum(1 for c in name if c in _BAD_VERBS)
+        # 允许1个（如"研究院"的"院"不算），但超过1个说明是句子
+        if bad_count > 1:
+            return False
+        return True
+
+    def _add_entity(name, etype, desc):
+        name = name.strip()
+        # 清洗前缀
+        name = _trim_prefix(name)
+        if not name or name in seen_names:
+            return
+        if not _is_valid_entity_name(name):
+            return
+        # 规则提取专用：过滤不干净的实体（含多个动词/介词，说明越界了）
+        if not _is_clean_entity(name):
+            return
+        seen_names.add(name)
+        entities.append({'name': name, 'type': etype, 'description': desc})
+
+    # 提取人名：前缀+2-4字中文名（要求前缀后有冒号/空格，或"经理/主任/总"后的人名+标点/动词）
+    # 模式1：联系人：张伟
+    name_pattern1 = r'(?:客户|联系人|负责人|对方|甲方|乙方)\s*[:：]\s*([\u4e00-\u9fa5]{2,4})(?:\s|[，。、,;；]|$)'
+    for match in re.finditer(name_pattern1, text):
+        _add_entity(match.group(1), 'person', f'从"{match.group(0).strip()}"提取')
+    # 模式2：销售张伟、经理张伟 拜访/访问/到/，/。
+    name_pattern2 = r'(?:销售|经理|主任|总|工程师|老师)\s*([\u4e00-\u9fa5]{2,3})(?=拜访|访问|去|到|，|。|、|,|;|；|$)'
+    for match in re.finditer(name_pattern2, text):
+        _add_entity(match.group(1), 'person', f'从"{match.group(0).strip()}"提取')
+
+    # 提取公司名：要求带后缀，前缀2-8字（限制贪婪范围）
+    org_pattern = r'([\u4e00-\u9fa5]{2,8}(?:有限公司|股份有限公司|科技有限公司|集团|研究所|研究院|设计院|部队|装备部))'
     for match in re.finditer(org_pattern, text):
-        org = match.group(1)
-        if org not in [e['name'] for e in entities]:
-            entities.append({'name': org, 'type': 'organization', 'description': f'公司名称'})
+        _add_entity(match.group(1), 'organization', '公司/机构名称')
 
-    # 提取产品/系统
-    product_pattern = r'((?:[\u4e00-\u9fa5]+)?(?:系统|平台|软件|产品|设备|装备|雷达|模拟器))'
+    # 提取产品/系统：要求带具体名称前缀（≥2字），不能只是"系统""平台"等通用词
+    product_pattern = r'([\u4e00-\u9fa5]{2,8}(?:系统|平台|软件|模拟器|雷达|终端|服务器))'
     for match in re.finditer(product_pattern, text):
-        product = match.group(1)
-        if product not in [e['name'] for e in entities]:
-            entities.append({'name': product, 'type': 'product', 'description': f'产品/系统'})
+        _add_entity(match.group(1), 'product', '产品/系统名称')
 
-    # 提取技术
-    tech_pattern = r'((?:AI|人工智能|大模型|智能|数字化|信息化|云|大数据|物联网)[\u4e00-\u9fa5]*(?:技术|方案|系统|架构)?)'
+    # 提取技术：要求带具体前缀
+    tech_pattern = r'((?:AI|人工智能|大模型|智能|数字化|信息化|云计算|大数据|物联网|区块链|5G|数字孪生)[\u4e00-\u9fa5]{0,6}(?:技术|架构)?)'
     for match in re.finditer(tech_pattern, text):
         tech = match.group(1)
-        if tech not in [e['name'] for e in entities]:
-            entities.append({'name': tech, 'type': 'technology', 'description': f'技术'})
+        if len(tech) >= 3:
+            _add_entity(tech, 'technology', '技术名称')
 
-    # 提取地点
-    loc_pattern = r'((?:[\u4e00-\u9fa5]{2,4})(?:市|省|区|县|镇))'
+    # 提取地点：2-4字+市/省/区/县
+    loc_pattern = r'([\u4e00-\u9fa5]{2,4}(?:市|省|区|县|开发区|高新区))'
     for match in re.finditer(loc_pattern, text):
-        loc = match.group(1)
-        if loc not in [e['name'] for e in entities]:
-            entities.append({'name': loc, 'type': 'location', 'description': f'地点'})
+        _add_entity(match.group(1), 'location', '地点')
 
-    # 提取项目
-    project_pattern = r'((?:[\u4e00-\u9fa5]+)?(?:项目|工程|计划|方案)[\u4e00-\u9fa5]*)'
+    # 提取项目：要求带具体名称前缀
+    project_pattern = r'([\u4e00-\u9fa5]{2,8}(?:项目|工程))'
     for match in re.finditer(project_pattern, text):
-        project = match.group(0)
-        if project not in [e['name'] for e in entities]:
-            entities.append({'name': project, 'type': 'project', 'description': f'项目'})
+        _add_entity(match.group(1), 'project', '项目名称')
 
-    # 提取合同
-    contract_pattern = r'((?:[\u4e00-\u9fa5]+)?(?:合同|协议|契约)[\u4e00-\u9fa5]*)'
+    # 提取合同：带编号或具体名称
+    contract_pattern = r'((?:HT|ht|合同编号|合同)\s*[:：]?\s*[A-Za-z0-9\-]+)'
     for match in re.finditer(contract_pattern, text):
-        contract = match.group(0)
-        if contract not in [e['name'] for e in entities]:
-            entities.append({'name': contract, 'type': 'contract', 'description': f'合同'})
+        _add_entity(match.group(1).strip(), 'contract', '合同编号')
+    contract_name_pattern = r'([\u4e00-\u9fa5]{2,}(?:采购合同|服务合同|销售合同|技术合同|开发合同))'
+    for match in re.finditer(contract_name_pattern, text):
+        _add_entity(match.group(1), 'contract', '合同名称')
 
-    # 简单关系构建：如果文档中有"XX公司"和"系统"，可能是使用关系
+    # 提取资质
+    qual_pattern = r'((?:武器装备科研生产许可证|ISO9001|ISO14001|武器装备质量管理体系认证|保密资格认证|高新技术企业|武器装备科研生产单位许可证)[\d\u4e00-\u9fa5]*)'
+    for match in re.finditer(qual_pattern, text):
+        _add_entity(match.group(1), 'qualification', '资质名称')
+
+    # 简单关系构建：组织使用产品
     org_entities = [e for e in entities if e['type'] == 'organization']
     product_entities = [e for e in entities if e['type'] == 'product']
+    person_entities = [e for e in entities if e['type'] == 'person']
+    seen_rels = set()
+
     for org in org_entities:
         for product in product_entities:
+            rel_key = (org['name'], product['name'], 'uses')
+            if rel_key in seen_rels:
+                continue
+            seen_rels.add(rel_key)
             relations.append({
-                'source': org['name'],
-                'target': product['name'],
-                'type': 'uses',
-                'description': f'{org["name"]}使用{product["name"]}'
+                'source': org['name'], 'target': product['name'],
+                'type': 'uses', 'description': f'{org["name"]}使用{product["name"]}'
+            })
+
+    for person in person_entities:
+        for org in org_entities:
+            if person['name'] in org['name'] or org['name'] in person['name']:
+                continue
+            rel_key = (person['name'], org['name'], 'visits')
+            if rel_key in seen_rels:
+                continue
+            seen_rels.add(rel_key)
+            relations.append({
+                'source': person['name'], 'target': org['name'],
+                'type': 'visits', 'description': f'{person["name"]}拜访{org["name"]}'
             })
 
     return {'entities': entities, 'relations': relations}

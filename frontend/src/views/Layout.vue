@@ -57,6 +57,10 @@
             <span class="menu-icon">📜</span>
             <span>{{ t('menuItem.contracts') }}</span>
           </el-menu-item>
+          <el-menu-item index="/acceptances">
+            <span class="menu-icon">📋</span>
+            <span>验收管理</span>
+          </el-menu-item>
           <el-menu-item index="/quotes">
             <span class="menu-icon">💵</span>
             <span>{{ t('menuItem.quotes') }}</span>
