@@ -24,7 +24,7 @@
 
         <div class="table-container">
           <div class="table-wrapper">
-            <el-table :data="campaigns" stripe border class="data-table">
+            <el-table :data="campaigns" stripe border class="data-table" max-height="70vh">
               <el-table-column prop="name" label="活动名称" min-width="160" sortable show-overflow-tooltip />
               <el-table-column label="类型" width="110">
                 <template #default="{ row }">{{ typeLabel(row.type) }}</template>
@@ -95,7 +95,7 @@
 
         <div class="table-container">
           <div class="table-wrapper">
-            <el-table :data="analytics.campaigns || []" stripe border class="data-table">
+            <el-table :data="analytics.campaigns || []" stripe border class="data-table" max-height="70vh">
               <el-table-column prop="name" label="活动名称" min-width="160" show-overflow-tooltip />
               <el-table-column label="类型" width="100">
                 <template #default="{ row }">{{ typeLabel(row.type) }}</template>
@@ -145,7 +145,7 @@
 
         <div class="table-container">
           <div class="table-wrapper">
-            <el-table :data="automations" stripe border class="data-table">
+            <el-table :data="automations" stripe border class="data-table" max-height="70vh">
               <el-table-column prop="name" label="规则名称" min-width="160" show-overflow-tooltip />
               <el-table-column label="触发条件" width="140">
                 <template #default="{ row }">{{ triggerLabel(row.trigger_type) }}</template>

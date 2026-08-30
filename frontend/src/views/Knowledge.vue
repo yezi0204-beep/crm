@@ -76,7 +76,7 @@
           <el-button type="success" size="small" @click="handleBatchAnalyze" :loading="batchAnalyzing">🧠 批量AI分析</el-button>
         </div>
 
-        <el-table :data="docList" v-loading="docLoading" stripe style="width:100%" @row-click="openDocDetail">
+        <el-table :data="docList" v-loading="docLoading" stripe style="width:100%" @row-click="openDocDetail" max-height="70vh">
           <el-table-column type="index" width="50" />
           <el-table-column prop="title" label="标题" min-width="200">
             <template #default="{ row }">

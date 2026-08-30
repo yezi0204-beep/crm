@@ -17,7 +17,7 @@ import openpyxl
 
 from flask import Blueprint, request, jsonify
 
-from extensions import get_db, record_operation_log, DB_PATH
+from extensions import get_db, record_operation_log, DB_PATH, token_required
 
 smart_import_bp = Blueprint('smart_import', __name__)
 
@@ -83,22 +83,34 @@ MODULE_FIELDS = {
         'work_type':      ['工作类型', '类型'],
     },
     'scraped_leads': {
-        'company':          ['招标单位', '公司', '公司名称', '单位'],
-        'contact_name':     ['招标联系人', '联系人', '姓名'],
-        'phone':            ['招标联系电话', '招标电话', '电话', '手机'],
-        'email':            ['邮箱', '电子邮件'],
-        'industry':         ['行业'],
-        'region':           ['地区', '区域'],
-        'source':           ['来源'],
-        'opportunity_name': ['标题', '商机名称', '项目名称', '项目名', '招标标题'],
-        'tender_no':        ['招标编号', '标段编号', '项目编号', '采购编号'],
-        'budget':           ['招标估价', '招标预算', '预算', '预算金额', '项目预算', '项目估算'],
-        'deadline':         ['投标截止时间', '投标截止日期', '截止日期', '截止时间', '报名截止'],
-        'publish_date':     ['发布时间', '发布日期', '公告日期', '公告时间'],
-        'agency':           ['招标代理机构', '代理机构', '招标代理'],
-        'agency_phone':     ['招标代理机构联系电话', '代理机构电话', '代理机构联系电话', '代理联系电话'],
-        'link':             ['详情链接', '链接', '获取链接', '原文链接'],
-        'remark':           ['备注', '说明'],
+        'company':          ['招标单位', '公司', '公司名称', '单位', '客户名称', '企业名称',
+                             '采购人', '招标人', '建设单位', '业主', '甲方', '委托方',
+                             '采购方', '中标单位', '合作方', '供方', '供应商', '采购单位',
+                             '投标单位', '竞标单位', '发包方', '使用单位', '用户单位',
+                             '项目业主', '项目单位', '合作企业', '对方单位', '名称'],
+        'contact_name':     ['招标联系人', '联系人', '姓名', '联系人姓名', '对接人', '项目联系人'],
+        'phone':            ['招标联系电话', '招标电话', '电话', '手机', '联系电话', '联系方式',
+                             '联系人电话', '手机'],
+        'email':            ['邮箱', '电子邮件', 'email', 'E-mail', '联系邮箱'],
+        'industry':         ['行业', '所属行业', '行业类别', '行业分类'],
+        'region':           ['地区', '区域', '所在地区', '省份', '城市', '所在地'],
+        'source':           ['来源', '线索来源', '信息来源', '渠道'],
+        'opportunity_name': ['标题', '商机名称', '项目名称', '项目名', '招标标题',
+                             '商机标题', '商机', '商机描述', '项目标题', '招标名称', '项目'],
+        'tender_no':        ['招标编号', '标段编号', '项目编号', '采购编号', '招标号',
+                             '项目代号', '招标编码'],
+        'budget':           ['招标估价', '招标预算', '预算', '预算金额', '项目预算', '项目估算',
+                             '招标控制价', '最高限价', '预算价', '概算金额'],
+        'deadline':         ['投标截止时间', '投标截止日期', '截止日期', '截止时间', '报名截止',
+                             '投标截止', '递交截止', '开标时间', '开标日期'],
+        'publish_date':     ['发布时间', '发布日期', '公告日期', '公告时间', '发布',
+                             '公示日期', '公示时间'],
+        'agency':           ['招标代理机构', '代理机构', '招标代理', '代理', '招标机构'],
+        'agency_phone':     ['招标代理机构联系电话', '代理机构电话', '代理机构联系电话', '代理联系电话',
+                             '代理电话', '招标代理电话'],
+        'link':             ['详情链接', '链接', '获取链接', '原文链接', '详情网址',
+                             '原文网址', '跳转链接', '点击链接'],
+        'remark':           ['备注', '说明', '备注说明', '补充说明', '其他'],
     },
     'enterprises': {
         'name':                    ['企业名称', '公司名称', '单位名称', '名称', '公司', '单位'],
@@ -125,7 +137,7 @@ REQUIRED_FIELDS = {
     'contracts': ['contract_no', 'contract_name', 'total_amt'],
     'payment_records': ['contract_no', 'payment_date', 'amount'],
     'visits': ['plan_date'],
-    'scraped_leads': ['company'],
+    'scraped_leads': [],
     'enterprises': ['name'],
 }
 
@@ -147,6 +159,9 @@ DATE_FIELDS = {
     'enterprises': ['established_date'],
 }
 
+# 链接类字段（优先用单元格超链接 URL 替换显示值，避免“点击查看原文”等无意义文本）
+LINK_FIELDS = {'link', 'website'}
+
 # 模块中文显示名
 MODULE_NAMES = {
     'customers': '客户',
@@ -163,11 +178,21 @@ IMPORT_ORDER = ['customers', 'scraped_leads', 'enterprises', 'business', 'contra
 
 
 def _match_keyword(header, keywords):
-    """检查列头是否匹配某个关键词（包含匹配，大小写不敏感）。"""
+    """检查列头是否匹配某个关键词（包含匹配，大小写不敏感）。
+
+    短关键词（≤2字符）使用精确匹配，避免 '公司' 匹配到 '公司地址' 等误匹配。
+    """
     header_lower = str(header).strip().lower()
     for kw in keywords:
-        if kw.lower() in header_lower:
-            return True
+        kw_lower = kw.lower()
+        if len(kw_lower) <= 2:
+            # 短关键词：精确匹配
+            if header_lower == kw_lower:
+                return True
+        else:
+            # 长关键词：包含匹配
+            if kw_lower in header_lower:
+                return True
     return False
 
 
@@ -251,6 +276,36 @@ def _parse_amount(val, is_wan=True):
         return 0
 
 
+def _extract_hyperlink_formula(val):
+    """从 =HYPERLINK(url, text) 公式中提取 url，无法提取返回 None。
+    支持 =HYPERLINK("https://...","点击查看原文") 等写法（参数分隔符兼容逗号/分号）。
+    """
+    if not isinstance(val, str):
+        return None
+    import re
+    m = re.match(r'\s*=\s*HYPERLINK\s*\(\s*', val, re.IGNORECASE)
+    if not m:
+        return None
+    rest = val[m.end():].strip()
+    if not rest:
+        return None
+    # 双引号包裹的 URL
+    if rest[0] == '"':
+        end = rest.find('"', 1)
+        if end > 0:
+            return rest[1:end].strip()
+    # 单引号包裹的 URL
+    if rest[0] == "'":
+        end = rest.find("'", 1)
+        if end > 0:
+            return rest[1:end].strip()
+    # 无引号：取到分隔符（, ; ）为止
+    m2 = re.match(r'([^,;)]+)', rest)
+    if m2:
+        return m2.group(1).strip()
+    return None
+
+
 def _resolve_owner_id(cursor, val):
     """将负责人姓名/用户名解析为 username。"""
     if not val:
@@ -289,6 +344,7 @@ def _resolve_contract(cursor, contract_no, contract_name=None):
 # API: 解析文件
 # ============================================================
 @smart_import_bp.route('/api/smart-import/parse', methods=['POST'])
+@token_required
 def smart_import_parse():
     """上传 Excel/CSV 文件，自动识别模块和映射字段，返回预览数据。"""
     file = request.files.get('file')
@@ -302,23 +358,45 @@ def smart_import_parse():
             content = file.read().decode('utf-8-sig', errors='ignore')
             import csv
             reader = csv.reader(io.StringIO(content))
-            sheets = [{'name': 'Sheet1', 'headers': next(reader, []), 'rows': [r for r in reader if any(c.strip() for c in r)]}]
+            sheets = [{'name': 'Sheet1', 'headers': next(reader, []), 'rows': [r for r in reader if any(c.strip() for c in r)], 'hyperlinks': []}]
         else:
-            # Excel
-            wb = openpyxl.load_workbook(file, data_only=True, read_only=True)
+            # Excel：读两个版本，data_only=True 拿计算值，data_only=False 拿公式（用于提取 =HYPERLINK）
+            buf = file.read()
+            wb_vals = openpyxl.load_workbook(io.BytesIO(buf), data_only=True)
+            wb_fml = openpyxl.load_workbook(io.BytesIO(buf), data_only=False)
             sheets = []
-            for ws in wb.worksheets:
-                rows = list(ws.iter_rows(values_only=True))
-                if not rows:
+            for ws_val, ws_fml in zip(wb_vals.worksheets, wb_fml.worksheets):
+                rows_val = list(ws_val.iter_rows())
+                rows_fml = list(ws_fml.iter_rows())
+                if not rows_fml:
                     continue
-                headers = [str(h).strip() if h is not None else '' for h in rows[0]]
+                headers = [str(c.value).strip() if c.value is not None else '' for c in rows_fml[0]]
                 data_rows = []
-                for row in rows[1:]:
-                    if any(c is not None and str(c).strip() for c in row):
-                        data_rows.append([str(c).strip() if c is not None else '' for c in row])
+                hyperlink_rows = []  # 与 data_rows 平行，存每行每列的超链接 URL（或 None）
+                for row_fml, row_val in zip(rows_fml[1:], rows_val[1:]):
+                    cells = []
+                    hlinks = []
+                    has_data = False
+                    for c_fml, c_val in zip(row_fml, row_val):
+                        # 显示值（用计算值版本，处理普通公式；标题等字段保持文本不被替换）
+                        v = c_val.value
+                        # 提取超链接 URL（单元格级 hyperlink 或 =HYPERLINK 公式），单独存不替换显示值
+                        hl = None
+                        if c_fml.hyperlink is not None:
+                            hl = c_fml.hyperlink.target
+                        else:
+                            hl = _extract_hyperlink_formula(c_fml.value)
+                        if v is not None and str(v).strip():
+                            has_data = True
+                        cells.append(str(v).strip() if v is not None else '')
+                        hlinks.append(hl.strip() if isinstance(hl, str) and hl.strip() else None)
+                    if has_data:
+                        data_rows.append(cells)
+                        hyperlink_rows.append(hlinks)
                 if data_rows:
-                    sheets.append({'name': ws.title, 'headers': headers, 'rows': data_rows})
-            wb.close()
+                    sheets.append({'name': ws_fml.title, 'headers': headers, 'rows': data_rows, 'hyperlinks': hyperlink_rows})
+            wb_vals.close()
+            wb_fml.close()
     except Exception as e:
         return jsonify({'code': 500, 'message': f'文件解析失败: {str(e)}', 'data': None})
 
@@ -348,18 +426,23 @@ def smart_import_parse():
 
         # 构建数据行
         parsed_rows = []
+        raw_hyperlinks = sheet.get('hyperlinks', [])
         for row_idx, raw_row in enumerate(raw_rows, 1):
+            row_hlinks = raw_hyperlinks[row_idx - 1] if row_idx - 1 < len(raw_hyperlinks) else []
             row_data = {}
             for col_idx, field in field_map.items():
                 val = raw_row[col_idx] if col_idx < len(raw_row) else ''
+                if field in LINK_FIELDS and col_idx < len(row_hlinks) and row_hlinks[col_idx]:
+                    val = row_hlinks[col_idx]
                 row_data[field] = val
 
-            # 校验必填
+            # 线索模块：用户已筛选数据，默认全部有效
             errors = []
-            required = REQUIRED_FIELDS.get(module, [])
-            for rf in required:
-                if not row_data.get(rf):
-                    errors.append(f'缺少必填字段: {rf}')
+            if module != 'scraped_leads':
+                required = REQUIRED_FIELDS.get(module, [])
+                for rf in required:
+                    if not row_data.get(rf):
+                        errors.append(f'缺少必填字段: {rf}')
 
             parsed_rows.append({
                 'row_index': row_idx,
@@ -390,7 +473,7 @@ def smart_import_parse():
             'total_rows': len(raw_rows),
             'valid_count': sum(1 for r in parsed_rows if r['valid']),
             'invalid_count': sum(1 for r in parsed_rows if not r['valid']),
-            'rows': parsed_rows[:200],  # 最多预览 200 行
+            'rows': parsed_rows,  # 返回全部解析行，避免确认导入时丢数据
         })
 
     return jsonify({
@@ -408,28 +491,18 @@ def smart_import_parse():
 # API: 执行导入
 # ============================================================
 @smart_import_bp.route('/api/smart-import/execute', methods=['POST'])
+@token_required
 def smart_import_execute():
     """确认后执行导入，按依赖顺序处理各 sheet。"""
     payload = request.get_json(silent=True) or {}
     sheets = payload.get('sheets', [])
     is_wan = payload.get('is_wan', True)  # 金额单位：True=万元, False=元
+    mode = payload.get('mode', '')  # 'update_link' 表示仅更新已有线索链接（不新建）
 
-    username = 'system'
-    try:
-        from flask import current_app
-        with current_app.app_context():
-            pass
-    except Exception:
-        pass
-
-    # 从 token 获取用户名
-    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    # 从 token 获取用户名（token_required 已校验有效性）
+    username = request.current_user['username']
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("SELECT username FROM tokens WHERE token = ?", (token,))
-    token_row = cursor.fetchone()
-    if token_row:
-        username = token_row['username']
 
     # 按依赖顺序排列 sheets
     def sheet_order_key(sheet):
@@ -469,10 +542,21 @@ def smart_import_execute():
             row_index = row.get('row_index', 0)
 
             try:
-                _import_one_row(cursor, module, row_data, field_map, is_wan, username)
-                db.commit()
-                success_count += 1
-                row_results.append({'row_index': row_index, 'success': True, 'message': '导入成功'})
+                if mode == 'update_link' and module == 'scraped_leads':
+                    matched, msg = _update_lead_link(cursor, row_data)
+                    if matched > 0:
+                        db.commit()
+                        success_count += 1
+                        row_results.append({'row_index': row_index, 'success': True, 'message': msg})
+                    else:
+                        db.rollback()
+                        fail_count += 1
+                        row_results.append({'row_index': row_index, 'success': False, 'message': msg})
+                else:
+                    _import_one_row(cursor, module, row_data, field_map, is_wan, username)
+                    db.commit()
+                    success_count += 1
+                    row_results.append({'row_index': row_index, 'success': True, 'message': '导入成功'})
             except Exception as e:
                 db.rollback()
                 fail_count += 1
@@ -504,6 +588,37 @@ def smart_import_execute():
             'sheets': all_results,
         }
     })
+
+
+def _update_lead_link(cursor, row_data):
+    """更新已有线索的 link 字段（按招标单位 + 商机名称匹配）。
+    返回 (matched_count, message)。
+    """
+    company = (str(row_data.get('company') or '')).strip()
+    opportunity_name = (str(row_data.get('opportunity_name') or '')).strip()
+    link = (str(row_data.get('link') or '')).strip()
+    if not link:
+        return 0, '链接为空，跳过'
+    if not company:
+        return 0, '招标单位为空，无法匹配'
+    # 优先 company + opportunity_name 精确匹配；无 opportunity_name 则单按 company 匹配
+    if opportunity_name:
+        cursor.execute(
+            "SELECT id FROM scraped_leads WHERE company=? AND opportunity_name=?",
+            (company, opportunity_name)
+        )
+    else:
+        cursor.execute(
+            "SELECT id FROM scraped_leads WHERE company=? "
+            "AND (opportunity_name IS NULL OR opportunity_name='' OR opportunity_name=company)",
+            (company,)
+        )
+    ids = [r['id'] for r in cursor.fetchall()]
+    if not ids:
+        return 0, f'未找到匹配线索（{company}）'
+    for cid in ids:
+        cursor.execute("UPDATE scraped_leads SET link=? WHERE id=?", (link, cid))
+    return len(ids), f'已更新 {len(ids)} 条线索的链接'
 
 
 def _import_one_row(cursor, module, row_data, field_map, is_wan, username):
@@ -592,20 +707,51 @@ def _import_one_row(cursor, module, row_data, field_map, is_wan, username):
               row_data.get('work_content', ''), now))
 
     elif module == 'scraped_leads':
+        # 人工导入统一写入原始情报库（raw_intelligence），
+        # 后续经 AI 商机识别分析 → 转入CRM → 分配销售，与自动采集共用同一链路
+        import hashlib
+        from routes.leads import _ensure_manual_source
+
+        company = (row_data.get('company') or '').strip()
+        opp_name = (row_data.get('opportunity_name') or '').strip()
+        if not company and not opp_name:
+            raise ValueError('公司与商机名称均为空')
+        title = opp_name or company
+        link = (row_data.get('link') or '').strip()
+
+        content_parts = [f'【人工导入】{title}']
+        for label, key in [
+            ('采购单位/公司', 'company'), ('联系人', 'contact_name'), ('电话', 'phone'),
+            ('邮箱', 'email'), ('行业', 'industry'), ('地区', 'region'),
+            ('预算', 'budget'), ('采购方式', 'procurement_method'),
+            ('招标编号', 'tender_no'), ('代理机构', 'agency'), ('代理电话', 'agency_phone'),
+            ('发布日期', 'publish_date'), ('截止日期', 'deadline'), ('备注', 'remark'),
+        ]:
+            val = (row_data.get(key) or '').strip()
+            if val:
+                content_parts.append(f'{label}：{val}')
+        content = '；'.join(content_parts)
+
+        # 去重：有链接按链接哈希，否则按 公司+项目+电话
+        if link:
+            url_hash = hashlib.sha256(link.encode()).hexdigest()
+        else:
+            url_hash = hashlib.sha256(
+                f'{company}|{opp_name}|{row_data.get("phone", "")}'.encode()
+            ).hexdigest()
+        dup = cursor.execute(
+            "SELECT id FROM raw_intelligence WHERE url_hash=?", (url_hash,)
+        ).fetchone()
+        if dup:
+            raise ValueError('原始情报库已存在相同内容，跳过重复导入')
+
+        source_id = _ensure_manual_source(cursor)
         cursor.execute("""
-            INSERT INTO scraped_leads (company, contact_name, phone, email, industry, region,
-                                       source, opportunity_name, tender_no, budget, deadline, publish_date,
-                                       agency, agency_phone, link, remark,
-                                       status, category, scraped_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '招投标监控', ?, ?)
-        """, (row_data.get('company', ''), row_data.get('contact_name', ''),
-              row_data.get('phone', ''), row_data.get('email', ''),
-              row_data.get('industry', ''), row_data.get('region', ''),
-              row_data.get('source', '导入'), row_data.get('opportunity_name', ''),
-              row_data.get('tender_no', ''), row_data.get('budget', ''),
-              row_data.get('deadline', ''), row_data.get('publish_date', ''),
-              row_data.get('agency', ''), row_data.get('agency_phone', ''),
-              row_data.get('link', ''), row_data.get('remark', ''), now, now))
+            INSERT INTO raw_intelligence (source_id, url, url_hash, title, content,
+                                          snippet, publish_date, status, keywords_matched)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', '人工导入')
+        """, (source_id, link, url_hash, title, content, content[:300],
+              (row_data.get('publish_date') or '').strip()))
 
     elif module == 'enterprises':
         cursor.execute("""

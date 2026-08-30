@@ -10,6 +10,7 @@
           <el-icon><Download /></el-icon>
           导出商机
         </el-button>
+        <el-button v-if="canEditOwner" @click="openFieldManager" class="export-btn">⚙️ 自定义字段</el-button>
         <el-select v-model="statusFilter" @change="fetchBusiness" placeholder="状态筛选" class="status-filter">
           <el-option label="全部" value="all" />
           <el-option label="进行中" value="active" />
@@ -42,7 +43,7 @@
     
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="filteredBusiness" stripe border class="data-table">
+        <el-table :data="filteredBusiness" stripe border class="data-table" max-height="70vh">
           <el-table-column prop="title" label="商机名称" min-width="130" sortable show-overflow-tooltip />
           <el-table-column prop="customer_name" label="客户" min-width="110" sortable show-overflow-tooltip />
           <el-table-column prop="stakeholder" label="干系人" min-width="90" sortable />
@@ -75,6 +76,15 @@
           <el-table-column prop="predict_date" label="预计成交" min-width="120" sortable :formatter="formatPredictDate" />
           <el-table-column prop="owner_name" label="负责人" min-width="80" sortable />
           <el-table-column prop="created_at" label="创建时间" min-width="130" sortable />
+          <el-table-column
+            v-for="f in customFields"
+            :key="f.field_key"
+            :label="f.field_name"
+            min-width="110"
+            show-overflow-tooltip
+          >
+            <template #default="scope">{{ formatCustomValue(scope.row.ext_data?.[f.field_key]) }}</template>
+          </el-table-column>
           <el-table-column label="操作" min-width="180" fixed="right">
             <template #default="scope">
               <template v-if="scope.row.status === 'active'">
@@ -83,6 +93,9 @@
                 <el-button size="small" type="danger" @click="deleteBusiness(scope.row)">作废</el-button>
               </template>
               <template v-else>
+                <el-tooltip v-if="scope.row.reject_reason" :content="'作废原因：' + scope.row.reject_reason" placement="top">
+                  <span class="reject-reason-tag">作废：{{ scope.row.reject_reason }}</span>
+                </el-tooltip>
                 <el-button size="small" type="success" @click="restoreBusiness(scope.row)">恢复</el-button>
               </template>
             </template>
@@ -170,6 +183,33 @@
         <el-form-item label="备注">
           <el-input v-model="businessForm.note" type="textarea" :rows="3" placeholder="商机备注信息" />
         </el-form-item>
+        <el-form-item
+          v-for="f in customFields"
+          :key="f.field_key"
+          :label="f.field_name"
+          :required="f.required"
+        >
+          <el-input v-if="f.field_type === 'text'" v-model="businessForm.ext_data[f.field_key]" />
+          <el-input-number
+            v-else-if="f.field_type === 'number'"
+            v-model="businessForm.ext_data[f.field_key]"
+            :controls-position="'right'"
+            style="width: 100%"
+          />
+          <el-date-picker
+            v-else-if="f.field_type === 'date'"
+            v-model="businessForm.ext_data[f.field_key]"
+            type="date"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+          <el-select v-else-if="f.field_type === 'select'" v-model="businessForm.ext_data[f.field_key]" clearable>
+            <el-option v-for="opt in f.options" :key="opt" :label="opt" :value="opt" />
+          </el-select>
+          <el-select v-else-if="f.field_type === 'multiselect'" v-model="businessForm.ext_data[f.field_key]" multiple clearable>
+            <el-option v-for="opt in f.options" :key="opt" :label="opt" :value="opt" />
+          </el-select>
+        </el-form-item>
       </el-form>
       
       <div v-if="businessForm.id" class="plan-history-section">
@@ -200,7 +240,75 @@
         <el-button type="primary" @click="saveBusiness">确定</el-button>
       </template>
     </el-dialog>
-    
+
+    <!-- 自定义字段管理 -->
+    <el-dialog v-model="showFieldManager" title="自定义字段管理（商机）" width="720px">
+      <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: #909399; font-size: 13px;">为商机对象扩展字段，保存后表格列与表单项自动生效</span>
+        <el-button type="primary" size="small" @click="startAddField">新增字段</el-button>
+      </div>
+      <el-table :data="fieldList" size="small" border max-height="420">
+        <el-table-column prop="field_name" label="字段名称" min-width="120" />
+        <el-table-column label="类型" width="90" align="center">
+          <template #default="{ row }">{{ fieldTypeLabel(row.field_type) }}</template>
+        </el-table-column>
+        <el-table-column label="可选项" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ (row.options && row.options.length) ? row.options.join('、') : '-' }}</template>
+        </el-table-column>
+        <el-table-column label="必填" width="60" align="center">
+          <template #default="{ row }">{{ row.required ? '是' : '否' }}</template>
+        </el-table-column>
+        <el-table-column prop="sort_order" label="排序" width="60" align="center" />
+        <el-table-column label="状态" width="70" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '停用' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="140" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" @click="startEditField(row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="removeField(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-dialog v-model="showFieldForm" :title="fieldForm.id ? '编辑字段' : '新增字段'" width="420px" append-to-body :close-on-click-modal="false">
+        <el-form :model="fieldForm" label-width="90px">
+          <el-form-item label="字段名称" required>
+            <el-input v-model="fieldForm.field_name" placeholder="如：招标编号" maxlength="30" />
+          </el-form-item>
+          <el-form-item label="字段类型">
+            <el-select v-model="fieldForm.field_type" style="width: 100%">
+              <el-option label="单行文本" value="text" />
+              <el-option label="数字" value="number" />
+              <el-option label="日期" value="date" />
+              <el-option label="单选" value="select" />
+              <el-option label="多选" value="multiselect" />
+            </el-select>
+          </el-form-item>
+          <el-form-item
+            v-if="fieldForm.field_type === 'select' || fieldForm.field_type === 'multiselect'"
+            label="可选项" required
+          >
+            <el-input v-model="fieldForm.optionsText" type="textarea" :rows="3" placeholder="每行一个选项" />
+          </el-form-item>
+          <el-form-item label="必填">
+            <el-switch v-model="fieldForm.required" />
+          </el-form-item>
+          <el-form-item label="排序">
+            <el-input-number v-model="fieldForm.sort_order" :min="0" :max="999" />
+          </el-form-item>
+          <el-form-item v-if="fieldForm.id" label="状态">
+            <el-switch v-model="fieldForm.is_active" active-text="启用" inactive-text="停用" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="showFieldForm = false">取消</el-button>
+          <el-button type="primary" @click="saveField">确定</el-button>
+        </template>
+      </el-dialog>
+    </el-dialog>
+
     <el-dialog v-model="showFollowModal" :title="`商机跟进 - ${currentBusiness?.title}`" width="700px" :close-on-click-modal="false" :close-on-press-escape="false">
       <div class="follow-container">
         <div class="follow-history">
@@ -275,6 +383,20 @@
         <el-button type="primary" @click="saveFollow">保存跟进</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showRejectModal" title="商机作废" width="500px" :close-on-click-modal="false">
+      <div style="line-height:2">
+        <p style="color:#606266">确定要作废以下商机吗？</p>
+        <p style="font-weight:bold;background:#f5f7fa;padding:8px;border-radius:4px">{{ rejectRow?.title }}</p>
+        <p style="color:#f56c6c;margin-top:12px">* 请填写作废原因（必填）：</p>
+        <el-input v-model="rejectReason" type="textarea" :rows="3"
+                  placeholder="例如：重复商机/信息有误/已过期/客户取消/非目标客户等" />
+      </div>
+      <template #footer>
+        <el-button @click="showRejectModal = false">取消</el-button>
+        <el-button type="danger" :loading="rejecting" @click="confirmReject">确认作废</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -298,6 +420,12 @@ const showFollowModal = ref(false)
 const followFormRef = ref(null)
 const currentBusiness = ref(null)
 const followLogs = ref([])
+
+// 作废相关
+const showRejectModal = ref(false)
+const rejectRow = ref(null)
+const rejectReason = ref('')
+const rejecting = ref(false)
 
 const followSearchKeyword = ref('')
 const statusFilter = ref('active')
@@ -395,7 +523,8 @@ const businessForm = reactive({
   next_week_plan: '',
   plan_week: '',
   owner_id: '',
-  note: ''
+  note: '',
+  ext_data: {}
 })
 
 const planHistory = ref([])
@@ -406,7 +535,103 @@ const rules = {
 }
 
 const canEditOwner = () => {
-  return authStore.role === '主任' || authStore.role === '院长'
+  return authStore.has('data.view_all')
+}
+
+// ==================== 自定义字段 ====================
+const customFields = ref([])
+const showFieldManager = ref(false)
+const showFieldForm = ref(false)
+const fieldList = ref([])
+const fieldForm = reactive({
+  id: null, field_name: '', field_type: 'text', optionsText: '',
+  required: false, sort_order: 0, is_active: true
+})
+
+const fieldTypeLabel = (t) => ({ text: '单行文本', number: '数字', date: '日期', select: '单选', multiselect: '多选' }[t] || t)
+
+const formatCustomValue = (v) => {
+  if (v === null || v === undefined || v === '') return ''
+  if (Array.isArray(v)) return v.join('、')
+  return String(v)
+}
+
+const fetchCustomFields = async () => {
+  const response = await api.get('/custom-fields', { object_type: 'business' })
+  if (response.code === 200) customFields.value = response.data
+}
+
+const openFieldManager = async () => {
+  showFieldManager.value = true
+  const response = await api.get('/custom-fields', { object_type: 'business', include_inactive: '1' })
+  if (response.code === 200) fieldList.value = response.data
+}
+
+const startAddField = () => {
+  Object.assign(fieldForm, { id: null, field_name: '', field_type: 'text', optionsText: '', required: false, sort_order: 0, is_active: true })
+  showFieldForm.value = true
+}
+
+const startEditField = (row) => {
+  Object.assign(fieldForm, {
+    id: row.id, field_name: row.field_name, field_type: row.field_type,
+    optionsText: (row.options || []).join('\n'), required: row.required,
+    sort_order: row.sort_order, is_active: row.is_active
+  })
+  showFieldForm.value = true
+}
+
+const saveField = async () => {
+  if (!fieldForm.field_name.trim()) {
+    ElMessage.warning('请输入字段名称')
+    return
+  }
+  const isChoice = fieldForm.field_type === 'select' || fieldForm.field_type === 'multiselect'
+  const options = isChoice ? fieldForm.optionsText.split('\n').map(s => s.trim()).filter(Boolean) : []
+  if (isChoice && !options.length) {
+    ElMessage.warning('请配置可选项（每行一个）')
+    return
+  }
+  const payload = {
+    object_type: 'business',
+    field_name: fieldForm.field_name.trim(),
+    field_type: fieldForm.field_type,
+    required: fieldForm.required,
+    sort_order: fieldForm.sort_order,
+    is_active: fieldForm.is_active,
+    options
+  }
+  try {
+    const response = fieldForm.id
+      ? await api.put(`/custom-fields/${fieldForm.id}`, payload)
+      : await api.post('/custom-fields', payload)
+    if (response.code === 200) {
+      ElMessage.success('保存成功')
+      showFieldForm.value = false
+      openFieldManager()
+      fetchCustomFields()
+    } else {
+      ElMessage.error(response.message)
+    }
+  } catch {
+    ElMessage.error('保存失败')
+  }
+}
+
+const removeField = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确定删除字段「${row.field_name}」吗？历史数据保留但不再展示。`, '提示', { type: 'warning' })
+    const response = await api.delete(`/custom-fields/${row.id}`)
+    if (response.code === 200) {
+      ElMessage.success('删除成功')
+      openFieldManager()
+      fetchCustomFields()
+    } else {
+      ElMessage.error(response.message)
+    }
+  } catch (e) {
+    // 用户取消
+  }
 }
 
 const formatPredictDate = (row) => {
@@ -459,21 +684,11 @@ const fetchBusiness = async () => {
   const response = await api.get('/business', { status: statusFilter.value })
   if (response.code === 200) {
     businessList.value = response.data
-    if (businessList.value.length > 0) {
-      const first = businessList.value[0]
-      console.log('Business data sample:', {
-        id: first.id,
-        title: first.title,
-        next_week_plan: first.next_week_plan,
-        weekly_plan: first.weekly_plan,
-        plan_week: first.plan_week
-      })
-    }
   }
 }
 
 const fetchCustomers = async (keyword = '') => {
-  const response = await api.get('/customers', { params: { keyword } })
+  const response = await api.get('/customers', { keyword })
   if (response.code === 200) {
     customers.value = response.data
   }
@@ -536,7 +751,8 @@ const addBusiness = () => {
     next_week_plan: '',
     plan_week: '',
     owner_id: '',
-    note: ''
+    note: '',
+    ext_data: {}
   })
   planHistory.value = []
   showAddModal.value = true
@@ -549,10 +765,10 @@ const fetchPlanHistory = async (businessId) => {
   }
 }
 
-const editBusiness = (row) => {
+const editBusiness = async (row) => {
   const probability = row.probability || 0
   const stage = PROBABILITY_STAGES[probability]?.stage || '引导需求阶段'
-  
+
   Object.assign(businessForm, {
     id: row.id,
     title: row.title || '',
@@ -571,25 +787,48 @@ const editBusiness = (row) => {
     owner_id: row.owner_id || '',
     note: row.note || ''
   })
+  // 拷贝自定义字段，避免表单直接改行数据
+  businessForm.ext_data = { ...(row.ext_data || {}) }
+
+  // 编辑时全量加载客户列表，保证「客户/干系人」下拉可直接浏览改选；
+  // 若当前客户不在列表中（如曾被关键字搜索过滤），用行数据兜底补一个选项
+  await fetchCustomers()
+  const options = customers.value
+  if (row.cust_id && !options.some(c => c.id === row.cust_id)) {
+    options.unshift({ id: row.cust_id, company: row.customer_name || '', name: row.stakeholder || '' })
+  }
+
   showAddModal.value = true
   fetchPlanHistory(row.id)
 }
 
-const deleteBusiness = async (row) => {
+const deleteBusiness = (row) => {
+  rejectRow.value = row
+  rejectReason.value = ''
+  showRejectModal.value = true
+}
+
+const confirmReject = async () => {
+  if (!rejectReason.value.trim()) {
+    ElMessage.warning('请填写作废原因')
+    return
+  }
+  rejecting.value = true
   try {
-    await ElMessageBox.confirm('确定要作废这个商机吗？', '提示', {
-      type: 'warning'
+    const response = await api.delete(`/business/${rejectRow.value.id}`, {
+      data: { reason: rejectReason.value.trim() }
     })
-    
-    const response = await api.delete(`/business/${row.id}`)
     if (response.code === 200) {
       ElMessage.success('作废成功')
+      showRejectModal.value = false
       fetchBusiness()
     } else {
       ElMessage.error(response.message)
     }
   } catch (error) {
-    ElMessage.info('已取消作废')
+    ElMessage.error('作废失败：' + (error.response?.data?.message || error.message))
+  } finally {
+    rejecting.value = false
   }
 }
 
@@ -612,7 +851,6 @@ const restoreBusiness = async (row) => {
 }
 
 const showFollow = async (row) => {
-  console.log('showFollow called with row:', row)
   currentBusiness.value = row
   followLogs.value = []
   followSearchKeyword.value = ''
@@ -626,12 +864,9 @@ const fetchFollowLogs = async (businessId) => {
     if (followSearchKeyword.value) {
       params.keyword = followSearchKeyword.value
     }
-    console.log('fetchFollowLogs called with params:', params)
     const response = await api.get('/follow_logs', params)
-    console.log('fetchFollowLogs response:', response)
     if (response.code === 200) {
       followLogs.value = response.data
-      console.log('followLogs set to:', response.data)
     } else {
       ElMessage.error('获取跟进记录失败: ' + response.message)
     }
@@ -760,6 +995,7 @@ onMounted(async () => {
   await fetchBusiness()
   fetchCustomers()
   fetchUsers()
+  fetchCustomFields()
   // 从线索详情跳转过来时，自动打开对应商机的编辑对话框
   if (id) {
     const target = businessList.value.find(b => b.id === Number(id))
@@ -775,6 +1011,22 @@ onMounted(async () => {
 <style scoped>
 .status-filter {
   width: 150px;
+}
+
+.reject-reason-tag {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: #f56c6c;
+  font-size: 12px;
+  background: #fef0f0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 8px;
+  cursor: help;
 }
 
 .prob-filter-bar {

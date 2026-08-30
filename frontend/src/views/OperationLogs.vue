@@ -40,7 +40,7 @@
 
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="logs" border class="data-table" v-loading="loading">
+        <el-table :data="logs" border class="data-table" v-loading="loading" max-height="70vh">
           <el-table-column prop="id" label="ID" min-width="60" align="center" />
           <el-table-column prop="is_read" label="状态" min-width="70" align="center">
             <template #default="{ row }">

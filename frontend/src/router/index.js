@@ -85,8 +85,7 @@ const routes = [
       },
       {
         path: 'leads',
-        name: 'Leads',
-        component: () => import('../views/Leads.vue')
+        redirect: { path: '/intelligence', query: { tab: 'leads' } }
       },
       {
         path: 'alerts',
@@ -142,6 +141,41 @@ const routes = [
         path: 'appraisal',
         name: 'Appraisal',
         component: () => import('../views/Appraisal.vue')
+      },
+      {
+        path: 'keywords',
+        name: 'Keywords',
+        component: () => import('../views/Keywords.vue')
+      },
+      {
+        path: 'intelligence',
+        name: 'Intelligence',
+        component: () => import('../views/IntelligenceHub.vue')
+      },
+      {
+        path: 'intel-leads',
+        name: 'IntelligenceLeads',
+        component: () => import('../views/IntelligenceLeads.vue')
+      },
+      {
+        path: 'daily-report',
+        name: 'DailyReport',
+        component: () => import('../views/DailyReport.vue')
+      },
+      {
+        path: 'cockpit',
+        name: 'Cockpit',
+        component: () => import('../views/Cockpit.vue')
+      },
+      {
+        path: 'customer-profiles',
+        name: 'CustomerProfiles',
+        component: () => import('../views/CustomerProfiles.vue')
+      },
+      {
+        path: 'competitor-analysis',
+        name: 'CompetitorAnalysis',
+        component: () => import('../views/CompetitorAnalysis.vue')
       }
     ]
   }
@@ -169,23 +203,25 @@ router.beforeEach(async (to, from, next) => {
     return
   }
   
-  if (to.path === '/operation-logs' && authStore.role !== '主任') {
+  // RBAC 权限点驱动路由守卫
+  if (to.path === '/operation-logs' && !authStore.has('system.logs')) {
     next('/dashboard')
     return
   }
 
-  if (to.path === '/users' && !(authStore.department === '应用中心' && authStore.role === '主任')) {
+  if (to.path === '/users' && !authStore.has('system.admin')) {
     next('/dashboard')
     return
   }
 
-  if (to.path === '/leads' && !['主任', '院长'].includes(authStore.role)) {
+  if (to.path === '/leads' && !authStore.has('leads.view_all')) {
     next('/dashboard')
     return
   }
 
-  // 人力角色只能访问月度考核页面
-  if (authStore.role === '人力' && to.path !== '/appraisal') {
+  // 仅考核权限的用户（如"人力"角色）只能访问月度考核页面
+  const appraisalOnly = authStore.permissions.length === 1 && authStore.permissions[0] === 'appraisal.view'
+  if (appraisalOnly && to.path !== '/appraisal') {
     next('/appraisal')
     return
   }

@@ -1,5 +1,5 @@
 from flask import request, jsonify
-from extensions import get_db, record_operation_log, token_required
+from extensions import get_db, record_operation_log, token_required, user_can
 from datetime import datetime
 
 from . import visits_bp
@@ -25,7 +25,7 @@ def get_visits():
     conditions = []
     params = []
 
-    if role not in ('主任', '院长'):
+    if not user_can(username, 'data.view_all'):
         conditions.append("v.visitor_id = ?")
         params.append(username)
 
@@ -175,7 +175,7 @@ def update_visit(visit_id):
     if not visit:
         return jsonify({'code': 404, 'message': '拜访记录不存在', 'data': None})
 
-    if role not in ('主任', '院长') and visit['visitor_id'] != username:
+    if not user_can(username, 'data.view_all') and visit['visitor_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能编辑自己的拜访记录', 'data': None})
 
     try:
@@ -245,7 +245,7 @@ def delete_visit(visit_id):
     if not visit:
         return jsonify({'code': 404, 'message': '拜访记录不存在', 'data': None})
 
-    if role not in ('主任', '院长') and visit['visitor_id'] != username:
+    if not user_can(username, 'data.view_all') and visit['visitor_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     try:
@@ -422,7 +422,7 @@ def update_complete_visit(visit_id):
     if not visit:
         return jsonify({'code': 404, 'message': '拜访记录不存在', 'data': None})
 
-    if role not in ('主任', '院长') and visit['visitor_id'] != username:
+    if not user_can(username, 'data.view_all') and visit['visitor_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     if visit['status'] != 'completed':
@@ -477,7 +477,7 @@ def cancel_visit(visit_id):
     if not visit:
         return jsonify({'code': 404, 'message': '拜访记录不存在', 'data': None})
 
-    if role not in ('主任', '院长') and visit['visitor_id'] != username:
+    if not user_can(username, 'data.view_all') and visit['visitor_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     try:
@@ -509,7 +509,7 @@ def get_visit_stats():
     db = get_db()
     cursor = db.cursor()
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         base_where = "1=1"
         params = []
     else:

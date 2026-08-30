@@ -96,18 +96,46 @@
         </div>
 
         <div class="menu-group" v-if="!isHrRole">
+          <div class="menu-group-title" v-show="!isCollapsed">📡 AI情报中心</div>
+          <el-menu-item index="/cockpit" v-if="has('cockpit.view')">
+            <span class="menu-icon">🚀</span>
+            <span>AI驾驶舱</span>
+          </el-menu-item>
+          <el-menu-item index="/intelligence" v-if="has('intel.view')">
+            <span class="menu-icon">📡</span>
+            <span>情报与线索</span>
+          </el-menu-item>
+          <el-menu-item index="/intel-leads" v-if="has('intel.leads')">
+            <span class="menu-icon">🎯</span>
+            <span>AI商机识别</span>
+          </el-menu-item>
+          <el-menu-item index="/customer-profiles" v-if="has('intel.profile')">
+            <span class="menu-icon">🏢</span>
+            <span>客户画像</span>
+          </el-menu-item>
+          <el-menu-item index="/competitor-analysis" v-if="has('intel.competitor')">
+            <span class="menu-icon">⚔️</span>
+            <span>竞争对手分析</span>
+          </el-menu-item>
+          <el-menu-item index="/daily-report" v-if="has('intel.report')">
+            <span class="menu-icon">📰</span>
+            <span>AI日报</span>
+          </el-menu-item>
+          <el-menu-item index="/keywords" v-if="has('intel.keywords')">
+            <span class="menu-icon">🏷️</span>
+            <span>关键词管理</span>
+          </el-menu-item>
+          <el-menu-item index="/enterprises">
+            <span class="menu-icon">🗄️</span>
+            <span>{{ t('menuItem.enterprises') }}</span>
+          </el-menu-item>
+        </div>
+
+        <div class="menu-group" v-if="!isHrRole">
           <div class="menu-group-title" v-show="!isCollapsed">🌊 {{ t('menu.resourceManagement') }}</div>
           <el-menu-item index="/pool">
             <span class="menu-icon">🌊</span>
             <span>{{ t('menuItem.pool') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/leads" v-if="['主任','院长'].includes(authStore.role)">
-            <span class="menu-icon">📡</span>
-            <span>{{ t('menuItem.leads') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/enterprises">
-            <span class="menu-icon">🏢</span>
-            <span>{{ t('menuItem.enterprises') }}</span>
           </el-menu-item>
         </div>
 
@@ -133,7 +161,7 @@
 
         <div class="menu-group" v-if="!isHrRole">
           <div class="menu-group-title" v-show="!isCollapsed">🔧 {{ t('menu.systemManagement') }}</div>
-          <el-menu-item index="/users" v-if="authStore.department === '应用中心' && authStore.role === '主任'">
+          <el-menu-item index="/users" v-if="has('system.admin')">
             <span class="menu-icon">👥</span>
             <span>{{ t('menuItem.users') }}</span>
           </el-menu-item>
@@ -162,7 +190,7 @@
             <span class="menu-icon">📥</span>
             <span>{{ t('menuItem.smartImport') }}</span>
           </el-menu-item>
-          <el-menu-item index="/operation-logs" v-if="authStore.role === '主任'">
+          <el-menu-item index="/operation-logs" v-if="has('system.logs')">
             <span class="menu-icon">📝</span>
             <span>{{ t('menuItem.operationLogs') }}</span>
           </el-menu-item>
@@ -305,8 +333,13 @@ const settingsStore = useSettingsStore()
 const { language } = storeToRefs(settingsStore)
 const t = (key, params = null) => translate(language.value, key, params)
 
-// 人力角色：只能看到月度考核菜单
-const isHrRole = computed(() => authStore.role === '人力')
+// 权限驱动：RBAC 权限点判断
+const has = (code) => authStore.has(code)
+
+// 仅考核权限（如"人力"角色）：只能看到月度考核菜单
+const isHrRole = computed(() =>
+  authStore.permissions.length === 1 && authStore.permissions[0] === 'appraisal.view'
+)
 
 const isCollapsed = ref(false)
 const isMobile = ref(false)

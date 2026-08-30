@@ -35,6 +35,11 @@ uploads/
 .env.local
 .env.*.local
 
+# Crypto keys（私钥/主密钥，严禁入库）
+backend/crypto_keys/
+*.pem
+*.key
+
 # IDE
 .vscode/
 .idea/

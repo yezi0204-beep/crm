@@ -1,5 +1,5 @@
 from flask import request, jsonify
-from extensions import get_db, record_operation_log, token_required
+from extensions import get_db, record_operation_log, token_required, user_can
 from datetime import datetime
 import json
 
@@ -44,7 +44,7 @@ def get_campaigns():
     params = []
 
     # 普通销售仅可见自己负责的活动；管理层可见全部
-    if role not in ('主任', '院长'):
+    if not user_can(username, 'data.view_all'):
         conditions.append("c.owner_id = ?")
         params.append(username)
 
@@ -88,7 +88,7 @@ def get_campaign_detail(campaign_id):
     db = get_db()
     cursor = db.cursor()
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT c.*, u.name as owner_name, cu.name as creator_name
             FROM campaigns c
@@ -184,14 +184,14 @@ def update_campaign(campaign_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '营销活动不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能编辑自己的活动', 'data': None})
 
     # 终态状态不允许编辑
     if row['status'] in TERMINAL_STATUSES:
         return jsonify({'code': 400, 'message': f'活动当前状态为 {row["status"]}，不可编辑', 'data': None})
 
-    can_change_owner = role in ('主任', '院长')
+    can_change_owner = user_can(username, 'data.view_all')
     try:
         if can_change_owner and 'owner_id' in data:
             cursor.execute("""
@@ -242,7 +242,7 @@ def delete_campaign(campaign_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '营销活动不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能删除自己的活动', 'data': None})
 
     try:
@@ -273,7 +273,7 @@ def update_campaign_status(campaign_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '营销活动不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     new_status = (data.get('status') or '').lower()
@@ -313,7 +313,7 @@ def get_campaign_metrics(campaign_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '营销活动不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     metric_type = request.args.get('metric_type', '')
@@ -356,7 +356,7 @@ def record_campaign_metric(campaign_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '营销活动不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     metric_type = (data.get('metric_type') or '').lower()
@@ -408,7 +408,7 @@ def delete_campaign_metric(metric_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '指标记录不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username and row['recorded_by'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username and row['recorded_by'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     try:
@@ -433,8 +433,8 @@ def get_campaign_analytics():
     db = get_db()
     cursor = db.cursor()
 
-    owner_filter = "" if role in ('主任', '院长') else "AND c.owner_id = ?"
-    owner_params = [] if role in ('主任', '院长') else [username]
+    owner_filter = "" if user_can(username, 'data.view_all') else "AND c.owner_id = ?"
+    owner_params = [] if user_can(username, 'data.view_all') else [username]
 
     # 取每个活动各指标的累计值
     cursor.execute(f"""
@@ -518,7 +518,7 @@ def get_campaign_audiences(campaign_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '营销活动不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     reach_status = request.args.get('reach_status', '')
@@ -561,7 +561,7 @@ def add_campaign_audience(campaign_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '营销活动不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     # 支持批量添加：audiences 数组 或 单个 audience
@@ -615,7 +615,7 @@ def update_campaign_audience(aud_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '受众记录不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     reach_status = (data.get('reach_status') or '').lower()
@@ -663,7 +663,7 @@ def delete_campaign_audience(aud_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '受众记录不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     try:
@@ -688,8 +688,8 @@ def get_automations():
     db = get_db()
     cursor = db.cursor()
 
-    owner_filter = "" if role in ('主任', '院长') else "AND a.owner_id = ?"
-    owner_params = [] if role in ('主任', '院长') else [username]
+    owner_filter = "" if user_can(username, 'data.view_all') else "AND a.owner_id = ?"
+    owner_params = [] if user_can(username, 'data.view_all') else [username]
 
     cursor.execute(f"""
         SELECT a.*, u.name as owner_name
@@ -781,7 +781,7 @@ def update_automation(auto_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '自动化规则不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     trigger_type = (data.get('trigger_type') or '').lower()
@@ -840,7 +840,7 @@ def delete_automation(auto_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '自动化规则不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     try:
@@ -868,7 +868,7 @@ def run_automation(auto_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '自动化规则不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     if row['status'] != 'active':

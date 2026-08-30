@@ -57,8 +57,9 @@ def recommend_owner():
                SUM(CASE WHEN b.probability >= 60 THEN 1 ELSE 0 END) as successful_deals,
                COALESCE(SUM(b.amount), 0) as total_amount
         FROM users u
+        JOIN user_roles ur ON u.username = ur.username AND ur.role='销售'
         LEFT JOIN business b ON b.owner_id = u.username AND b.status = 'active'
-        WHERE u.status = '在职' AND u.role IN ('销售', '主任', '院长')
+        WHERE u.status = '在职' AND u.role NOT IN ('主任', '院长')
         GROUP BY u.username, u.name, u.role, u.department
         ORDER BY total_amount DESC
     """)

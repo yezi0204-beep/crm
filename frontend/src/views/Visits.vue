@@ -29,6 +29,9 @@
         <el-button type="success" :loading="exporting" @click="exportWeeklyReport">
           📄 导出周报
         </el-button>
+        <el-button type="warning" @click="showWorkSummary = true">
+          📝 AI工作总结
+        </el-button>
       </div>
     </div>
 
@@ -132,7 +135,7 @@
     <div v-else-if="viewMode === 'list'" class="list-view">
       <div class="table-container">
         <div class="table-wrapper">
-          <el-table :data="pagedVisits" stripe style="width: 100%">
+          <el-table :data="pagedVisits" stripe style="width: 100%" max-height="70vh">
             <el-table-column prop="plan_date" label="计划日期" min-width="100" sortable>
               <template #default="{ row }">
                 {{ formatDate(row.plan_date) }}
@@ -245,7 +248,7 @@
       <el-tabs v-model="activePersonnelTab" type="border-card">
         <el-tab-pane v-for="user in userList" :key="user.username" :label="user.name" :name="user.username">
           <div class="personnel-schedule">
-            <el-table :data="getUserVisits(user.username)" stripe style="width: 100%">
+            <el-table :data="getUserVisits(user.username)" stripe style="width: 100%" max-height="70vh">
               <el-table-column prop="plan_date" label="计划日期" min-width="100" sortable>
                 <template #default="{ row }">
                   {{ formatDate(row.plan_date) }}
@@ -644,6 +647,9 @@
         <el-button @click="dayListDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- AI 工作总结（周/月，LLM 生成 + Word 导出） -->
+    <WorkSummaryDialog v-model="showWorkSummary" />
   </div>
 </template>
 
@@ -651,6 +657,7 @@
 import { ref, computed, onMounted, reactive } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import WorkSummaryDialog from './WorkSummaryDialog.vue'
 
 const authStore = useAuthStore()
 const token = computed(() => authStore.token)
@@ -947,6 +954,7 @@ const fetchEnterprises = async () => {
 
 // 导出应用中心工作周报（Excel：每人本周工作 + 下周安排）
 const exporting = ref(false)
+const showWorkSummary = ref(false)
 const exportWeeklyReport = async () => {
   exporting.value = true
   try {

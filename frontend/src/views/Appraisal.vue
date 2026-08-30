@@ -584,10 +584,10 @@ const settingsStore = useSettingsStore()
 const { language } = storeToRefs(settingsStore)
 const t = (key, params = null) => translate(language.value, key, params)
 
-// --- 权限 ---
-const isAdmin = computed(() => ['主任', '院长'].includes(authStore.role))
-// 月度考核总览查看权限：主任/院长/人力（人力只能看总览，不能配置/导出/看年度趋势）
-const canViewAppraisal = computed(() => ['主任', '院长', '人力'].includes(authStore.role))
+// --- 权限（RBAC 权限点驱动） ---
+const isAdmin = computed(() => authStore.has('data.view_all'))
+// 月度考核总览查看权限：appraisal.view（默认主任/院长/人力；人力只能看总览，不能配置/导出/看年度趋势）
+const canViewAppraisal = computed(() => authStore.has('appraisal.view'))
 const isAppraisalDept = computed(() => authStore.department === '应用中心')
 
 // --- 公共状态 ---

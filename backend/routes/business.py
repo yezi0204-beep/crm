@@ -1,12 +1,14 @@
 from flask import request, jsonify, g
 from extensions import (
     get_db, verify_token, record_operation_log,
-    token_required, admin_required,
+    token_required, admin_required, user_can,
 )
 from datetime import datetime
+import json
 import logging
 
 from . import business_bp
+from .custom_fields import validate_ext, parse_ext
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +106,7 @@ def get_business():
     else:
         db_status = status
 
-    if role == '主任' or role == '院长':
+    if user_can(username, 'data.view_all'):
         if status == 'all':
             cursor.execute("""
                 SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name
@@ -145,7 +147,7 @@ def get_business():
     rows = cursor.fetchall()
     business = []
     for row in rows:
-        business.append(dict(row))
+        business.append(parse_ext(dict(row)))
 
     return jsonify({'code': 200, 'message': 'success', 'data': business})
 
@@ -161,6 +163,10 @@ def create_business():
     cursor = db.cursor()
 
     try:
+        ext_cleaned, ext_err = validate_ext(cursor, 'business', data.get('ext_data'))
+        if ext_err:
+            return jsonify({'code': 400, 'message': ext_err, 'data': None})
+
         plan_week = data.get('plan_week')
         if plan_week == 'auto':
             today = datetime.now()
@@ -168,13 +174,14 @@ def create_business():
             plan_week = today.strftime('%Y-W') + str(current_week_num + 1).zfill(2)
 
         cursor.execute("""
-            INSERT INTO business (title, cust_id, stakeholder, amount, stage, probability, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO business (title, cust_id, stakeholder, amount, stage, probability, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week, note, ext_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get('title'), data.get('cust_id'), data.get('stakeholder'), data.get('amount'), data.get('stage'),
             data.get('probability'), data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id'),
             data.get('address'), data.get('customer_relation'), data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
-            data.get('note')
+            data.get('note'),
+            json.dumps(ext_cleaned, ensure_ascii=False) if ext_cleaned else None
         ))
         db.commit()
 
@@ -196,7 +203,7 @@ def get_business_detail(business_id):
     db = get_db()
     cursor = db.cursor()
 
-    if role == '主任' or role == '院长':
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT b.*, c.company as customer_name, c.name as customer_contact, u.name as owner_name
             FROM business b
@@ -217,35 +224,50 @@ def get_business_detail(business_id):
     if not row:
         return jsonify({'code': 404, 'message': '商机不存在', 'data': None})
 
-    return jsonify({'code': 200, 'message': 'success', 'data': dict(row)})
+    return jsonify({'code': 200, 'message': 'success', 'data': parse_ext(dict(row))})
 
 
 @business_bp.route('/api/business/<int:business_id>', methods=['DELETE'])
 @token_required
 def delete_business(business_id):
+    """商机作废：需填写作废原因（通过请求体 reason 字段传入）。"""
     payload = request.current_user
     role = payload.get('role', '')
     username = payload.get('username', '')
 
+    data = request.get_json(force=True, silent=True) or {}
+    reason = (data.get('reason') or '').strip()
+    if not reason:
+        return jsonify({'code': 400, 'message': '请填写作废原因', 'data': None})
+
     cursor = get_db().cursor()
-    cursor.execute("SELECT owner_id, title FROM business WHERE id=?", (business_id,))
+    cursor.execute("SELECT owner_id, title, status FROM business WHERE id=?", (business_id,))
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '商机不存在', 'data': None})
 
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if row['status'] == 'void':
+        return jsonify({'code': 400, 'message': '该商机已作废', 'data': None})
+
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能作废自己的商机', 'data': None})
 
     db = get_db()
     cursor = db.cursor()
 
     try:
-        cursor.execute("UPDATE business SET status = 'void' WHERE id=?", (business_id,))
+        cursor.execute(
+            "UPDATE business SET status = 'void', reject_reason = ? WHERE id = ?",
+            (reason, business_id)
+        )
         db.commit()
 
-        record_operation_log(username, '作废', '商机', f'作废商机：{row["title"]}')
+        record_operation_log(
+            username, '作废', '商机',
+            f'作废商机：{row["title"]} 原因：{reason}'
+        )
 
-        return jsonify({'code': 200, 'message': '商机作废成功', 'data': None})
+        return jsonify({'code': 200, 'message': '商机作废成功', 'data': {'reason': reason}})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
@@ -266,11 +288,14 @@ def restore_business(business_id):
     if not row:
         return jsonify({'code': 404, 'message': '商机不存在', 'data': None})
 
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能恢复自己的商机', 'data': None})
 
     try:
-        cursor.execute("UPDATE business SET status = 'active' WHERE id=?", (business_id,))
+        cursor.execute(
+            "UPDATE business SET status = 'active', reject_reason = NULL WHERE id = ?",
+            (business_id,)
+        )
         db.commit()
 
         record_operation_log(username, '恢复', '商机', f'恢复商机：{row["title"]}')
@@ -321,15 +346,24 @@ def update_business(business_id):
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """, (business_id, 'next_week', plan_week or '', old_next_week_plan))
 
-        current_role = payload.get('role', '')
-        can_change_owner = current_role == '主任' or current_role == '院长'
+        can_change_owner = user_can(username, 'data.view_all')
+
+        # ext_data：传入才校验并覆盖，未传保留原值
+        ext_clause = ""
+        ext_param = None
+        if 'ext_data' in data:
+            ext_cleaned, ext_err = validate_ext(cursor, 'business', data.get('ext_data'))
+            if ext_err:
+                return jsonify({'code': 400, 'message': ext_err, 'data': None})
+            ext_clause = ", ext_data=?"
+            ext_param = json.dumps(ext_cleaned, ensure_ascii=False) if ext_cleaned else None
 
         if can_change_owner and 'owner_id' in data:
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE business SET
                     title=?, cust_id=?, stakeholder=?, amount=?, stage=?, probability=?, predict_date=?,
                     source=?, industry=?, region=?, address=?, customer_relation=?,
-                    weekly_plan=?, next_week_plan=?, plan_week=?, owner_id=?, note=?
+                    weekly_plan=?, next_week_plan=?, plan_week=?, owner_id=?, note=?{ext_clause}
                 WHERE id=?
             """, (
                 data.get('title'), data.get('cust_id'), data.get('stakeholder'),
@@ -337,14 +371,15 @@ def update_business(business_id):
                 data.get('source'), data.get('industry'), data.get('region'),
                 data.get('address'), data.get('customer_relation'),
                 data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
-                data.get('owner_id'), data.get('note'), business_id
+                data.get('owner_id'), data.get('note'),
+                ext_param, business_id
             ))
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE business SET
                     title=?, cust_id=?, stakeholder=?, amount=?, stage=?, probability=?, predict_date=?,
                     source=?, industry=?, region=?, address=?, customer_relation=?,
-                    weekly_plan=?, next_week_plan=?, plan_week=?, note=?
+                    weekly_plan=?, next_week_plan=?, plan_week=?, note=?{ext_clause}
                 WHERE id=?
             """, (
                 data.get('title'), data.get('cust_id'), data.get('stakeholder'),
@@ -352,7 +387,8 @@ def update_business(business_id):
                 data.get('source'), data.get('industry'), data.get('region'),
                 data.get('address'), data.get('customer_relation'),
                 data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
-                data.get('note'), business_id
+                data.get('note'),
+                ext_param, business_id
             ))
         db.commit()
 

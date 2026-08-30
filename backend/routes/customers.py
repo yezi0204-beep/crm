@@ -1,12 +1,15 @@
+import json
+
 from flask import request, jsonify, g
 from extensions import (
     get_db, verify_token, create_token, check_password, hash_password,
-    record_operation_log, token_required, admin_required,
+    record_operation_log, token_required, admin_required, user_can,
     check_login_rate_limit, record_login_attempt,
     LOGIN_ATTEMPTS, LOGIN_MAX_ATTEMPTS,
 )
 
 from . import customers_bp
+from .custom_fields import validate_ext, parse_ext
 
 
 @customers_bp.route('/api/customers', methods=['GET'])
@@ -26,7 +29,7 @@ def get_customers():
     conditions = []
     params = []
 
-    if role != '主任' and role != '院长':
+    if not user_can(username, 'data.view_all'):
         conditions.append("c.owner_id = ?")
         params.append(username)
 
@@ -56,7 +59,7 @@ def get_customers():
     rows = cursor.fetchall()
     customers = []
     for row in rows:
-        customers.append(dict(row))
+        customers.append(parse_ext(dict(row)))
 
     return jsonify({'code': 200, 'message': 'success', 'data': customers})
 
@@ -72,14 +75,19 @@ def create_customer():
     cursor = db.cursor()
 
     try:
+        ext_cleaned, ext_err = validate_ext(cursor, 'customer', data.get('ext_data'))
+        if ext_err:
+            return jsonify({'code': 400, 'message': ext_err, 'data': None})
+
         cursor.execute("""
-            INSERT INTO customers (name, company, phone, level, source, owner_id, contact_name, email, industry, region, address, created_at, last_follow)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            INSERT INTO customers (name, company, phone, level, source, owner_id, contact_name, email, industry, region, address, ext_data, created_at, last_follow)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """, (
             data.get('name'), data.get('company'), data.get('phone'),
             data.get('level'), data.get('source'), data.get('owner_id'),
             data.get('contact_name'), data.get('email'), data.get('industry'),
-            data.get('region'), data.get('address')
+            data.get('region'), data.get('address'),
+            json.dumps(ext_cleaned, ensure_ascii=False) if ext_cleaned else None
         ))
         db.commit()
 
@@ -101,7 +109,7 @@ def get_customer(cust_id):
     db = get_db()
     cursor = db.cursor()
 
-    if role == '主任' or role == '院长':
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT c.*, u.name as owner_name
             FROM customers c
@@ -120,7 +128,7 @@ def get_customer(cust_id):
     if not row:
         return jsonify({'code': 404, 'message': '客户不存在', 'data': None})
 
-    return jsonify({'code': 200, 'message': 'success', 'data': dict(row)})
+    return jsonify({'code': 200, 'message': 'success', 'data': parse_ext(dict(row))})
 
 
 @customers_bp.route('/api/customers/<int:cust_id>', methods=['DELETE'])
@@ -136,7 +144,7 @@ def delete_customer(cust_id):
     if not row:
         return jsonify({'code': 404, 'message': '客户不存在', 'data': None})
 
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能删除自己的客户', 'data': None})
 
     db = get_db()
@@ -171,36 +179,47 @@ def update_customer(cust_id):
     cursor = db.cursor()
 
     try:
-        current_role = payload.get('role', '')
-        can_change_owner = current_role == '主任' or current_role == '院长'
+        can_change_owner = user_can(username, 'data.view_all')
+
+        # ext_data：传入才校验并覆盖，未传保留原值
+        ext_clause = ""
+        ext_param = None
+        if 'ext_data' in data:
+            ext_cleaned, ext_err = validate_ext(cursor, 'customer', data.get('ext_data'))
+            if ext_err:
+                return jsonify({'code': 400, 'message': ext_err, 'data': None})
+            ext_clause = ", ext_data=?"
+            ext_param = json.dumps(ext_cleaned, ensure_ascii=False) if ext_cleaned else None
 
         if can_change_owner and 'owner_id' in data:
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE customers SET
                     name=?, company=?, phone=?, level=?, source=?,
                     contact_name=?, email=?, industry=?, region=?,
-                    address=?, owner_id=?, previous_owner=owner_id
+                    address=?, owner_id=?, previous_owner=owner_id{ext_clause}
                 WHERE id=?
             """, (
                 data.get('name'), data.get('company'), data.get('phone'),
                 data.get('level'), data.get('source'),
                 data.get('contact_name'), data.get('email'),
                 data.get('industry'), data.get('region'),
-                data.get('address'), data.get('owner_id'), cust_id
+                data.get('address'), data.get('owner_id'),
+                ext_param, cust_id
             ))
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE customers SET
                     name=?, company=?, phone=?, level=?, source=?,
                     contact_name=?, email=?, industry=?, region=?,
-                    address=?
+                    address=?{ext_clause}
                 WHERE id=?
             """, (
                 data.get('name'), data.get('company'), data.get('phone'),
                 data.get('level'), data.get('source'),
                 data.get('contact_name'), data.get('email'),
                 data.get('industry'), data.get('region'),
-                data.get('address'), cust_id
+                data.get('address'),
+                ext_param, cust_id
             ))
         db.commit()
 
@@ -233,7 +252,7 @@ def get_customer_profile(cust_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '客户不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能查看自己的客户', 'data': None})
 
     customer = dict(row)
@@ -359,8 +378,9 @@ def analyze_customers():
     cursor = db.cursor()
 
     # 权限过滤
-    owner_filter = "" if role in ('主任', '院长') else "WHERE c.owner_id = ?"
-    owner_params = [] if role in ('主任', '院长') else [username]
+    can_view_all = user_can(username, 'data.view_all')
+    owner_filter = "" if can_view_all else "WHERE c.owner_id = ?"
+    owner_params = [] if can_view_all else [username]
 
     # 1. 总数
     cursor.execute(f"SELECT COUNT(*) as total FROM customers c {owner_filter}", owner_params)
@@ -399,8 +419,8 @@ def analyze_customers():
     region_dist = [dict(r) for r in cursor.fetchall()]
 
     # 6. 转化漏斗：客户数 → 有商机数 → 有合同数 → 有回款数
-    cust_cond = "c.owner_id = ?" if role not in ('主任', '院长') else "1=1"
-    cust_params = [username] if role not in ('主任', '院长') else []
+    cust_cond = "c.owner_id = ?" if not can_view_all else "1=1"
+    cust_params = [username] if not can_view_all else []
 
     cursor.execute(f"""
         SELECT COUNT(DISTINCT c.id) as total FROM customers c WHERE {cust_cond}
@@ -436,7 +456,7 @@ def analyze_customers():
 
     # 7. 负责人业绩排行（仅管理层可见）
     owner_ranking = []
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT u.name as owner_name, c.owner_id,
                    COUNT(DISTINCT c.id) as customer_count,

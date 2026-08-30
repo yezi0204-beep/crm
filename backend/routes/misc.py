@@ -4,7 +4,7 @@ import json
 
 from extensions import (
     get_db, token_required, admin_required,
-    record_operation_log, update_customer_last_follow,
+    record_operation_log, update_customer_last_follow, user_can,
 )
 
 from . import misc_bp
@@ -125,7 +125,7 @@ def delete_follow_log(log_id):
     if not row:
         return jsonify({'code': 404, 'message': '跟进记录不存在', 'data': None})
 
-    if role not in ('主任', '院长') and row['user_id'] != username:
+    if not user_can(username, 'data.view_all') and row['user_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能删除自己的跟进记录', 'data': None})
 
     try:
@@ -217,8 +217,7 @@ def claim_pool():
 @token_required
 def release_pool():
     payload = request.current_user
-    current_role = payload.get('role', '')
-    if current_role != '主任' and current_role != '院长':
+    if not user_can(payload['username'], 'data.view_all'):
         return jsonify({'code': 403, 'message': '无权操作', 'data': None})
 
     data = request.get_json()
@@ -327,25 +326,25 @@ def search():
     cursor = db.cursor()
     kw = f'%{keyword}%'
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("SELECT id, name, company, phone, level, source FROM customers WHERE name LIKE ? OR company LIKE ?", (kw, kw))
     else:
         cursor.execute("SELECT id, name, company, phone, level, source FROM customers WHERE (owner_id = ?) AND (name LIKE ? OR company LIKE ?)", (username, kw, kw))
     customers = [dict(row) for row in cursor.fetchall()]
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("SELECT id, title, amount, stage, probability, owner_id FROM business WHERE title LIKE ? OR stage LIKE ?", (kw, kw))
     else:
         cursor.execute("SELECT id, title, amount, stage, probability, owner_id FROM business WHERE owner_id = ? AND (title LIKE ? OR stage LIKE ?)", (username, kw, kw))
     business = [dict(row) for row in cursor.fetchall()]
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("SELECT id, contract_name, contract_no, total_amt, sign_date FROM contracts WHERE contract_name LIKE ? OR contract_no LIKE ?", (kw, kw))
     else:
         cursor.execute("SELECT id, contract_name, contract_no, total_amt, sign_date FROM contracts WHERE owner_id = ? AND (contract_name LIKE ? OR contract_no LIKE ?)", (username, kw, kw))
     contracts = [dict(row) for row in cursor.fetchall()]
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT fl.id, fl.ref_type, fl.ref_id, fl.content, fl.subject, fl.created_at, u.name as user_name
             FROM follow_logs fl

@@ -36,7 +36,7 @@
           <el-date-picker v-model="dateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" />
         </div>
       </template>
-      <el-table :data="workhoursData" stripe>
+      <el-table :data="workhoursData" stripe max-height="70vh">
         <el-table-column prop="date" label="日期" sortable />
         <el-table-column prop="project_name" label="项目/合同名称" sortable />
         <el-table-column prop="user_name" label="填报人" sortable />

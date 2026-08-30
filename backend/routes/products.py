@@ -1,5 +1,5 @@
 from flask import request, jsonify
-from extensions import get_db, record_operation_log, token_required
+from extensions import get_db, record_operation_log, token_required, user_can
 
 from . import products_bp
 
@@ -23,7 +23,7 @@ def get_products():
     params = []
 
     # 普通销售仅可见自己负责的产品；管理层可见全部
-    if role not in ('主任', '院长'):
+    if not user_can(username, 'data.view_all'):
         conditions.append("p.owner_id = ?")
         params.append(username)
 
@@ -77,8 +77,8 @@ def get_product_warnings():
     db = get_db()
     cursor = db.cursor()
 
-    owner_filter = "" if role in ('主任', '院长') else "AND p.owner_id = ?"
-    owner_params = [] if role in ('主任', '院长') else [username]
+    owner_filter = "" if user_can(username, 'data.view_all') else "AND p.owner_id = ?"
+    owner_params = [] if user_can(username, 'data.view_all') else [username]
 
     cursor.execute(f"""
         SELECT p.*, u.name as owner_name
@@ -113,7 +113,7 @@ def get_product(product_id):
     db = get_db()
     cursor = db.cursor()
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT p.*, u.name as owner_name
             FROM products p
@@ -190,10 +190,10 @@ def update_product(product_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '产品不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能编辑自己的产品', 'data': None})
 
-    can_change_owner = role in ('主任', '院长')
+    can_change_owner = user_can(username, 'data.view_all')
     try:
         if can_change_owner and 'owner_id' in data:
             cursor.execute("""
@@ -242,7 +242,7 @@ def delete_product(product_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '产品不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能删除自己的产品', 'data': None})
 
     try:
@@ -276,7 +276,7 @@ def record_inventory(product_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '产品不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     inv_type = (data.get('type') or '').lower()
@@ -330,7 +330,7 @@ def get_inventory_history(product_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '产品不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     cursor.execute("""

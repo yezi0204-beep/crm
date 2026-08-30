@@ -4,43 +4,69 @@ import requests
 from config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL, USE_LLM, SYSTEM_PROMPT
 
 
-def call_llm(messages, stream=False):
+def call_llm(messages, stream=False, max_tokens=4000, timeout=120, enable_thinking=False):
+    """调用 LLM API。
+
+    Args:
+        enable_thinking: 是否开启思考模式。默认 False（关闭），大幅减少响应时间。
+        max_tokens: 最大输出 token 数。关闭思考时 4000 足够。
+        timeout: HTTP 超时秒数。关闭思考时 60-120 秒即可。
+    """
     if not USE_LLM or not LLM_API_KEY:
         print(f"[LLM Debug] LLM not enabled. USE_LLM={USE_LLM}, API_KEY set={bool(LLM_API_KEY)}")
         return None
-    
+
     headers = {
         'Authorization': f'Bearer {LLM_API_KEY}',
         'Content-Type': 'application/json'
     }
-    
+
     payload = {
         'model': LLM_MODEL,
         'messages': messages,
-        'temperature': 0.3,
-        'stream': stream
+        'temperature': 0.1,
+        'stream': stream,
+        'max_tokens': max_tokens,
     }
-    
+    # vLLM / Qwen3.5：通过 chat_template_kwargs 关闭思考模式
+    if not enable_thinking:
+        payload['chat_template_kwargs'] = {'enable_thinking': False}
+
     try:
-        print(f"[LLM Debug] Calling API: {LLM_API_BASE}/chat/completions")
-        print(f"[LLM Debug] Model: {LLM_MODEL}")
+        print(f"[LLM Debug] Calling API: {LLM_API_BASE}/chat/completions (max_tokens={max_tokens}, thinking={enable_thinking})")
         response = requests.post(
             f'{LLM_API_BASE}/chat/completions',
             headers=headers,
             json=payload,
             stream=stream,
-            timeout=30
+            timeout=timeout
         )
-        
+
         print(f"[LLM Debug] Response status: {response.status_code}")
-        
+
         if response.status_code == 200:
             if stream:
                 return response.iter_lines()
             else:
                 data = response.json()
-                content = data['choices'][0]['message']['content']
-                print(f"[LLM Debug] Response content: {content[:200]}...")
+                msg = data['choices'][0]['message']
+                content = msg.get('content')
+                reasoning = msg.get('reasoning', '')
+                if content:
+                    pass  # 正常情况
+                elif reasoning:
+                    # 思考模型且 max_tokens 不够时 content 为 null
+                    print(f"[LLM Debug] content is null, reasoning length={len(reasoning)}")
+                    extracted = _extract_json_from_text(reasoning)
+                    if extracted:
+                        content = extracted
+                    else:
+                        print("[LLM Debug] Cannot extract JSON from reasoning, returning None for fallback")
+                        return None
+                else:
+                    print("[LLM Debug] Both content and reasoning are empty/null")
+                    return None
+                print(f"[LLM Debug] Response ({len(content)} chars): {content[:200]}...")
                 return content
         else:
             print(f"[LLM Debug] API Error: {response.status_code} - {response.text[:500]}")
@@ -50,6 +76,34 @@ def call_llm(messages, stream=False):
         import traceback
         traceback.print_exc()
         return None
+
+
+def _extract_json_from_text(text):
+    """从 LLM 输出文本中提取 JSON 数组（容错处理）。
+
+    优先从文本末尾（LLM 实际输出位置）向前查找 JSON，避免在思考过程中误匹配。
+    """
+    if not text:
+        return None
+    text = text.strip()
+    # 尝试找 ```json ... ```
+    m = re.search(r'```json\s*\n?(.*?)```', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # 从末尾向前找 [ ... ] 区间（优先找 LLM 最终输出的 JSON，而非思考过程中的片段）
+    end = text.rfind(']')
+    if end < 0:
+        return None
+    # 从 ] 向前最多搜索 2000 字符，找匹配的 [
+    search_start = max(0, end - 2000)
+    start = text.find('[', search_start, end)
+    if start >= 0:
+        return text[start:end + 1]
+    # 兜底：全文搜索
+    start = text.find('[')
+    if start >= 0 and end > start:
+        return text[start:end + 1]
+    return None
 
 
 def extract_query_function(question):

@@ -17,7 +17,7 @@
 
     <!-- 列表 -->
     <el-card shadow="never" style="margin-top:12px;">
-      <el-table :data="list" v-loading="loading" border stripe size="small">
+      <el-table :data="list" v-loading="loading" border stripe size="small" max-height="70vh">
         <el-table-column label="企业名称" prop="name" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <el-link type="primary" @click="openDetail(row)">{{ row.name }}</el-link>

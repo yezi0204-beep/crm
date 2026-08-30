@@ -10,7 +10,7 @@ import logging
 from config import SERVER_HOST, SERVER_PORT
 from extensions import (
     SECRET_KEY, DB_PATH, BASE_DIR, UPLOAD_DIR,
-    setup_extensions, get_db, record_operation_log, ensure_tables
+    setup_extensions, get_db, record_operation_log, ensure_tables, user_can
 )
 from routes import register_blueprints
 from scheduler import start_scheduler, stop_scheduler, run_cleanup_now, scheduler_running
@@ -43,8 +43,19 @@ init_llm()
 # （lead_sources/scraped_leads 等表在 get_db() 首次请求时才创建，调度器会先用到）
 ensure_tables()
 
+# 通过 gunicorn 等应用服务器启动时（非 python app.py 直跑），由环境变量
+# CRM_START_SCHEDULER=1 控制是否在应用进程内启动后台调度器。
+# 注意：必须单 worker 运行（--workers 1），否则调度器会重复执行。
+if os.environ.get('CRM_START_SCHEDULER') == '1':
+    start_scheduler()
+
 @app.route('/uploads/<path:filename>')
 def serve_uploads(filename):
+    # 附件下载需携带有效 token（支持 Authorization 头或 ?token= 查询参数）
+    from extensions import verify_token
+    token = request.headers.get('Authorization', '').replace('Bearer ', '') or request.args.get('token', '')
+    if not verify_token(token):
+        return jsonify({'code': 401, 'message': '登录已过期', 'data': None}), 401
     return send_from_directory(UPLOAD_DIR, filename)
 
 @app.route('/health')
@@ -56,26 +67,6 @@ def health_check():
         'scheduler': 'running' if scheduler_running else 'stopped'
     })
 
-@app.route('/debug/users')
-def debug_users():
-    """调试端点：返回用户列表"""
-    try:
-        import sqlite3
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-        table_exists = cursor.fetchone() is not None
-        if table_exists:
-            cursor.execute("SELECT id, username, name, role, status FROM users")
-            users = [dict(row) for row in cursor.fetchall()]
-        else:
-            users = []
-        conn.close()
-        return jsonify({'table_exists': table_exists, 'users': users, 'count': len(users)})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/api/system/cleanup', methods=['POST'])
 def trigger_cleanup():
     from extensions import verify_token
@@ -85,7 +76,7 @@ def trigger_cleanup():
         return jsonify({'code': 401, 'message': '登录已过期', 'data': None})
 
     role = payload.get('role', '')
-    if role not in ('主任', '院长'):
+    if not user_can(payload['username'], 'data.view_all'):
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     # 公海池客户"超过100天自动删除"功能已取消，不再清理客户数据

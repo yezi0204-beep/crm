@@ -28,6 +28,7 @@ import json
 import random
 import re
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime
 import requests as http_requests
@@ -148,62 +149,9 @@ def delete_source(source_id):
 
 
 # ==================== 抓取引擎 ====================
-
-@leads_bp.route('/api/leads/sources/<int:source_id>/scrape', methods=['POST'])
-@token_required
-def scrape_source(source_id):
-    """手动触发单个线索源抓取。"""
-    payload = request.current_user
-    if payload.get('role') not in ('主任', '院长'):
-        return jsonify({'code': 403, 'message': '权限不足', 'data': None})
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT * FROM lead_sources WHERE id=?", (source_id,))
-    row = cursor.fetchone()
-    if not row:
-        return jsonify({'code': 404, 'message': '线索源不存在', 'data': None})
-    source = dict(row)
-    if not source['enabled']:
-        return jsonify({'code': 400, 'message': '该线索源已停用', 'data': None})
-
-    leads_data, err = _scrape_source(source)
-    inserted = _persist_leads(cursor, leads_data, source_id, source['name'], source.get('category'))
-    _mark_scraped(cursor, source_id)
-    db.commit()
-    record_operation_log(payload['username'], '抓取线索', '智能线索管理',
-                         f'抓取源「{source["name"]}」获得 {inserted} 条线索')
-    return jsonify({
-        'code': 200, 'message': f'抓取完成，新增 {inserted} 条线索',
-        'data': {'scraped_count': inserted, 'error': err, 'source_type': source['source_type']}
-    })
-
-
-@leads_bp.route('/api/leads/scrape-all', methods=['POST'])
-@token_required
-def scrape_all_sources():
-    """抓取所有启用的线索源（供定时任务与手动批量调用）。"""
-    payload = request.current_user
-    if payload.get('role') not in ('主任', '院长'):
-        return jsonify({'code': 403, 'message': '权限不足', 'data': None})
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT * FROM lead_sources WHERE enabled=1")
-    sources = [dict(r) for r in cursor.fetchall()]
-
-    total = 0
-    details = []
-    for source in sources:
-        leads_data, err = _scrape_source(source)
-        inserted = _persist_leads(cursor, leads_data, source['id'], source['name'], source.get('category'))
-        _mark_scraped(cursor, source['id'])
-        total += inserted
-        details.append({'source': source['name'], 'count': inserted, 'error': err})
-    db.commit()
-    if total > 0:
-        record_operation_log(payload['username'], '批量抓取线索', '智能线索管理',
-                             f'批量抓取 {len(sources)} 个源，共 {total} 条线索')
-    return jsonify({'code': 200, 'message': f'批量抓取完成，共 {total} 条线索',
-                    'data': {'total': total, 'details': details}})
+# 说明：网络抓取入口已统一至 AI情报中心-原始情报库（/intelligence/collect），
+# 采集结果经业务关键词过滤后存入 raw_intelligence，再由 AI商机识别分析转入本页线索队列。
+# 此处仅保留数据源 CRUD 与手动导入，避免双链路重复抓取同一批 lead_sources。
 
 
 # ==================== AI 智能体互联网搜索（核心能力）====================
@@ -458,6 +406,31 @@ def _is_junk_url(url):
     return any(d in url_lower for d in _JUNK_DOMAINS)
 
 
+# 严重垃圾域名（绝对不可能包含商机信息）
+_SEVERE_JUNK_DOMAINS = {
+    # 百度百科/百度知道/百度文库
+    'baike.baidu.com', 'zhidao.baidu.com', 'wenku.baidu.com',
+    # 知乎/豆瓣/微博
+    'zhihu.com', 'douban.com', 'weibo.com',
+    # 维基
+    'wikipedia.org', 'wikiwand.com',
+    # 词典/国学
+    'iciba.com', 'chazidian.com', 'gushici.net',
+    # 地图
+    'map.bmcx.com', 'earthol.com', '17ditu.com',
+    # 设计/图片
+    'zcool.com.cn', 'huaban.com',
+}
+
+
+def _is_severe_junk_url(url):
+    """判断 URL 是否为极端垃圾页面（不可能包含任何商机信息）。"""
+    if not url:
+        return True
+    url_lower = url.lower()
+    return any(d in url_lower for d in _SEVERE_JUNK_DOMAINS)
+
+
 # 采购意图关键词——军采监控降级路径必须命中至少一个才保留
 _PROCUREMENT_KEYWORDS = [
     '招标', '采购', '公告', '中标', '成交', '询价', '谈判', '公示',
@@ -525,143 +498,123 @@ def _build_search_queries(keywords, category, max_queries=3):
 
 
 def _scrape_ai_search(source, config, keywords, category):
-    """AI 智能体互联网搜索抓取：搜索 + LLM 结构化提取（LLM 不可用时降级直接提取）。
+    """AI 智能体互联网搜索抓取：搜索 → 预过滤 → LLM 结构化提取 → 后过滤。
 
-    工作流程：
+    全链路：
     1. 根据 category + keywords 构建搜索查询
-    2. _search_web 搜索 DuckDuckGo 获取真实结果
-    3. LLM 可用时：调用 LLM 从搜索结果提取结构化商机线索（JSON）
-    4. LLM 不可用时：降级为直接提取（标题→商机名，URL→链接，摘要→备注）
+    2. _search_web 搜索 DuckDuckGo/Bing 获取真实结果（最多 20 条）
+    3. 预过滤：排除百科/词典/社交等垃圾域名
+    4. LLM 提取结构化商机线索（关闭思考模式，60 秒超时）
+    5. LLM 失败时降级为关键词匹配提取
+    6. 后过滤：丢弃 LLM 返回的垃圾链接，去重
     """
     max_items = config.get('max_items', 15)
     max_queries = config.get('max_queries', 3)
     queries = _build_search_queries(keywords, category, max_queries)
 
+    # 搜索阶段：每个查询取 max_items 条，合并去重
     all_results = []
     seen_urls = set()
     for idx, q in enumerate(queries):
         results = _search_web(q, max_results=max_items)
         for r in results:
-            if r['url'] not in seen_urls:
-                seen_urls.add(r['url'])
+            url = r.get('url', '')
+            if url and url not in seen_urls:
+                seen_urls.add(url)
                 all_results.append(r)
-        if len(all_results) >= max_items:
+        if len(all_results) >= max_items * 2:
             break
-        # 多条查询间加 2 秒延迟，避免搜索引擎限速
         if idx < len(queries) - 1:
             time.sleep(2)
 
     if not all_results:
-        return []  # 搜索无结果，不造假数据
+        print('[_scrape_ai_search] 搜索无结果')
+        return []
 
-    # 过滤掉百科/地图等非商机通用页面
-    filtered_results = [r for r in all_results if not _is_junk_url(r.get('url', ''))]
-    if not filtered_results:
-        return []  # 全部是通用页面，无商机价值
-    all_results = filtered_results
+    # 预过滤：排除垃圾域名
+    all_results = [r for r in all_results if not _is_junk_url(r.get('url', ''))]
+    if not all_results:
+        print('[_scrape_ai_search] 预过滤后无结果')
+        return []
 
-    # 尝试用 LLM 提取结构化线索
+    # LLM 提取
     leads = _llm_extract_leads(all_results, keywords, category, max_items)
     if leads is not None:
-        # LLM 返回了有效结果（可能是空列表——表示无有价值商机，不再降级保存垃圾数据）
-        return leads
+        # 后过滤：去重（按链接）
+        seen_lead_urls = set()
+        deduped = []
+        for lead in leads:
+            url = lead.get('link', '')
+            if url in seen_lead_urls:
+                continue
+            seen_lead_urls.add(url)
+            deduped.append(lead)
+        print(f'[_scrape_ai_search] LLM 提取 {len(leads)} 条，去重后 {len(deduped)} 条')
+        return deduped
 
-    # LLM 调用失败（返回 None）：降级为直接从搜索结果提取线索
+    # LLM 失败：降级提取
+    print('[_scrape_ai_search] LLM 不可用，降级为关键词提取')
     return _fallback_extract_leads(all_results, source, keywords, category, max_items)
 
 
 def _llm_extract_leads(search_results, keywords, category, max_items):
-    """用 LLM 从搜索结果中提取结构化商机线索。LLM 不可用时返回 None。"""
+    """用 LLM 从搜索结果中提取结构化商机线索。LLM 不可用时返回 None。
+
+    优化：关闭思考模式 + 短 prompt + 60 秒超时，避免长时间等待。
+    """
     try:
         from qa_engine import call_llm
     except Exception:
         return None
-    # 准备搜索结果摘要（给 LLM 足够上下文提取联系人/地区）
+    # 最多传 8 条给 LLM，每条限制长度，减少 token 消耗
+    llm_items = min(len(search_results), 8)
     results_text = '\n'.join(
-        '{}. {}\n   链接: {}\n   摘要: {}'.format(i + 1, r['title'][:120], r['url'][:120], r['snippet'][:200])
-        for i, r in enumerate(search_results[:max_items])
+        '{}. {} | {} | {}'.format(
+            i + 1,
+            r['title'][:60],
+            r['url'][:80],
+            r.get('snippet', '')[:80]
+        )
+        for i, r in enumerate(search_results[:llm_items])
     )
     kw_str = '、'.join(keywords) if keywords else '不限'
 
-    # 军采监控用军工专用 prompt，其他类别用通用 prompt
-    if category == '军采监控':
-        prompt = (
-            '你是一个军工采购商机分析专家。以下是从互联网搜索到的真实结果，请严格筛选并提取军队/军工/国防采购商机。\n\n'
-            '【本公司业务领域】采购站、装备健康、模拟器、雷达、卫通、智能体、仿真、软件、卫星、靶场、对抗\n'
-            '【关注关键词】{kw}\n\n'
-            '【搜索结果】\n{results}\n\n'
-            '【✅ 必须提取（正例）】\n'
-            '- 招标公告 / 采购公告 / 询价公告 / 竞争性谈判公告\n'
-            '- 需求公示 / 中标公告 / 成交公告 / 意向公示\n'
-            '- 军队/部队/基地/装备发展部/军代室/国防单位发布的采购信息\n'
-            '- 来自 plap.cn / weain.mil.cn / ccgp.gov.cn / ggzy.gov.cn 的公告\n\n'
-            '【❌ 必须排除（反例）】\n'
-            '- 百度百科/维基百科/文库/文档库（非采购信息）\n'
-            '- 新闻报道/行业资讯/产品介绍/公司动态（非采购公告）\n'
-            '- 学术论文/技术方案/科普文章（非采购信息）\n'
-            '- 论坛帖子/问答/评论/社交媒体（非采购信息）\n'
-            '- 纯民用项目（无军队/军工/国防背景的政府采购）\n\n'
-            '【提取规则】\n'
-            '- opportunity_name 必须是项目全称（去掉网站名/栏目名等噪声）\n'
-            '- link 必须原样复制搜索结果的链接URL，优先保留军采域名(plap.cn/weain.mil.cn/ccgp.gov.cn)\n'
-            '- industry 从以下选一：雷达电子/电子对抗/仿真模拟/靶场试验/装备健康/卫通卫星/卫星遥感/AI智能体/军工装备/信息技术\n'
-            '- 如搜索结果中没有真实采购公告，返回空数组 []\n\n'
-            '请返回 JSON 数组（不要任何其他文字），每个元素包含：\n'
-            '- company: 采购方/需求方名称（某部队/某基地/装备发展部/军方单位/军工集团）\n'
-            '- opportunity_name: 采购项目名称\n'
-            '- link: 真实公告链接URL（原样复制）\n'
-            '- industry: 行业分类\n'
-            '- contact_name: 联系人姓名（无则空字符串）\n'
-            '- phone: 联系电话（无则空字符串）\n'
-            '- region: 地区（无则填"全国"）\n'
-            '- intent: 采购需求描述（采购什么/用途/规模，一句话）\n'
-            '- publish_date: 发布日期（YYYY-MM-DD，从摘要提取，无则空字符串）\n'
-            '- deadline: 投标截止日期（YYYY-MM-DD，从摘要提取，无则空字符串）\n'
-            '- budget: 预算金额（如"500万元"，从摘要提取，无则空字符串）\n'
-            '- procurement_method: 采购方式（公开招标/邀请招标/竞争性谈判/询价/单一来源，无则空字符串）\n'
-            '- intent_score: 意向评分0-100整数（军采招标公告90+，军方需求公示70-89，潜在军采需求50-69）\n\n'
-            '只返回 JSON 数组，如：[{{"company":"...","opportunity_name":"...","link":"...","industry":"...","contact_name":"","phone":"","region":"全国","intent":"...","publish_date":"2026-01-01","deadline":"2026-02-01","budget":"500万元","procurement_method":"公开招标","intent_score":90}}]'
-        ).format(kw=kw_str, results=results_text)
-    else:
-        prompt = (
-            '你是一个商机线索分析助手。以下是从互联网搜索到的真实结果，请从中提取有价值的商机线索。\n\n'
-            '搜索类别：{cat}\n关注关键词：{kw}\n\n搜索结果：\n{results}\n\n'
-            '【重要筛选规则】\n'
-            '- 只提取与采购/招标/需求/商机相关的信息\n'
-            '- 排除百科词条、新闻报道、学术论文、通用技术文章等非商机信息\n\n'
-            '请提取所有有价值的商机线索，返回 JSON 数组（不要任何其他文字），每个元素包含：\n'
-            '- company: 相关公司或机构名（从标题/摘要提取采购方/需求方名称，无则填标题前20字）\n'
-            '- opportunity_name: 商机/公告/需求名称（简洁有信息量，去掉网站名等噪声）\n'
-            '- link: 真实链接URL（直接取搜索结果的链接，原样复制）\n'
-            '- industry: 行业分类（雷达电子/电子对抗/仿真模拟/靶场试验/装备健康/卫通卫星/AI智能体/军工装备/信息技术 之一）\n'
-            '- contact_name: 联系人姓名（从摘要中提取项目联系人/采购人姓名，无则留空字符串）\n'
-            '- phone: 联系电话（从摘要中提取电话号码，无则留空字符串）\n'
-            '- region: 地区（从摘要提取省市，无则填"全国"）\n'
-            '- intent: 意向描述（为什么这是商机，一句话说明采购需求和价值）\n'
-            '- intent_score: 意向评分0-100整数（明确采购需求且预算大的90+，有采购意向的70-89，潜在需求50-69）\n\n'
-            '只返回 JSON 数组，如：[{{"company":"...","opportunity_name":"...","link":"...","industry":"...","contact_name":"...","phone":"...","region":"...","intent":"...","intent_score":80}}]'
-        ).format(cat=category or '商机', kw=kw_str, results=results_text)
+    # 统一 prompt（不再区分军采/通用，LLM 能理解 category）
+    prompt = (
+        '从以下搜索结果中提取商机线索，只返回JSON数组。\n'
+        '类别: {cat} | 关键词: {kw}\n\n'
+        '搜索结果:\n{results}\n\n'
+        '规则: 只提取采购/招标/需求类商机，排除百科/新闻/问答/社交。\n'
+        '无商机则返回 []。每条含: company(采购方), opportunity_name(项目名), '
+        'link(原样复制URL), industry(行业), region(地区), intent(一句话描述), '
+        'intent_score(0-100), publish_date, deadline, budget, procurement_method, '
+        'contact_name, phone。无则空字符串。'
+    ).format(cat=category or '商机', kw=kw_str, results=results_text)
 
     messages = [
-        {'role': 'system', 'content': '你是商机线索分析助手，只返回JSON数组。'},
+        {'role': 'system', 'content': '你是商机线索分析助手，只返回JSON数组，不要任何其他文字。'},
         {'role': 'user', 'content': prompt}
     ]
-    raw = call_llm(messages)
+    # 关闭思考模式，60 秒超时，4000 token 足够
+    raw = call_llm(messages, max_tokens=4000, timeout=60, enable_thinking=False)
     if not raw:
         return None
-    # 解析 LLM 返回的 JSON（容错：提取 [ ] 之间的内容）
+    # 解析 LLM 返回的 JSON
+    items = None
     try:
-        # 去除可能的 markdown 代码块包裹
         raw = raw.strip()
-        if raw.startswith('```'):
-            raw = re.sub(r'^```(?:json)?\s*', '', raw)
-            raw = re.sub(r'\s*```$', '', raw)
-        start = raw.find('[')
-        end = raw.rfind(']')
-        if start >= 0 and end > start:
-            raw = raw[start:end + 1]
+        # 尝试 markdown 代码块
+        m = re.search(r'```(?:json)?\s*\n?(.*?)```', raw, re.DOTALL)
+        if m:
+            raw = m.group(1).strip()
+        else:
+            start = raw.find('[')
+            end = raw.rfind(']')
+            if start >= 0 and end > start:
+                raw = raw[start:end + 1]
         items = json.loads(raw)
-    except Exception:
+    except Exception as e:
+        print(f'[_llm_extract_leads] JSON 解析失败: {e}, raw[:200]={raw[:200]}')
         return None
 
     leads = []
@@ -672,25 +625,29 @@ def _llm_extract_leads(search_results, keywords, category, max_items):
         if not title:
             continue
         link = (item.get('link') or '').strip()
-        # 优先用搜索结果中的真实链接匹配
+        # 用搜索结果中的真实链接匹配验证
+        matched_url = ''
         for sr in search_results:
-            if item.get('link') and item['link'] in sr['url']:
-                link = sr['url']
+            if link and link in sr['url']:
+                matched_url = sr['url']
                 break
-        # 军采监控：链接黑名单验证，丢弃百科/新闻等非采购页面
-        if category == '军采监控' and _is_junk_url(link):
+            if link and sr['url'] in link:
+                matched_url = sr['url']
+                break
+        if matched_url:
+            link = matched_url
+        # 后过滤：丢弃垃圾链接
+        if _is_junk_url(link):
             continue
         industry = item.get('industry') or _detect_industry(title)
         contact_name = (item.get('contact_name') or '').strip()
         phone = (item.get('phone') or '').strip()
         region = (item.get('region') or '全国').strip() or '全国'
-        # 提取扩展字段（发布日期/截止日期/预算/采购方式）
         publish_date = (item.get('publish_date') or '').strip()
         deadline = (item.get('deadline') or '').strip()
         budget = (item.get('budget') or '').strip()
         procurement_method = (item.get('procurement_method') or '').strip()
         intent = (item.get('intent') or '').strip()
-        # 拼接备注：意向描述 + 采购方式 + 预算 + 截止日期
         remark_parts = [intent]
         if procurement_method:
             remark_parts.append(f'采购方式:{procurement_method}')
@@ -721,7 +678,7 @@ def _llm_extract_leads(search_results, keywords, category, max_items):
                 'publish_date': publish_date, 'deadline': deadline,
                 'budget': budget, 'procurement_method': procurement_method,
                 'category': category or '商机', 'source_type': 'ai_search', 'llm_used': True,
-                'snippet': next((sr['snippet'] for sr in search_results if sr['url'] == link), '')
+                'snippet': next((sr.get('snippet', '') for sr in search_results if sr['url'] == link), '')
             }, ensure_ascii=False),
             'category': category or '',
         })
@@ -786,6 +743,257 @@ def _fallback_extract_leads(search_results, source, keywords, category, max_item
     return leads
 
 
+def _scrape_procurement_site(source, config, keywords, category):
+    """直接抓取采购网站公告列表页。
+
+    比搜索引擎更有效：直接从 ccgp.gov.cn / plap.cn 等网站提取真实公告。
+    工作流程：
+    1. HTTP GET 获取公告列表页 HTML
+    2. 正则提取所有公告链接（标题含采购/招标/中标/询价/谈判等关键词）
+    3. LLM 从公告标题中提取结构化信息 + 按用户关键词过滤
+    4. LLM 不可用时降级为关键词匹配
+    """
+    url = source.get('url', '')
+    if not url:
+        return []
+    max_items = config.get('max_items', 20)
+
+    # 第1步：获取列表页
+    try:
+        session = _get_search_session()
+        resp = session.get(url, timeout=15, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+        })
+        if resp.status_code != 200 or not resp.text:
+            print(f'[_scrape_procurement_site] HTTP {resp.status_code} for {url}')
+            return []
+        # 自动检测编码
+        resp.encoding = resp.apparent_encoding or 'utf-8'
+        html = resp.text
+    except Exception as e:
+        print(f'[_scrape_procurement_site] 请求失败: {e}')
+        return []
+
+    # 第2步：从 HTML 提取公告链接和标题
+    # 匹配 <a href="...">标题</a>，标题含采购/招标/中标等关键词
+    link_pattern = re.compile(r'href="([^"]+)"[^>]*>(.*?)</a>', re.DOTALL)
+    announcements = []
+    seen_urls = set()
+    procurement_keywords = ['采购', '招标', '中标', '公告', '询价', '谈判', '磋商',
+                            '成交', '废标', '更正', '公示', '单一来源']
+
+    for link, raw_title in link_pattern.findall(html):
+        title = re.sub(r'<[^>]+>', '', raw_title).strip()
+        title = re.sub(r'\s+', ' ', title)
+        if not title or len(title) < 8:
+            continue
+        # 必须含采购类关键词
+        if not any(k in title for k in procurement_keywords):
+            continue
+        # 构建完整 URL
+        full_url = _resolve_url(url, link)
+        if not full_url or full_url in seen_urls:
+            continue
+        # 排除非公告链接（CSS/JS/导航等）
+        if any(ext in full_url.lower() for ext in ['.css', '.js', '.jpg', '.png', '.ico']):
+            continue
+        seen_urls.add(full_url)
+        # 从 HTML 中尝试提取日期
+        date = _extract_date_near(html, link)
+        announcements.append({
+            'title': title,
+            'url': full_url,
+            'date': date,
+            'snippet': title,  # 列表页没有摘要，用标题代替
+        })
+        if len(announcements) >= max_items * 2:
+            break
+
+    if not announcements:
+        print(f'[_scrape_procurement_site] 未从 {url} 提取到公告')
+        return []
+
+    print(f'[_scrape_procurement_site] 提取到 {len(announcements)} 条公告')
+
+    # 第3步：LLM 提取结构化线索
+    leads = _llm_filter_procurement(announcements, keywords, category, max_items)
+    if leads is not None:
+        print(f'[_scrape_procurement_site] LLM 过滤后 {len(leads)} 条线索')
+        return leads
+
+    # 第4步：LLM 不可用时降级为关键词匹配
+    return _fallback_filter_procurement(announcements, keywords, category, max_items)
+
+
+def _llm_filter_procurement(announcements, keywords, category, max_items):
+    """用 LLM 从公告列表中筛选与关键词相关的商机。LLM 不可用时返回 None。"""
+    try:
+        from qa_engine import call_llm
+    except Exception:
+        return None
+    # 构建公告文本（最多 15 条）
+    items_text = '\n'.join(
+        '{}. {} | {} | {}'.format(i + 1, a['title'][:60], a['url'][:80], a.get('date', ''))
+        for i, a in enumerate(announcements[:15])
+    )
+    kw_str = '、'.join(keywords) if keywords else '不限'
+
+    prompt = (
+        '从以下采购公告中筛选与关键词相关的商机，只返回JSON数组。\n'
+        '类别: {cat} | 关键词: {kw}\n\n'
+        '公告列表:\n{items}\n\n'
+        '规则: 只要公告标题中包含任一关键词或其近义词就保留。'
+        '例如关键词"雷达"匹配"雷达/相控阵/微波"，"仿真"匹配"仿真/模拟/虚拟"，'
+        '"智能体"匹配"AI/人工智能/智能/大模型"，"卫通"匹配"卫星/通信/卫通"。'
+        '不要过于严格，宁可多留也不要漏掉。\n'
+        '无相关则返回 []。每条含: company(采购方), opportunity_name(项目名), '
+        'link(原样复制URL), industry(行业), intent(一句话描述), '
+        'intent_score(0-100), publish_date(日期), procurement_method(采购方式)。'
+    ).format(cat=category or '商机', kw=kw_str, items=items_text)
+
+    messages = [
+        {'role': 'system', 'content': '你是商机分析助手，只返回JSON数组。'},
+        {'role': 'user', 'content': prompt}
+    ]
+    raw = call_llm(messages, max_tokens=4000, timeout=60, enable_thinking=False)
+    if not raw:
+        return None
+    try:
+        raw = raw.strip()
+        m = re.search(r'```(?:json)?\s*\n?(.*?)```', raw, re.DOTALL)
+        if m:
+            raw = m.group(1).strip()
+        else:
+            start = raw.find('[')
+            end = raw.rfind(']')
+            if start >= 0 and end > start:
+                raw = raw[start:end + 1]
+        items = json.loads(raw)
+    except Exception as e:
+        print(f'[_llm_filter_procurement] JSON 解析失败: {e}')
+        return None
+
+    # 用原始公告 URL 验证
+    url_map = {a['url']: a for a in announcements}
+    leads = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        title = (item.get('opportunity_name') or item.get('company') or '').strip()
+        if not title:
+            continue
+        link = (item.get('link') or '').strip()
+        # 验证链接来自原始公告
+        matched = None
+        for ann in announcements:
+            if link and (link in ann['url'] or ann['url'] in link):
+                matched = ann
+                break
+        if matched:
+            link = matched['url']
+        industry = item.get('industry') or _detect_industry(title)
+        publish_date = (item.get('publish_date') or (matched['date'] if matched else '')).strip()
+        procurement_method = (item.get('procurement_method') or '').strip()
+        intent = (item.get('intent') or '').strip()
+        remark_parts = [intent]
+        if procurement_method:
+            remark_parts.append(f'采购方式:{procurement_method}')
+        if publish_date:
+            remark_parts.append(f'发布:{publish_date}')
+        remark = '；'.join(p for p in remark_parts if p)[:200]
+        leads.append({
+            'company': (item.get('company') or title[:30]).strip(),
+            'opportunity_name': title,
+            'contact_name': '', 'phone': '', 'email': '',
+            'industry': industry,
+            'region': '全国',
+            'source': '采购网站抓取',
+            'link': link,
+            'remark': remark,
+            'publish_date': publish_date,
+            'deadline': '', 'budget': '',
+            'procurement_method': procurement_method,
+            'raw_data': json.dumps({
+                'title': title, 'link': link, 'industry': industry,
+                'intent': intent, 'intent_score': item.get('intent_score', 50),
+                'publish_date': publish_date, 'procurement_method': procurement_method,
+                'category': category or '商机', 'source_type': 'procurement', 'llm_used': True,
+            }, ensure_ascii=False),
+            'category': category or '',
+        })
+    return leads
+
+
+def _fallback_filter_procurement(announcements, keywords, category, max_items):
+    """LLM 不可用时：关键词匹配过滤公告。"""
+    match_terms = set()
+    for kw in keywords:
+        match_terms.add(kw)
+        if len(kw) >= 4:
+            for i in range(0, len(kw) - 1, 2):
+                match_terms.add(kw[i:i + 2])
+
+    leads = []
+    for ann in announcements[:max_items]:
+        title = ann['title']
+        # 关键词匹配
+        if match_terms and not any(term in title for term in match_terms):
+            continue
+        # 从标题提取采购方式
+        method = ''
+        for m in ['公开招标', '邀请招标', '竞争性谈判', '竞争性磋商', '询价', '单一来源']:
+            if m in title:
+                method = m
+                break
+        leads.append({
+            'company': _extract_company(title) or title[:30],
+            'opportunity_name': title,
+            'contact_name': '', 'phone': '', 'email': '',
+            'industry': _detect_industry(title),
+            'region': '全国',
+            'source': '采购网站抓取',
+            'link': ann['url'],
+            'remark': title[:120],
+            'publish_date': ann.get('date', ''),
+            'deadline': '', 'budget': '',
+            'procurement_method': method,
+            'raw_data': json.dumps({
+                'title': title, 'link': ann['url'],
+                'category': category or '', 'source_type': 'procurement', 'llm_used': False,
+            }, ensure_ascii=False),
+            'category': category or '',
+        })
+    return leads
+
+
+def _resolve_url(base_url, link):
+    """将相对 URL 解析为绝对 URL。"""
+    from urllib.parse import urljoin
+    return urljoin(base_url, link)
+
+
+def _extract_date_near(html, link_marker):
+    """尝试从链接附近的 HTML 中提取日期（YYYY-MM-DD 或 YYYY.MM.DD）。"""
+    # 找链接在 HTML 中的位置，取前后 200 字符
+    pos = html.find(link_marker)
+    if pos < 0:
+        return ''
+    context = html[max(0, pos - 100):pos + 200]
+    date_patterns = [
+        r'(\d{4}[-./]\d{1,2}[-./]\d{1,2})',
+        r'(\d{4}年\d{1,2}月\d{1,2}日)',
+    ]
+    for pattern in date_patterns:
+        m = re.search(pattern, context)
+        if m:
+            date = m.group(1)
+            # 统一为 YYYY-MM-DD
+            date = re.sub(r'[年/.]', '-', date)
+            return date
+    return ''
+
+
 def _scrape_source(source):
     """按源类型/类别分发抓取，返回 (leads_list, error_str)。"""
     try:
@@ -802,15 +1010,15 @@ def _scrape_source(source):
         if stype == 'api':
             return _scrape_api(source.get('url', ''), config, keywords, industry, region), None
         if stype == 'html':
-            # HTML 源按 category 分发到对应能力域抓取器
             return _scrape_html_by_category(source, config, keywords, category), None
         if stype == 'ai_search':
-            # AI 智能体互联网搜索（无需 URL，用搜索引擎 + LLM 提取）
             return _scrape_ai_search(source, config, keywords, category), None
+        if stype == 'procurement':
+            return _scrape_procurement_site(source, config, keywords, category), None
         if stype == 'sample':
             return _scrape_sample(config.get('count', 5), keywords, industry, region), None
         if stype == 'manual':
-            return [], None  # 手动源不自动抓取
+            return [], None
         return [], '不支持的源类型'
     except Exception as e:
         return [], f'抓取异常: {e}'
@@ -1554,7 +1762,7 @@ def _persist_leads(cursor, leads_data, source_id, source_name, source_category=N
                                         publish_date, deadline, budget, procurement_method,
                                         tender_no, agency, agency_phone,
                                         status, scraped_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
         """, (
             source_id, company, opp_name,
             lead.get('contact_name', ''), lead.get('phone', ''),
@@ -1637,6 +1845,7 @@ def list_leads():
     """
     status = request.args.get('status', '')
     source_id = request.args.get('source_id', '')
+    source = request.args.get('source', '')
     keyword = request.args.get('keyword', '')
     category = request.args.get('category', '')
 
@@ -1652,6 +1861,10 @@ def list_leads():
     if source_id:
         conditions.append("sl.source_id = ?")
         params.append(source_id)
+    if source:
+        # 按来源文本筛选（如 AI商机识别转入的线索，source_id 为空只有 source 文本）
+        conditions.append("sl.source = ?")
+        params.append(source)
     if category:
         conditions.append("sl.category = ?")
         params.append(category)
@@ -1796,55 +2009,7 @@ def assign_lead(lead_id):
         return jsonify({'code': 400, 'message': '无可分配的销售人员', 'data': None})
 
     try:
-        # 1) 创建客户，归属该销售
-        cursor.execute("""
-            INSERT INTO customers (name, company, phone, level, source, owner_id,
-                                   contact_name, industry, region, created_at, last_follow)
-            VALUES (?, ?, ?, 'C', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """, (
-            lead.get('contact_name') or lead.get('company'),
-            lead.get('company'), lead.get('phone', ''),
-            f'智能线索-{lead.get("source", "")}', assigned_to,
-            lead.get('contact_name', ''), lead.get('industry', ''), lead.get('region', ''),
-        ))
-        new_cust_id = cursor.lastrowid
-
-        # 2) 自动创建商机：线索转化为商机（引导需求阶段），形成"线索→商机→合同"完整链路
-        biz_title = (lead.get('opportunity_name') or lead.get('company') or '新商机').strip()
-        biz_source = f'智能线索-{lead.get("source", "")}'
-        # 解析预算金额：支持"500万元"/"500万"/"5000000元"/纯数字等格式
-        biz_amount = _parse_budget(lead.get('budget'))
-        # 商机备注：记录线索来源、意向分、AI推荐依据，便于销售接手时了解背景
-        biz_note_parts = [f'由线索 ID:{lead_id} 自动转化']
-        if lead.get('intent_score') is not None:
-            biz_note_parts.append(f'线索意向分{lead["intent_score"]}')
-        if lead.get('eval_reason'):
-            biz_note_parts.append(f'评估：{lead["eval_reason"]}')
-        if lead.get('link'):
-            biz_note_parts.append(f'来源链接：{lead["link"]}')
-        biz_note = '；'.join(biz_note_parts)
-        # 新商机默认处于"引导需求阶段"，probability=10（发现潜在客户）
-        cursor.execute("""
-            INSERT INTO business (title, cust_id, stakeholder, amount, stage, probability,
-                                  predict_date, source, industry, region, owner_id,
-                                  address, customer_relation, weekly_plan, next_week_plan,
-                                  plan_week, note, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-        """, (
-            biz_title, new_cust_id, lead.get('contact_name', ''), biz_amount,
-            '引导需求阶段', 10, '', biz_source,
-            lead.get('industry', ''), lead.get('region', ''), assigned_to,
-            lead.get('company', ''), '', '', '', '', biz_note,
-        ))
-        new_biz_id = cursor.lastrowid
-
-        # 3) 线索标记为 imported，并记录 business_id 关联（线索→商机→合同链路）
-        cursor.execute("""
-            UPDATE scraped_leads SET status='imported', assigned_to=?, business_id=?,
-                                     evaluated_at=?
-            WHERE id=?
-        """, (assigned_to, new_biz_id,
-              datetime.now().strftime('%Y-%m-%d %H:%M:%S'), lead_id))
+        new_cust_id, new_biz_id = _do_assign_lead(cursor, lead, assigned_to)
         db.commit()
         cursor.execute("SELECT name FROM users WHERE username=?", (assigned_to,))
         sp = cursor.fetchone()
@@ -1859,6 +2024,340 @@ def assign_lead(lead_id):
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+def _do_assign_lead(cursor, lead, assigned_to):
+    """单条线索执行分配核心（与 HTTP 解耦，便于批量复用；不 commit，由外层控制事务）。
+    返回 (new_cust_id, new_biz_id)。抛异常由外层统一处理（rollback/记录失败）。
+    """
+    lead_id = lead['id']
+    # 1) 创建客户，归属该销售
+    cursor.execute("""
+        INSERT INTO customers (name, company, phone, level, source, owner_id,
+                               contact_name, industry, region, created_at, last_follow)
+        VALUES (?, ?, ?, 'C', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    """, (
+        lead.get('contact_name') or lead.get('company'),
+        lead.get('company'), lead.get('phone', ''),
+        f'智能线索-{lead.get("source", "")}', assigned_to,
+        lead.get('contact_name', ''), lead.get('industry', ''), lead.get('region', ''),
+    ))
+    new_cust_id = cursor.lastrowid
+
+    # 2) 自动创建商机：线索转化为商机（引导需求阶段），形成"线索→商机→合同"完整链路
+    biz_title = (lead.get('opportunity_name') or lead.get('company') or '新商机').strip()
+    biz_source = f'智能线索-{lead.get("source", "")}'
+    biz_amount = _parse_budget(lead.get('budget'))
+    biz_note_parts = [f'由线索 ID:{lead_id} 自动转化']
+    if lead.get('intent_score') is not None:
+        biz_note_parts.append(f'线索意向分{lead["intent_score"]}')
+    if lead.get('eval_reason'):
+        biz_note_parts.append(f'评估：{lead["eval_reason"]}')
+    if lead.get('link'):
+        biz_note_parts.append(f'来源链接：{lead["link"]}')
+    biz_note = '；'.join(biz_note_parts)
+    cursor.execute("""
+        INSERT INTO business (title, cust_id, stakeholder, amount, stage, probability,
+                              predict_date, source, industry, region, owner_id,
+                              address, customer_relation, weekly_plan, next_week_plan,
+                              plan_week, note, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+    """, (
+        biz_title, new_cust_id, lead.get('contact_name', ''), biz_amount,
+        '引导需求阶段', 10, '', biz_source,
+        lead.get('industry', ''), lead.get('region', ''), assigned_to,
+        lead.get('company', ''), '', '', '', '', biz_note,
+    ))
+    new_biz_id = cursor.lastrowid
+
+    # 3) 线索标记 imported，记录关联 biz_id
+    cursor.execute("""
+        UPDATE scraped_leads SET status='imported', assigned_to=?, business_id=?,
+                                 evaluated_at=?
+        WHERE id=?
+    """, (assigned_to, new_biz_id,
+          datetime.now().strftime('%Y-%m-%d %H:%M:%S'), lead_id))
+    return new_cust_id, new_biz_id
+
+
+# ==================== 批量分配：预览 + 主任调整 + 确认执行 ====================
+
+@leads_bp.route('/api/leads/allocation-preview', methods=['POST'])
+@token_required
+def allocation_preview():
+    """生成批量分配草案（只读）。主任可在此基础上调整后再提交确认。
+
+    请求体：
+      - mode: 'recommended'（AI 多维度综合推荐/历史对接经验+知识库）| 'average'（按数量均匀摊派）
+      - scope: 'evaluated'（仅已评估未分配）| 'pending_eval'（先批量评估再分配）| 'all_unassigned'（以上两者）
+      - lead_ids: [int,...]（可选，scope 为空时用）
+      - re_evaluate: bool（可选，默认 false；true 时对已评估线索重新跑推荐）
+      - sales_usernames: [str,...]（可选，默认全体在职销售；指定时仅在该子集内均摊/推荐）
+    """
+    payload = request.current_user
+    if payload.get('role') not in ('主任', '院长'):
+        return jsonify({'code': 403, 'message': '仅主任/院长可操作批量分配', 'data': None})
+    data = request.get_json(silent=True) or {}
+    mode = data.get('mode', 'recommended')
+    scope = data.get('scope', 'evaluated')
+    lead_ids = data.get('lead_ids') or []
+    re_evaluate = bool(data.get('re_evaluate', False))
+    sales_usernames = [str(x).strip() for x in (data.get('sales_usernames') or []) if x]
+
+    db = get_db()
+    cursor = db.cursor()
+    industry_stats, salespeople = _load_eval_context(cursor)
+    if sales_usernames:
+        sales_set = set(sales_usernames)
+        salespeople = [s for s in salespeople if s['username'] in sales_set]
+    sales_list = [{'username': s['username'], 'name': s['name'],
+                   'biz_count': s.get('biz_count', 0)} for s in salespeople]
+
+    # 组装线索范围
+    if lead_ids:
+        ph = ','.join('?' * len(lead_ids))
+        cursor.execute(f"""
+            SELECT * FROM scraped_leads
+            WHERE id IN ({ph}) AND status != 'imported'
+            ORDER BY COALESCE(intent_score, 0) DESC, id DESC
+        """, lead_ids)
+    elif scope == 'evaluated':
+        cursor.execute("""
+            SELECT * FROM scraped_leads
+            WHERE status='evaluated' AND (assigned_to IS NULL OR status != 'imported')
+            ORDER BY COALESCE(intent_score, 0) DESC, id DESC
+        """)
+    elif scope == 'pending_eval':
+        cursor.execute("""
+            SELECT * FROM scraped_leads WHERE status='pending'
+            ORDER BY id DESC
+        """)
+    else:  # all_unassigned
+        cursor.execute("""
+            SELECT * FROM scraped_leads WHERE status IN ('pending','evaluated')
+            ORDER BY COALESCE(intent_score, 0) DESC, id DESC
+        """)
+    leads = [dict(r) for r in cursor.fetchall()]
+    if not leads:
+        return jsonify({'code': 200, 'message': '暂无可分配线索',
+                        'data': {'salespeople': sales_list, 'allocations': [],
+                                 'distribution': {}}})
+
+    # —— 第一步：对 pending 的先评估（只在内存算，不落库，避免主任取消后脏数据）
+    valid_usernames = {s['username'] for s in salespeople}
+
+    def _ensure_eval(lead):
+        stored = lead.get('assigned_to') if lead.get('status') == 'evaluated' else None
+        # 关键：若已存 assigned_to 不在当前候选集（主任缩小了范围/此人已离职/曾是主任现已排除）→ 强制重新推荐
+        stored_invalid = (stored is not None) and (stored not in valid_usernames)
+        if lead.get('status') != 'evaluated' or re_evaluate or not stored or stored_invalid:
+            score, reason = _evaluate_lead(lead, industry_stats)
+            # 推荐也必须在筛选后的销售里进行（salespeople 已按 sales_usernames 过滤）
+            assignee = _assign_lead(lead, salespeople) if salespeople else None
+            return score, reason, assignee
+        # 已评估过的：直接用 DB 存的 assigned_to + assign_reason
+        score = lead.get('intent_score') or 0
+        reason = lead.get('eval_reason') or ''
+        try:
+            ar = json.loads(lead.get('assign_reason')) if lead.get('assign_reason') else None
+        except Exception:
+            ar = None
+        assignee = {
+            'username': stored,
+            'name': next((s['name'] for s in salespeople if s['username'] == stored), stored),
+            'score': ar.get('score') if ar else None,
+            'reason': ar.get('reason') if ar else '',
+            'details': ar.get('details') if ar else None,
+        }
+        return score, reason, assignee
+
+    # 先为每条线索算出 AI 推荐结果
+    evaluated = []  # (lead, score, reason, assignee_dict_or_None)
+    for lead in leads:
+        s, r, a = _ensure_eval(lead)
+        evaluated.append((lead, s, r, a))
+
+    # 兜底修正：任何 assignee 的 username 不在 valid_usernames 中 → 立即重新推荐
+    for i, (lead, sc, rs, ass) in enumerate(evaluated):
+        if ass and (ass.get('username') or '') not in valid_usernames:
+            new_ass = _assign_lead(lead, salespeople) if salespeople else None
+            evaluated[i] = (lead, sc, rs, new_ass)
+
+    # —— 第二步：根据 mode 决定 proposed assigned_to
+    allocations = []
+    distribution = {s['username']: 0 for s in sales_list}
+
+    if mode == 'average' and sales_list:
+        # 轮询均摊：按「当前已承担本批数量 + 现有活跃商机+已分配线索数」作为优先级，最空的优先顶下一条
+        # （用户要求"按数量平均分配"，但也参考现状避免把满载的人再加码）
+        username_to_idx = {s['username']: i for i, s in enumerate(sales_list)}
+        # 已分配（imported）线索数作为历史负载参考
+        cursor.execute("""
+            SELECT assigned_to, COUNT(*) as cnt FROM scraped_leads
+            WHERE status='imported' AND assigned_to IS NOT NULL
+            GROUP BY assigned_to
+        """)
+        imported_cnt = {r['assigned_to']: r['cnt'] for r in cursor.fetchall()}
+        # 初始化排序槽：(当前已分配本批数、已imported数、biz_count、order、username)
+        slots = []
+        for s in sales_list:
+            slots.append({
+                'u': s['username'],
+                'batch_cnt': 0,
+                'imported_cnt': imported_cnt.get(s['username'], 0),
+                'biz_count': s.get('biz_count', 0),
+            })
+        # 排序 key 小的优先接手
+        def _slot_key(sl):
+            return (sl['batch_cnt'], sl['imported_cnt'] + sl['biz_count'])
+        for lead, score, reason, _assignee in evaluated:
+            slots.sort(key=_slot_key)
+            chosen = slots[0]
+            proposed = chosen['u']
+            chosen['batch_cnt'] += 1
+            distribution[proposed] = distribution.get(proposed, 0) + 1
+            allocations.append({
+                'lead_id': lead['id'],
+                'company': lead.get('company') or '',
+                'opportunity_name': lead.get('opportunity_name') or '',
+                'industry': lead.get('industry') or '',
+                'intent_score': score,
+                'eval_reason': reason,
+                'status': lead.get('status'),
+                'budget': lead.get('budget') or '',
+                'category': lead.get('category') or '',
+                'deadline': lead.get('deadline') or '',
+                'assigned_to': proposed,
+                'assigned_name': next((s['name'] for s in sales_list if s['username'] == proposed), proposed),
+                'assign_mode': 'average',
+                'assign_reason': f'均衡分配：第{distribution[proposed]}条',
+            })
+    else:  # recommended (default)
+        for lead, score, reason, assignee in evaluated:
+            proposed = assignee['username'] if assignee else ''
+            pname = assignee['name'] if assignee else ''
+            ascore = assignee.get('score') if assignee else None
+            adetail = assignee.get('details') if assignee else None
+            areason = assignee.get('reason') if assignee else ''
+            if proposed:
+                distribution[proposed] = distribution.get(proposed, 0) + 1
+            allocations.append({
+                'lead_id': lead['id'],
+                'company': lead.get('company') or '',
+                'opportunity_name': lead.get('opportunity_name') or '',
+                'industry': lead.get('industry') or '',
+                'intent_score': score,
+                'eval_reason': reason,
+                'status': lead.get('status'),
+                'budget': lead.get('budget') or '',
+                'category': lead.get('category') or '',
+                'deadline': lead.get('deadline') or '',
+                'assigned_to': proposed,
+                'assigned_name': pname,
+                'assign_mode': 'recommended',
+                'assign_score': ascore,
+                'assign_reason': areason,
+                'assign_details': adetail,
+            })
+
+    return jsonify({'code': 200, 'message': '分配草案生成成功',
+                    'data': {'salespeople': sales_list,
+                             'allocations': allocations,
+                             'distribution': distribution}})
+
+
+@leads_bp.route('/api/leads/allocation-confirm', methods=['POST'])
+@token_required
+def allocation_confirm():
+    """主任确认分配草案后批量执行。
+
+    请求体：allocations: [{lead_id: int, assigned_to: str}]
+
+    返回：success_count / fail_count / failures（含每条失败原因）/ imported_ids。
+    每条线索独立事务：失败的不影响其他，便于主任逐条处置。
+    """
+    payload = request.current_user
+    if payload.get('role') not in ('主任', '院长'):
+        return jsonify({'code': 403, 'message': '仅主任/院长可确认分配', 'data': None})
+    data = request.get_json(silent=True) or {}
+    raw_list = data.get('allocations') or []
+    if not raw_list:
+        return jsonify({'code': 400, 'message': '分配数据为空', 'data': None})
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # 验证 assigned_to 都是有效销售
+    valid_users = set()
+    cursor.execute("""
+        SELECT u.username FROM users u
+        JOIN user_roles ur ON u.username = ur.username AND ur.role='销售'
+        WHERE u.status='在职' AND u.role NOT IN ('主任', '院长')
+    """)
+    for r in cursor.fetchall():
+        valid_users.add(r['username'])
+
+    # 去重：同一 lead_id 只保留最后一次（前端可能重复提交同一行）
+    dedup = {}
+    for item in raw_list:
+        lid = item.get('lead_id')
+        if lid is None:
+            continue
+        dedup[int(lid)] = str(item.get('assigned_to') or '').strip()
+    if not dedup:
+        return jsonify({'code': 400, 'message': '分配数据无效', 'data': None})
+
+    # 一次性载入所有线索（避免 N+1）
+    ids = list(dedup.keys())
+    ph = ','.join('?' * len(ids))
+    cursor.execute(f"SELECT * FROM scraped_leads WHERE id IN ({ph})", ids)
+    lead_map = {r['id']: dict(r) for r in cursor.fetchall()}
+
+    # 缓存 user->name 用于日志
+    cursor.execute("SELECT username, name FROM users")
+    user_names = {r['username']: r['name'] for r in cursor.fetchall()}
+
+    success_count = 0
+    fail_count = 0
+    failures = []
+    imported = []
+
+    # 逐条分配，每条独立事务（按项目约束：短事务，立即释放锁）
+    for lid in ids:
+        assigned_to = dedup.get(lid, '')
+        if assigned_to not in valid_users:
+            fail_count += 1
+            failures.append({'lead_id': lid, 'message': f'负责人无效：{assigned_to or "空"}'})
+            continue
+        lead = lead_map.get(lid)
+        if not lead:
+            fail_count += 1
+            failures.append({'lead_id': lid, 'message': '线索不存在'})
+            continue
+        if lead.get('status') == 'imported':
+            fail_count += 1
+            failures.append({'lead_id': lid, 'message': '线索已分配，跳过'})
+            continue
+        try:
+            _do_assign_lead(cursor, lead, assigned_to)
+            db.commit()
+            success_count += 1
+            imported.append({'lead_id': lid, 'assigned_to': assigned_to})
+        except Exception as e:
+            db.rollback()
+            fail_count += 1
+            failures.append({'lead_id': lid, 'message': str(e)})
+
+    total_leads = success_count + fail_count
+    record_operation_log(
+        payload['username'], '批量确认分配线索', '智能线索管理',
+        f'共{total_leads}条：成功{success_count}条，失败{fail_count}条'
+    )
+    return jsonify({'code': 200, 'message': f'执行完成：成功{success_count}条，失败{fail_count}条',
+                    'data': {'success_count': success_count,
+                             'fail_count': fail_count,
+                             'failures': failures,
+                             'imported': imported}})
 
 
 def _parse_budget(budget_str):
@@ -1907,10 +2406,25 @@ def reject_lead(lead_id):
     return jsonify({'code': 200, 'message': '已拒绝并删除', 'data': None})
 
 
+def _ensure_manual_source(db):
+    """获取/创建"人工导入"数据源（仅作为情报归属，不参与自动采集）。"""
+    row = db.execute(
+        "SELECT id FROM lead_sources WHERE source_type='manual' AND name='人工导入'"
+    ).fetchone()
+    if row:
+        return row['id']
+    cur = db.execute("""
+        INSERT INTO lead_sources (name, source_type, url, parser_type, enabled, keywords)
+        VALUES ('人工导入', 'manual', '', NULL, 0, '')
+    """)
+    return cur.lastrowid
+
+
 @leads_bp.route('/api/leads/import', methods=['POST'])
 @token_required
 def import_leads():
-    """手动导入线索（JSON 数组），入库后状态为 pending。"""
+    """手动导入线索：统一写入原始情报库（raw_intelligence），
+    之后经 AI 商机识别分析 → 转入CRM → 分配销售，与自动采集共用同一链路。"""
     payload = request.current_user
     if payload.get('role') not in ('主任', '院长'):
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
@@ -1920,11 +2434,66 @@ def import_leads():
         return jsonify({'code': 400, 'message': '请提供线索数据', 'data': None})
     db = get_db()
     cursor = db.cursor()
-    inserted = _persist_leads(cursor, leads_data, None, '手动导入')
+    source_id = _ensure_manual_source(db)
+
+    inserted, skipped = 0, 0
+    for lead in leads_data:
+        company = (lead.get('company') or '').strip()
+        opp_name = (lead.get('opportunity_name') or '').strip()
+        if not company and not opp_name:
+            skipped += 1
+            continue
+        title = opp_name or company
+        link = (lead.get('link') or '').strip()
+        content_parts = [f'【人工导入】{title}']
+        field_map = [
+            ('采购单位/公司', 'company'), ('联系人', 'contact_name'), ('电话', 'phone'),
+            ('邮箱', 'email'), ('行业', 'industry'), ('地区', 'region'),
+            ('预算', 'budget'), ('采购方式', 'procurement_method'),
+            ('发布日期', 'publish_date'), ('截止日期', 'deadline'), ('备注', 'remark'),
+        ]
+        for label, key in field_map:
+            val = (lead.get(key) or '').strip()
+            if val:
+                content_parts.append(f'{label}：{val}')
+        content = '；'.join(content_parts)
+
+        # 去重：有链接按链接，否则按 公司+项目+电话
+        import hashlib
+        if link:
+            url_hash = hashlib.sha256(link.encode()).hexdigest()
+            dup = cursor.execute(
+                "SELECT id FROM raw_intelligence WHERE url_hash=?", (url_hash,)
+            ).fetchone()
+        else:
+            url_hash = hashlib.sha256(
+                f'{company}|{opp_name}|{lead.get("phone", "")}'.encode()
+            ).hexdigest()
+            dup = cursor.execute(
+                "SELECT id FROM raw_intelligence WHERE url_hash=?", (url_hash,)
+            ).fetchone()
+        if dup:
+            skipped += 1
+            continue
+
+        cursor.execute("""
+            INSERT INTO raw_intelligence (source_id, url, url_hash, title, content,
+                                          snippet, publish_date, status, keywords_matched)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', '人工导入')
+        """, (source_id, link, url_hash, title, content,
+              content[:300], (lead.get('publish_date') or '').strip()))
+        inserted += 1
+
     db.commit()
-    record_operation_log(payload['username'], '导入线索', '智能线索管理', f'手动导入 {inserted} 条线索')
-    return jsonify({'code': 200, 'message': f'导入 {inserted} 条线索',
-                    'data': {'inserted': inserted}})
+    record_operation_log(
+        payload['username'], '导入线索', '原始情报库',
+        f'人工导入 {inserted} 条至原始情报库（重复跳过 {skipped} 条）'
+    )
+    return jsonify({
+        'code': 200,
+        'message': f'已导入 {inserted} 条至原始情报库（重复跳过 {skipped} 条），请前往"AI商机识别"批量分析后转入CRM分配销售',
+        'data': {'inserted': inserted, 'skipped': skipped}
+    })
 
 
 @leads_bp.route('/api/leads/stats', methods=['GET'])
@@ -2001,7 +2570,7 @@ def _load_eval_context(cursor):
         FROM users u
         JOIN user_roles ur ON u.username = ur.username AND ur.role='销售'
         LEFT JOIN business b ON b.owner_id = u.username AND b.status='active'
-        WHERE u.status='在职'
+        WHERE u.status='在职' AND u.role NOT IN ('主任', '院长')
         GROUP BY u.username ORDER BY biz_count ASC, RANDOM()
     """)
     salespeople = [dict(r) for r in cursor.fetchall()]
@@ -2128,7 +2697,244 @@ def _load_eval_context(cursor):
         s['paid_amount'] = float(cs.get('paid_amount', 0) or 0)
         s['contract_by_industry'] = contract_by_industry.get(u, {})
 
+    # —— 知识库知识画像（纯 DB，无 LLM）——
+    kb_profiles = _build_knowledge_profiles(cursor, usernames)
+    for s in salespeople:
+        pf = kb_profiles.get(s['username'], {
+            'doc_count': 0, 'type_counts': {}, 'industries': {},
+            'customers': set(), 'success_case_count': 0, 'keyword_bag': set(),
+        })
+        # JSON 安全：把 set 转 list（打分时会按需重新转 set）
+        s['kb'] = {
+            'doc_count': pf.get('doc_count', 0),
+            'type_counts': pf.get('type_counts', {}),
+            'industries': pf.get('industries', {}),
+            'customers': sorted(pf.get('customers', set()) or []),
+            'success_case_count': pf.get('success_case_count', 0),
+            'keyword_bag': sorted(pf.get('keyword_bag', set()) or []),
+        }
+
     return industry_stats, salespeople
+
+
+def _tokenize_keywords(text):
+    """简易中文关键词提取：按标点/空白分词，再加中文二元切分，返回小写去重集合。
+    不依赖 jieba，纯标准库实现，保证离线可用。"""
+    if not text:
+        return set()
+    import re
+    s = str(text).lower()
+    # 中英文单词/数字 + 中文二元
+    words = set(re.findall(r'[a-zA-Z0-9\u4e00-\u9fff]{2,}', s))
+    # 中文二元
+    ch_only = re.sub(r'[^\u4e00-\u9fff]', '', s)
+    for i in range(len(ch_only) - 1):
+        words.add(ch_only[i:i+2])
+    return words
+
+
+def _build_knowledge_profiles(cursor, usernames):
+    """基于知识库为每个销售构建知识画像（纯 DB，不调用 LLM，离线可用）。
+
+    返回 {username: {
+        'doc_count': n,                   # 拥有文档总数（知识深度）
+        'type_counts': {doc_type: n},     # 各类型文档数
+        'industries': {industry: n},      # 覆盖行业（来自文档关联客户→industry）
+        'customers': set,                 # 客户名称集合（customer_info→cust_id→name）
+        'success_case_count': n,          # 成功案例数（合同类文档+「中标/签约/成功」关键词文档）
+        'keyword_bag': set,               # 关键词集合（title+summary+tags）
+    }}
+    """
+    profiles = {u: {
+        'doc_count': 0,
+        'type_counts': {},
+        'industries': {},
+        'customers': set(),
+        'success_case_count': 0,
+        'keyword_bag': set(),
+    } for u in usernames}
+    if not usernames:
+        return profiles
+    placeholder = ','.join('?' * len(usernames))
+
+    # 1) 所有销售名下的知识文档
+    cursor.execute(f"""
+        SELECT d.id, d.owner_id, d.doc_type, d.title, d.summary, d.tags, d.cust_id
+        FROM knowledge_documents d
+        WHERE d.owner_id IN ({placeholder})
+    """, usernames)
+    docs = cursor.fetchall()
+
+    # 2) cust_id → industry/name 映射（一次查询，避免 N+1）
+    cust_ids = sorted({d['cust_id'] for d in docs if d['cust_id']})
+    cust_map = {}
+    if cust_ids:
+        cph = ','.join('?' * len(cust_ids))
+        cursor.execute(f"""
+            SELECT id, name, industry FROM customers WHERE id IN ({cph})
+        """, cust_ids)
+        for cr in cursor.fetchall():
+            cust_map[cr['id']] = {'name': cr['name'] or '', 'industry': cr['industry'] or ''}
+
+    SUCCESS_DOC_TYPES = {'contract', 'bid_document'}
+    SUCCESS_KW = ('中标', '签约', '签订', '成单', '验收', '回款', '交付', '合作达成')
+
+    for d in docs:
+        u = d['owner_id']
+        if u not in profiles:
+            continue
+        pf = profiles[u]
+        dtype = d['doc_type'] or 'other'
+        pf['doc_count'] += 1
+        pf['type_counts'][dtype] = pf['type_counts'].get(dtype, 0) + 1
+
+        # 关键词袋：title + summary + tags
+        bag_source = ' '.join(x for x in (d['title'], d['summary'], d['tags']) if x)
+        for kw in _tokenize_keywords(bag_source):
+            pf['keyword_bag'].add(kw)
+
+        # 行业/客户：从 cust_id 关联
+        cid = d['cust_id']
+        if cid and cid in cust_map:
+            cname = cust_map[cid]['name']
+            cind = cust_map[cid]['industry']
+            if cname:
+                pf['customers'].add(cname.strip())
+                for kw in _tokenize_keywords(cname):
+                    pf['keyword_bag'].add(kw)
+            if cind:
+                pf['industries'][cind] = pf['industries'].get(cind, 0) + 1
+                for kw in _tokenize_keywords(cind):
+                    pf['keyword_bag'].add(kw)
+
+        # 成功案例：合同/投标类文档 OR 标题含中标/签约等关键词
+        is_success = dtype in SUCCESS_DOC_TYPES or any(
+            kw in (d['title'] or '') or kw in (d['summary'] or '') for kw in SUCCESS_KW
+        )
+        if is_success:
+            pf['success_case_count'] += 1
+
+    # 3) 知识图谱增强：若 person 实体匹配销售姓名，拉取其关联行业/客户/项目实体
+    cursor.execute(f"""
+        SELECT u.username, u.name FROM users u
+        WHERE u.username IN ({placeholder})
+    """, usernames)
+    name_to_user = {}
+    for r in cursor.fetchall():
+        name_to_user[r['name'] or ''] = r['username']
+        name_to_user[r['username']] = r['username']
+
+    if name_to_user:
+        person_names = [n for n in name_to_user.keys() if n]
+        if person_names:
+            pph = ','.join('?' * len(person_names))
+            cursor.execute(f"""
+                SELECT id, name FROM knowledge_entities
+                WHERE entity_type='person' AND name IN ({pph})
+            """, person_names)
+            person_ents = {r['id']: r['name'] for r in cursor.fetchall()}
+
+            if person_ents:
+                pids = list(person_ents.keys())
+                pid_ph = ','.join('?' * len(pids))
+                cursor.execute(f"""
+                    SELECT r.source_id, r.target_id, r.relation_type,
+                           e.name as target_name, e.entity_type as target_type
+                    FROM knowledge_relations r
+                    JOIN knowledge_entities e ON r.target_id = e.id
+                    WHERE r.source_id IN ({pid_ph})
+                """, pids)
+                for rel in cursor.fetchall():
+                    src_name = person_ents.get(rel['source_id'], '')
+                    u = name_to_user.get(src_name)
+                    if not u or u not in profiles:
+                        continue
+                    pf = profiles[u]
+                    tname = rel['target_name'] or ''
+                    ttype = rel['target_type'] or ''
+                    if not tname:
+                        continue
+                    if ttype == 'organization' and len(tname) <= 6:
+                        pf['industries'][tname] = pf['industries'].get(tname, 0) + 1
+                    if ttype in ('customer', 'organization'):
+                        pf['customers'].add(tname.strip())
+                    if ttype in ('project', 'contract', 'business'):
+                        pf['success_case_count'] += 1
+                    for kw in _tokenize_keywords(tname):
+                        pf['keyword_bag'].add(kw)
+
+                cursor.execute(f"""
+                    SELECT r.source_id, r.target_id, r.relation_type,
+                           e.name as source_name, e.entity_type as source_type
+                    FROM knowledge_relations r
+                    JOIN knowledge_entities e ON r.source_id = e.id
+                    WHERE r.target_id IN ({pid_ph})
+                """, pids)
+                for rel in cursor.fetchall():
+                    tgt_name = person_ents.get(rel['target_id'], '')
+                    u = name_to_user.get(tgt_name)
+                    if not u or u not in profiles:
+                        continue
+                    pf = profiles[u]
+                    sname = rel['source_name'] or ''
+                    stype = rel['source_type'] or ''
+                    if not sname:
+                        continue
+                    if stype in ('customer', 'organization'):
+                        pf['customers'].add(sname.strip())
+                    if stype in ('project', 'contract', 'business'):
+                        pf['success_case_count'] += 1
+                    for kw in _tokenize_keywords(sname):
+                        pf['keyword_bag'].add(kw)
+
+    return profiles
+
+
+def _semantic_knowledge_boost(lead, username_list):
+    """可选 LLM 增强：用语义搜索把线索与知识库匹配，按 owner_id 聚合相似度。
+    返回 {username: score_0_to_1}；失败返回空 dict（调用方自动降级为关键词匹配）。"""
+    try:
+        from vector_search import semantic_search
+    except Exception:
+        return {}
+    opp = (lead.get('opportunity_name') or '').strip()
+    company = (lead.get('company') or '').strip()
+    industry = (lead.get('industry') or '').strip()
+    region = (lead.get('region') or '').strip()
+    category = (lead.get('category') or '').strip()
+    query = f"{category} {industry} {region} {company} {opp}".strip()
+    if not query:
+        return {}
+    try:
+        matches = semantic_search(query, top_k=10)
+    except Exception:
+        return {}
+    if not matches:
+        return {}
+    doc_ids = sorted({m['doc_id'] for m in matches if m.get('doc_id')})
+    if not doc_ids:
+        return {}
+    try:
+        from extensions import get_db
+        conn = get_db()
+        cur = conn.cursor()
+        dph = ','.join('?' * len(doc_ids))
+        cur.execute(f"SELECT id, owner_id FROM knowledge_documents WHERE id IN ({dph})", doc_ids)
+        doc_owner = {r['id']: r['owner_id'] for r in cur.fetchall() if r['owner_id']}
+    except Exception:
+        return {}
+    owner_best = {}
+    for m in matches:
+        oid = doc_owner.get(m.get('doc_id'))
+        if not oid or oid not in username_list:
+            continue
+        sim = float(m.get('similarity') or 0)
+        if sim > owner_best.get(oid, 0):
+            owner_best[oid] = sim
+    if not owner_best:
+        return {}
+    mx = max(owner_best.values()) or 1
+    return {u: min(1.0, v / mx) for u, v in owner_best.items()}
 
 
 def _evaluate_lead(lead, industry_stats):
@@ -2264,16 +3070,294 @@ def _evaluate_lead(lead, industry_stats):
     return score, '；'.join(reasons)
 
 
+# ==================== 图片OCR批量导入线索 ====================
+
+_ocr_instance = None
+
+
+def _get_ocr():
+    """懒加载 PaddleOCR 实例（首次调用时加载模型，后续复用）。
+
+    模型文件自动下载到 vendor/paddleocr/whl/ 下。如果网络不可达，
+    需提前将 det/rec/cls 三个模型目录放入对应路径。
+    """
+    global _ocr_instance
+    if _ocr_instance is None:
+        import os
+        import sys
+        vendor = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'vendor')
+        if os.path.isdir(vendor) and vendor not in sys.path:
+            sys.path.insert(0, vendor)
+        # Windows DLL 搜索路径：paddlepaddle 的 C 扩展依赖 paddle/libs/*.dll
+        paddle_libs = os.path.join(vendor, 'paddle', 'libs')
+        if os.path.isdir(paddle_libs):
+            os.add_dll_directory(paddle_libs)
+        try:
+            from paddleocr import PaddleOCR
+            # 指定模型存储路径，避免写到用户目录
+            whl_dir = os.path.join(vendor, 'paddleocr', 'whl')
+            os.makedirs(whl_dir, exist_ok=True)
+            _ocr_instance = PaddleOCR(
+                use_angle_cls=True, lang='ch', show_log=False,
+                det_model_dir=os.path.join(whl_dir, 'det', 'ch'),
+                rec_model_dir=os.path.join(whl_dir, 'rec', 'ch'),
+                cls_model_dir=os.path.join(whl_dir, 'cls'),
+            )
+            print("[OCR] PaddleOCR 加载成功")
+        except Exception as e:
+            print(f"[OCR] PaddleOCR 加载失败: {e}")
+            raise
+    return _ocr_instance
+
+
+def _ocr_image(image_path):
+    """对单张图片执行OCR，返回 (拼接后的纯文本, None) 或 (空字符串, 错误信息)。"""
+    try:
+        ocr = _get_ocr()
+        result = ocr.ocr(image_path, cls=True)
+        if not result or not result[0]:
+            return '', None
+        lines = []
+        for line in result[0]:
+            text = line[1][0] if line[1] and len(line[1]) > 0 else ''
+            if text:
+                lines.append(text.strip())
+        return '\n'.join(lines), None
+    except Exception as e:
+        err_msg = str(e)
+        print(f"[OCR] 图片识别失败: {err_msg}")
+        return '', err_msg
+
+
+def _llm_parse_lead_text(raw_text):
+    """用LLM将OCR文本解析为结构化线索字段。"""
+    if not raw_text or not raw_text.strip():
+        return {}
+    try:
+        from config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL, USE_LLM
+        if not USE_LLM:
+            return {}
+        prompt = """从以下图片OCR识别文本中提取线索信息，返回JSON格式。
+
+文本内容：
+{raw_text}
+
+请提取以下字段（无法识别的留空字符串）：
+{{
+  "company": "公司/招标单位名称",
+  "opportunity_name": "商机名称/项目标题/招标项目名称",
+  "contact_name": "联系人姓名",
+  "phone": "联系电话",
+  "email": "电子邮箱",
+  "industry": "行业",
+  "region": "地区/区域",
+  "link": "链接URL（如有）",
+  "remark": "备注/其他说明",
+  "tender_no": "招标编号",
+  "budget": "预算金额（保留原始文本）",
+  "deadline": "截止日期（YYYY-MM-DD格式）",
+  "publish_date": "发布日期（YYYY-MM-DD格式）",
+  "agency": "招标代理机构",
+  "agency_phone": "代理机构电话"
+}}
+
+注意：只返回JSON，不要添加任何额外文字。日期统一转为YYYY-MM-DD格式。"""
+        import requests
+        headers = {
+            'Authorization': f'Bearer {LLM_API_KEY}',
+            'Content-Type': 'application/json'
+        }
+        payload = {
+            'model': LLM_MODEL,
+            'messages': [
+                {'role': 'system', 'content': '你是专业的信息提取助手。请严格按照JSON格式返回结果，不要输出思考过程或额外文字。'},
+                {'role': 'user', 'content': prompt.format(raw_text=raw_text[:6000])}
+            ],
+            'temperature': 0.1,
+            'max_tokens': 180000
+        }
+        try:
+            payload['extra_body'] = {'chat_template_kwargs': {'enable_thinking': False}}
+        except Exception:
+            pass
+        response = requests.post(
+            f'{LLM_API_BASE}/chat/completions',
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+        if response.status_code == 200:
+            data = response.json()
+            content = data['choices'][0]['message'].get('content')
+            if content and content.strip():
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if json_match:
+                    return json.loads(json_match.group())
+        else:
+            print(f"[OCR-LLM] HTTP {response.status_code}")
+    except Exception as e:
+        print(f"[OCR-LLM] 解析失败: {e}")
+    return {}
+
+
+@leads_bp.route('/api/leads/ocr-images', methods=['POST'])
+@token_required
+def ocr_import_images():
+    """批量上传图片，OCR识别文字后用LLM解析为结构化线索字段，返回预览数据。"""
+    import os
+    import tempfile
+
+    files = request.files.getlist('images')
+    if not files:
+        return jsonify({'code': 400, 'message': '请选择图片文件', 'data': None})
+
+    results = []
+    ocr_init_error = None
+    for f in files:
+        if not f or not f.filename:
+            continue
+        filename = f.filename
+        suffix = os.path.splitext(filename)[1].lower()
+        if suffix not in ('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tif', '.tiff'):
+            results.append({
+                'image_name': filename, 'raw_text': '', 'parsed': {},
+                'error': '不支持的图片格式'
+            })
+            continue
+        # 只保留已白名单校验的后缀，其余部分用随机串替代，防止文件名路径穿越
+        tmp_path = os.path.join(tempfile.gettempdir(), f'ocr_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}{suffix}')
+        try:
+            f.save(tmp_path)
+            raw_text, ocr_err = _ocr_image(tmp_path)
+            if ocr_err and not raw_text:
+                # OCR 引擎级别的错误（如模型加载失败）
+                if ocr_init_error is None:
+                    ocr_init_error = ocr_err
+                results.append({
+                    'image_name': filename, 'raw_text': '', 'parsed': {},
+                    'error': f'OCR识别引擎错误: {ocr_err}'
+                })
+                continue
+            if not raw_text:
+                results.append({
+                    'image_name': filename, 'raw_text': '', 'parsed': {},
+                    'error': '未识别到文字'
+                })
+                continue
+            parsed = _llm_parse_lead_text(raw_text)
+            results.append({
+                'image_name': filename, 'raw_text': raw_text, 'parsed': parsed
+            })
+        except Exception as e:
+            results.append({
+                'image_name': filename, 'raw_text': '', 'parsed': {},
+                'error': str(e)
+            })
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+    # 如果所有图片都因 OCR 引擎错误失败，返回 500
+    if ocr_init_error and all(r.get('error', '').startswith('OCR识别引擎错误') for r in results if r.get('error')):
+        return jsonify({
+            'code': 500,
+            'message': f'OCR引擎初始化失败: {ocr_init_error}',
+            'data': {'results': results, 'total': len(results)}
+        })
+
+    return jsonify({'code': 200, 'message': 'success',
+                    'data': {'results': results, 'total': len(results)}})
+
+
+@leads_bp.route('/api/leads/ocr-images/execute', methods=['POST'])
+@token_required
+def ocr_import_execute():
+    """确认导入OCR解析后的线索数据。"""
+    payload = request.current_user
+    data = request.get_json(silent=True) or {}
+    leads = data.get('leads') or data.get('rows') or []
+    if not leads:
+        return jsonify({'code': 400, 'message': '无有效数据', 'data': None})
+
+    db = get_db()
+    cursor = db.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    success_count = 0
+    fail_count = 0
+
+    for lead in leads:
+        company = (lead.get('company') or '').strip()
+        if not company:
+            fail_count += 1
+            continue
+        opp_name = (lead.get('opportunity_name') or '').strip()
+        link = (lead.get('link') or '').strip()
+        dup = False
+        if link:
+            cursor.execute("SELECT id FROM scraped_leads WHERE link=?", (link,))
+            if cursor.fetchone():
+                dup = True
+        if not dup and opp_name and company:
+            cursor.execute(
+                "SELECT id FROM scraped_leads WHERE opportunity_name=? AND company=?",
+                (opp_name, company)
+            )
+            if cursor.fetchone():
+                dup = True
+        if dup:
+            fail_count += 1
+            continue
+        try:
+            cursor.execute("""
+                INSERT INTO scraped_leads (company, opportunity_name, contact_name, phone, email,
+                                           industry, region, source, link, remark,
+                                           tender_no, budget, deadline, publish_date,
+                                           agency, agency_phone,
+                                           status, category, scraped_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '图片导入', ?, ?)
+            """, (
+                company, opp_name,
+                lead.get('contact_name', ''), lead.get('phone', ''),
+                lead.get('email', ''), lead.get('industry', ''),
+                lead.get('region', ''), '图片导入',
+                link, lead.get('remark', ''),
+                lead.get('tender_no', ''), lead.get('budget', ''),
+                lead.get('deadline', ''), lead.get('publish_date', ''),
+                lead.get('agency', ''), lead.get('agency_phone', ''),
+                now, now
+            ))
+            success_count += 1
+        except Exception:
+            fail_count += 1
+
+    db.commit()
+    if success_count > 0:
+        record_operation_log(payload['username'], '导入', '线索(图片OCR)',
+                             f'图片OCR导入线索：成功{success_count}条，失败{fail_count}条')
+
+    return jsonify({
+        'code': 200, 'message': '导入完成',
+        'data': {
+            'total': len(leads),
+            'success_count': success_count,
+            'fail_count': fail_count
+        }
+    })
+
+
 def _assign_lead(lead, salespeople):
-    """基于销售人员历史拜访案例、商机情况和合同签订情况，多维度评分推荐科学负责人。
+    """基于销售人员历史拜访案例、商机情况、合同签订 + 知识库，多维度评分推荐科学负责人。
 
     评分维度（满分100）：
-    1. 行业匹配度（30分）：同行业合同数 + 同行业商机数 + 同行业拜访次数 + 同行业客户数
-    2. 历史业绩（25分）：合同总金额 + 已回款金额 + 回款率
-    3. 商机推进能力（15分）：活跃商机数 + 推进中商机占比 + 商机总金额
-    4. 拜访经验（15分）：历史拜访次数 + 已完成拜访数
-    5. 当前工作量（10分）：活跃商机越少越空闲得分越高（避免过载）
-    6. 区域匹配（5分）：名下同区域客户加分
+    1. 行业匹配度（26分）：同行业合同/商机/拜访/客户综合（历史对接经验）
+    2. 历史业绩（22分）：合同总金额 + 已回款金额 + 回款率
+    3. 商机推进能力（13分）：活跃商机数 + 推进中商机占比 + 商机总金额
+    4. 拜访经验（13分）：历史拜访次数 + 已完成拜访数
+    5. 当前工作量（8分）：活跃商机越少越空闲得分越高（避免过载）
+    6. 区域匹配（3分）：名下同区域客户加分
+    7. 知识库匹配（15分）：知识深度 + 行业/客户/关键词知识画像吻合 + 语义搜索命中 + 成功案例数
 
     返回：{username, name, reason, details}，details 含各维度分数便于前端展示。
     """
@@ -2282,6 +3366,7 @@ def _assign_lead(lead, salespeople):
 
     industry = (lead.get('industry') or '').strip()
     region = (lead.get('region') or '').strip()
+    usernames = [s['username'] for s in salespeople]
 
     # 计算全局最大值用于归一化（避免单一指标极端值主导）
     max_contract_amount = max((s.get('contract_amount', 0) for s in salespeople), default=1) or 1
@@ -2290,11 +3375,35 @@ def _assign_lead(lead, salespeople):
     max_visit_total = max((s.get('visit_total', 0) for s in salespeople), default=1) or 1
     max_biz_count = max((s.get('biz_count', 0) for s in salespeople), default=1) or 1
     max_cust_count = max((s.get('cust_count', 0) for s in salespeople), default=1) or 1
+    max_kb_docs = max((s.get('kb', {}).get('doc_count', 0) for s in salespeople), default=1) or 1
+    max_kb_cases = max((s.get('kb', {}).get('success_case_count', 0) for s in salespeople), default=1) or 1
+
+    # —— 知识库信号 1/2：语义搜索命中（LLM，失败降级为空）——
+    semantic_boosts = _semantic_knowledge_boost(lead, usernames)
+
+    # —— 知识库信号 2/2：线索关键词袋（合同/商机/客户/区域/机会名拼接 → 二元+单词）——
+    company = (lead.get('company') or '').strip()
+    opp_name = (lead.get('opportunity_name') or '').strip()
+    category = (lead.get('category') or '').strip()
+    raw = lead.get('raw_data') or ''
+    if isinstance(raw, str):
+        try:
+            import json as _json
+            raw_d = _json.loads(raw)
+        except Exception:
+            raw_d = {}
+    else:
+        raw_d = raw if isinstance(raw, dict) else {}
+    extra_kw = raw_d.get('keywords') or raw_d.get('tags') or raw_d.get('intent') or ''
+    lead_query_parts = [industry, region, company, opp_name, category, str(extra_kw)]
+    lead_keywords = _tokenize_keywords(' '.join(x for x in lead_query_parts if x))
 
     scored = []
     for s in salespeople:
         reasons = []
-        # 1) 行业匹配度（30分）—— 同行业合同/商机/拜访/客户综合
+        kb = s.get('kb') or {}
+
+        # 1) 行业匹配度（26分）—— 同行业合同/商机/拜访/客户综合
         industry_score = 0.0
         if industry:
             same_industry_contracts = s.get('contract_by_industry', {}).get(industry, {}).get('count', 0)
@@ -2302,36 +3411,30 @@ def _assign_lead(lead, salespeople):
             same_industry_biz = s.get('biz_by_industry', {}).get(industry, {}).get('count', 0)
             same_industry_visits = s.get('visit_by_industry', {}).get(industry, 0)
             same_industry_custs = s.get('industries_served', {}).get(industry, 0)
-            # 同行业合同（最高15分）
-            industry_score += min(15, same_industry_contracts * 5)
+            industry_score += min(13, same_industry_contracts * 4.5)
             if same_industry_contracts > 0:
                 reasons.append(f'同行业已签{same_industry_contracts}份合同'
                                f'（金额{same_industry_contract_amt:.2f}元）')
-            # 同行业商机（最高8分）
-            industry_score += min(8, same_industry_biz * 2)
+            industry_score += min(7, same_industry_biz * 2)
             if same_industry_biz > 0:
                 reasons.append(f'同行业有{same_industry_biz}个在推进商机')
-            # 同行业拜访（最高4分）
-            industry_score += min(4, same_industry_visits)
+            industry_score += min(3, same_industry_visits)
             if same_industry_visits > 0:
                 reasons.append(f'同行业客户拜访{same_industry_visits}次')
-            # 同行业客户（最高3分）
             industry_score += min(3, same_industry_custs)
             if same_industry_contracts == 0 and same_industry_biz == 0 \
                     and same_industry_visits == 0 and same_industry_custs == 0:
                 reasons.append(f'暂无「{industry}」行业服务经验')
         else:
-            # 无行业信息：均给基础分
-            industry_score = 8.0
+            industry_score = 7.0
             reasons.append('线索未标注行业，行业匹配维度按基础分计算')
 
-        # 2) 历史业绩（25分）—— 合同金额 + 回款 + 回款率
+        # 2) 历史业绩（22分）—— 合同金额 + 回款 + 回款率
         contract_amount = s.get('contract_amount', 0)
         paid_amount = s.get('paid_amount', 0)
         contract_total = s.get('contract_total', 0)
-        performance_score = (contract_amount / max_contract_amount) * 15
-        performance_score += (paid_amount / max_paid_amount) * 7
-        # 回款率奖励：>80% 加3分，>50% 加1.5分
+        performance_score = (contract_amount / max_contract_amount) * 13
+        performance_score += (paid_amount / max_paid_amount) * 6
         if contract_amount > 0:
             paid_rate = paid_amount / contract_amount
             if paid_rate >= 0.8:
@@ -2343,36 +3446,34 @@ def _assign_lead(lead, salespeople):
             reasons.append(f'累计签订{contract_total}份合同，金额{contract_amount:.2f}元')
         else:
             reasons.append('暂无合同签订记录')
-        performance_score = min(25, performance_score)
+        performance_score = min(22, performance_score)
 
-        # 3) 商机推进能力（15分）—— 推进中商机 + 商机金额
+        # 3) 商机推进能力（13分）—— 推进中商机 + 商机金额
         biz_count = s.get('biz_count', 0)
         biz_advanced = s.get('biz_advanced', 0)
         biz_amount = s.get('biz_amount', 0)
         biz_score = 0.0
         if biz_count > 0:
-            # 推进中商机占比（推进能力）
             advance_ratio = biz_advanced / biz_count
-            biz_score += min(8, advance_ratio * 10)
-            # 商机总金额（规模）
-            biz_score += min(7, (biz_amount / max_biz_amount) * 7)
+            biz_score += min(7, advance_ratio * 9)
+            biz_score += min(6, (biz_amount / max_biz_amount) * 6)
             reasons.append(f'活跃商机{biz_count}个（推进中{biz_advanced}个），商机金额{biz_amount:.2f}元')
         else:
             reasons.append('当前无活跃商机，可专注新线索')
 
-        # 4) 拜访经验（15分）—— 拜访次数 + 完成率
+        # 4) 拜访经验（13分）—— 拜访次数 + 完成率
         visit_total = s.get('visit_total', 0)
         visit_done = s.get('visit_done', 0)
-        visit_score = (visit_total / max_visit_total) * 12
+        visit_score = (visit_total / max_visit_total) * 10.5
         if visit_total > 0:
             done_rate = visit_done / visit_total
-            visit_score += min(3, done_rate * 3)
+            visit_score += min(2.5, done_rate * 2.5)
             reasons.append(f'累计拜访{visit_total}次（已完成{visit_done}次）')
         else:
             reasons.append('暂无历史拜访记录')
 
-        # 5) 当前工作量（10分）—— 商机越少越空闲（避免过载）
-        workload_score = max(0, 10 - (biz_count / max_biz_count) * 10)
+        # 5) 当前工作量（8分）—— 商机越少越空闲
+        workload_score = max(0, 8 - (biz_count / max_biz_count) * 8)
         if biz_count >= 10:
             reasons.append(f'当前商机{biz_count}个，工作量饱和')
         elif biz_count >= 5:
@@ -2380,17 +3481,101 @@ def _assign_lead(lead, salespeople):
         else:
             reasons.append(f'当前商机{biz_count}个，时间充裕')
 
-        # 6) 区域匹配（5分）
+        # 6) 区域匹配（3分）
         region_score = 0.0
         if region:
-            # 通过客户表 region 字段判断同区域经验（已在 industries_served 之外的简化判断）
-            # 这里用 cust_count 作为代理：客户基数大意味着可能覆盖更多区域
-            region_score = min(5, (s.get('cust_count', 0) / max_cust_count) * 5)
+            region_score = min(3, (s.get('cust_count', 0) / max_cust_count) * 3)
         else:
-            region_score = 2.5
+            region_score = 1.5
+
+        # 7) 知识库匹配（15分）—— 深度/行业/客户/关键词+语义+成功案例
+        kb_score = 0.0
+        kb_reasons = []
+
+        # 7.1 知识深度（3分）：拥有的知识文档总数归一化
+        kb_docs = kb.get('doc_count', 0)
+        depth_sub = (kb_docs / max_kb_docs) * 3 if max_kb_docs else 0
+        kb_score += depth_sub
+        if kb_docs > 0:
+            type_counts = kb.get('type_counts', {})
+            types_cn = []
+            _DOC_CN = {'visit_summary': '拜访纪要', 'contract': '合同',
+                       'bid_document': '投标', 'technical_plan': '技术方案',
+                       'customer_info': '客户资料', 'industry_report': '行业报告',
+                       'meeting_minutes': '会议纪要', 'personnel_qualification': '人员资质',
+                       'company_qualification': '企业资质', 'other': '其他'}
+            for dt, cnt in sorted(type_counts.items(), key=lambda x: -x[1])[:3]:
+                types_cn.append(f"{_DOC_CN.get(dt, dt)}{cnt}")
+            if types_cn:
+                kb_reasons.append(f"知识文档{kb_docs}篇：{'/'.join(types_cn)}")
+
+        # 7.2 行业匹配（4分）：知识库中是否有相关行业记录
+        if industry:
+            kb_industries = kb.get('industries', {})
+            if isinstance(kb_industries, dict):
+                kb_industry_hits = kb_industries.get(industry, 0)
+                # 也用关键词袋查行业关键词
+                ind_kw = _tokenize_keywords(industry)
+                kb_bag = set(kb.get('keyword_bag', []) or [])
+                overlap_kw = len(ind_kw & kb_bag)
+                ind_kw_score = min(2.0, overlap_kw / max(len(ind_kw), 1) * 2)
+                ind_match_sub = min(2.0, kb_industry_hits)  # 直接行业名命中
+                kb_score += min(4.0, ind_match_sub + ind_kw_score)
+                if kb_industry_hits > 0 or overlap_kw > 0:
+                    kb_reasons.append(f"知识库记录过{industry}相关经验")
+                # 无知识命中不给负分（没文档不代表无经验，只在有命中时加分）
+
+        # 7.3 客户匹配（2分）：知识库中是否有该招标单位/客户的资料
+        if company:
+            kb_customers = set(kb.get('customers', []) or [])
+            company_match = 0
+            if company in kb_customers:
+                company_match += 1
+            comp_kw = _tokenize_keywords(company)
+            kb_bag = set(kb.get('keyword_bag', []) or [])
+            comp_overlap = len(comp_kw & kb_bag)
+            company_match += min(1, comp_overlap / max(len(comp_kw), 1))
+            c_sub = min(2.0, company_match)
+            kb_score += c_sub
+            if c_sub > 0:
+                kb_reasons.append(f"知识库包含「{company}」相关资料")
+
+        # 7.4 线索关键词与知识关键词袋相似度（2分）
+        if lead_keywords:
+            kb_bag = set(kb.get('keyword_bag', []) or [])
+            overlap = len(lead_keywords & kb_bag)
+            union_val = len(lead_keywords | kb_bag) or 1
+            jaccard = overlap / union_val
+            kw_sub = min(2.0, jaccard * 20)  # 放缩到 0-2
+            kb_score += kw_sub
+            if overlap >= 3:
+                kb_reasons.append(f"关键词匹配{overlap}个：商机内容高度吻合")
+
+        # 7.5 语义搜索命中增强（LLM，有则加）
+        sem = semantic_boosts.get(s['username'], 0)
+        if sem > 0:
+            sem_sub = min(2.0, sem * 2)
+            kb_score += sem_sub
+            if sem >= 0.5:
+                kb_reasons.append("语义搜索命中相关知识文档")
+
+        # 7.6 成功案例相关知识数（2分）：合同/中标/签约文档 → 可复制成功经验
+        kb_cases = kb.get('success_case_count', 0)
+        case_sub = min(2.0, (kb_cases / max_kb_cases) * 2) if max_kb_cases else 0
+        kb_score += case_sub
+        if kb_cases > 0:
+            kb_reasons.append(f"知识库沉淀{kb_cases}个成功案例")
+
+        kb_score = min(15.0, kb_score)
+        if not kb_reasons and kb_score < 1:
+            kb_reasons.append("知识库暂未积累对应资料")
+        if kb_reasons:
+            # 取 1~2 条最有力的作为整体推荐理由
+            for kr in kb_reasons[:1]:
+                reasons.append(f"[知识库] {kr}")
 
         total_score = (industry_score + performance_score + biz_score +
-                       visit_score + workload_score + region_score)
+                       visit_score + workload_score + region_score + kb_score)
 
         scored.append({
             'sales': s,
@@ -2402,6 +3587,7 @@ def _assign_lead(lead, salespeople):
                 'visit_experience': round(visit_score, 2),
                 'workload_balance': round(workload_score, 2),
                 'region_match': round(region_score, 2),
+                'knowledge_match': round(kb_score, 2),
             },
             'reasons': reasons,
         })

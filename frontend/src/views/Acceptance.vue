@@ -31,7 +31,7 @@
     </div>
 
     <div class="table-container">
-      <el-table :data="filteredRows" stripe border style="width: 100%;" v-loading="loading">
+      <el-table :data="filteredRows" stripe border style="width: 100%;" v-loading="loading" max-height="70vh">
         <el-table-column label="合同名称" prop="contract_name" min-width="160" show-overflow-tooltip />
         <el-table-column label="合同编号" prop="contract_no" width="140" />
         <el-table-column label="甲方" prop="party_a" min-width="140" show-overflow-tooltip />
@@ -237,7 +237,7 @@ const rows = ref([])
 const loading = ref(false)
 const searchKeyword = ref('')
 
-const canDelete = computed(() => authStore.role === '主任' || authStore.role === '院长')
+const canDelete = computed(() => authStore.has('data.view_all'))
 
 // 新增验收记录
 const showAddModal = ref(false)

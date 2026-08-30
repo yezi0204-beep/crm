@@ -34,7 +34,7 @@
           <div :class="['message-item', msg.role === 'user' ? 'user-message' : 'assistant-message']">
             <div class="message-avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
             <div class="message-content">
-              <div class="message-text" v-html="msg.content"></div>
+              <div class="message-text">{{ msg.content }}</div>
               <div class="message-time">{{ msg.time }}</div>
             </div>
           </div>
@@ -658,6 +658,7 @@ onMounted(() => { initSpeech(); scrollToBottom() })
   border-radius: 12px;
   line-height: 1.6;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .user-message .message-text { background: #ebf8ff; }

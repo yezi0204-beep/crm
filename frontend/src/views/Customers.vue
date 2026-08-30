@@ -1,7 +1,7 @@
 <template>
   <div class="customers">
     <div class="header-row">
-      <el-button type="primary" @click="showAddModal = true" class="add-btn">
+      <el-button type="primary" @click="openAddCustomer" class="add-btn">
         <el-icon><Plus /></el-icon>
         添加客户
       </el-button>
@@ -9,6 +9,7 @@
         <el-icon><DataAnalysis /></el-icon>
         客户分析
       </el-button>
+      <el-button v-if="isAdmin" @click="openFieldManager" class="add-btn">⚙️ 自定义字段</el-button>
       <div class="search-wrapper">
         <el-input
           v-model="searchKeyword"
@@ -44,7 +45,7 @@
     
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="filteredCustomers" stripe border class="data-table">
+        <el-table :data="filteredCustomers" stripe border class="data-table" max-height="70vh">
           <el-table-column prop="name" label="联系人" min-width="100" sortable />
           <el-table-column prop="phone" label="手机号" min-width="120" sortable />
           <el-table-column prop="company" label="公司名称" min-width="160" sortable show-overflow-tooltip />
@@ -57,6 +58,15 @@
           <el-table-column prop="address" label="地址" min-width="150" sortable show-overflow-tooltip />
           <el-table-column prop="owner_name" label="负责人" min-width="90" sortable />
           <el-table-column prop="created_at" label="创建时间" min-width="140" sortable />
+          <el-table-column
+            v-for="f in customFields"
+            :key="f.field_key"
+            :label="f.field_name"
+            min-width="110"
+            show-overflow-tooltip
+          >
+            <template #default="scope">{{ formatCustomValue(scope.row.ext_data?.[f.field_key]) }}</template>
+          </el-table-column>
           <el-table-column label="操作" min-width="260" fixed="right">
             <template #default="scope">
               <el-button size="small" @click="editCustomer(scope.row)">编辑</el-button>
@@ -118,11 +128,106 @@
             <el-option v-for="user in users" :key="user.username" :label="user.name" :value="user.username" />
           </el-select>
         </el-form-item>
+        <el-form-item
+          v-for="f in customFields"
+          :key="f.field_key"
+          :label="f.field_name"
+          :required="f.required"
+        >
+          <el-input v-if="f.field_type === 'text'" v-model="customerForm.ext_data[f.field_key]" />
+          <el-input-number
+            v-else-if="f.field_type === 'number'"
+            v-model="customerForm.ext_data[f.field_key]"
+            :controls-position="'right'"
+            style="width: 100%"
+          />
+          <el-date-picker
+            v-else-if="f.field_type === 'date'"
+            v-model="customerForm.ext_data[f.field_key]"
+            type="date"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+          <el-select v-else-if="f.field_type === 'select'" v-model="customerForm.ext_data[f.field_key]" clearable>
+            <el-option v-for="opt in f.options" :key="opt" :label="opt" :value="opt" />
+          </el-select>
+          <el-select v-else-if="f.field_type === 'multiselect'" v-model="customerForm.ext_data[f.field_key]" multiple clearable>
+            <el-option v-for="opt in f.options" :key="opt" :label="opt" :value="opt" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAddModal = false">取消</el-button>
         <el-button type="primary" @click="saveCustomer">确定</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 自定义字段管理 -->
+    <el-dialog v-model="showFieldManager" title="自定义字段管理（客户）" width="720px">
+      <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: #909399; font-size: 13px;">为客户对象扩展字段，保存后表格列与表单项自动生效</span>
+        <el-button type="primary" size="small" @click="startAddField">新增字段</el-button>
+      </div>
+      <el-table :data="fieldList" size="small" border max-height="420">
+        <el-table-column prop="field_name" label="字段名称" min-width="120" />
+        <el-table-column label="类型" width="90" align="center">
+          <template #default="{ row }">{{ fieldTypeLabel(row.field_type) }}</template>
+        </el-table-column>
+        <el-table-column label="可选项" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ (row.options && row.options.length) ? row.options.join('、') : '-' }}</template>
+        </el-table-column>
+        <el-table-column label="必填" width="60" align="center">
+          <template #default="{ row }">{{ row.required ? '是' : '否' }}</template>
+        </el-table-column>
+        <el-table-column prop="sort_order" label="排序" width="60" align="center" />
+        <el-table-column label="状态" width="70" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '停用' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="140" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" @click="startEditField(row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="removeField(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-dialog v-model="showFieldForm" :title="fieldForm.id ? '编辑字段' : '新增字段'" width="420px" append-to-body :close-on-click-modal="false">
+        <el-form :model="fieldForm" label-width="90px">
+          <el-form-item label="字段名称" required>
+            <el-input v-model="fieldForm.field_name" placeholder="如：营业执照号" maxlength="30" />
+          </el-form-item>
+          <el-form-item label="字段类型">
+            <el-select v-model="fieldForm.field_type" style="width: 100%">
+              <el-option label="单行文本" value="text" />
+              <el-option label="数字" value="number" />
+              <el-option label="日期" value="date" />
+              <el-option label="单选" value="select" />
+              <el-option label="多选" value="multiselect" />
+            </el-select>
+          </el-form-item>
+          <el-form-item
+            v-if="fieldForm.field_type === 'select' || fieldForm.field_type === 'multiselect'"
+            label="可选项" required
+          >
+            <el-input v-model="fieldForm.optionsText" type="textarea" :rows="3" placeholder="每行一个选项" />
+          </el-form-item>
+          <el-form-item label="必填">
+            <el-switch v-model="fieldForm.required" />
+          </el-form-item>
+          <el-form-item label="排序">
+            <el-input-number v-model="fieldForm.sort_order" :min="0" :max="999" />
+          </el-form-item>
+          <el-form-item v-if="fieldForm.id" label="状态">
+            <el-switch v-model="fieldForm.is_active" active-text="启用" inactive-text="停用" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="showFieldForm = false">取消</el-button>
+          <el-button type="primary" @click="saveField">确定</el-button>
+        </template>
+      </el-dialog>
     </el-dialog>
     
     <el-dialog v-model="showFollowModal" :title="`客户跟进 - ${currentCustomer?.company || currentCustomer?.name}`" width="700px" :close-on-click-modal="false" :close-on-press-escape="false">
@@ -395,10 +500,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 
 const authStore = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const customers = ref([])
 const showAddModal = ref(false)
 const formRef = ref(null)
@@ -466,7 +572,8 @@ const customerForm = reactive({
   source: '',
   owner_id: '',
   last_follow: '',
-  created_at: ''
+  created_at: '',
+  ext_data: {}
 })
 
 const rules = {
@@ -476,7 +583,103 @@ const rules = {
 }
 
 const canEditOwner = () => {
-  return authStore.role === '主任' || authStore.role === '院长'
+  return authStore.has('data.view_all')
+}
+
+// ==================== 自定义字段 ====================
+const customFields = ref([])
+const showFieldManager = ref(false)
+const showFieldForm = ref(false)
+const fieldList = ref([])
+const fieldForm = reactive({
+  id: null, field_name: '', field_type: 'text', optionsText: '',
+  required: false, sort_order: 0, is_active: true
+})
+
+const fieldTypeLabel = (t) => ({ text: '单行文本', number: '数字', date: '日期', select: '单选', multiselect: '多选' }[t] || t)
+
+const formatCustomValue = (v) => {
+  if (v === null || v === undefined || v === '') return ''
+  if (Array.isArray(v)) return v.join('、')
+  return String(v)
+}
+
+const fetchCustomFields = async () => {
+  const response = await api.get('/custom-fields', { object_type: 'customer' })
+  if (response.code === 200) customFields.value = response.data
+}
+
+const openFieldManager = async () => {
+  showFieldManager.value = true
+  const response = await api.get('/custom-fields', { object_type: 'customer', include_inactive: '1' })
+  if (response.code === 200) fieldList.value = response.data
+}
+
+const startAddField = () => {
+  Object.assign(fieldForm, { id: null, field_name: '', field_type: 'text', optionsText: '', required: false, sort_order: 0, is_active: true })
+  showFieldForm.value = true
+}
+
+const startEditField = (row) => {
+  Object.assign(fieldForm, {
+    id: row.id, field_name: row.field_name, field_type: row.field_type,
+    optionsText: (row.options || []).join('\n'), required: row.required,
+    sort_order: row.sort_order, is_active: row.is_active
+  })
+  showFieldForm.value = true
+}
+
+const saveField = async () => {
+  if (!fieldForm.field_name.trim()) {
+    ElMessage.warning('请输入字段名称')
+    return
+  }
+  const isChoice = fieldForm.field_type === 'select' || fieldForm.field_type === 'multiselect'
+  const options = isChoice ? fieldForm.optionsText.split('\n').map(s => s.trim()).filter(Boolean) : []
+  if (isChoice && !options.length) {
+    ElMessage.warning('请配置可选项（每行一个）')
+    return
+  }
+  const payload = {
+    object_type: 'customer',
+    field_name: fieldForm.field_name.trim(),
+    field_type: fieldForm.field_type,
+    required: fieldForm.required,
+    sort_order: fieldForm.sort_order,
+    is_active: fieldForm.is_active,
+    options
+  }
+  try {
+    const response = fieldForm.id
+      ? await api.put(`/custom-fields/${fieldForm.id}`, payload)
+      : await api.post('/custom-fields', payload)
+    if (response.code === 200) {
+      ElMessage.success('保存成功')
+      showFieldForm.value = false
+      openFieldManager()
+      fetchCustomFields()
+    } else {
+      ElMessage.error(response.message)
+    }
+  } catch {
+    ElMessage.error('保存失败')
+  }
+}
+
+const removeField = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确定删除字段「${row.field_name}」吗？历史数据保留但不再展示。`, '提示', { type: 'warning' })
+    const response = await api.delete(`/custom-fields/${row.id}`)
+    if (response.code === 200) {
+      ElMessage.success('删除成功')
+      openFieldManager()
+      fetchCustomFields()
+    } else {
+      ElMessage.error(response.message)
+    }
+  } catch (e) {
+    // 用户取消
+  }
 }
 
 const fetchUsers = async () => {
@@ -550,6 +753,17 @@ const saveCustomer = async () => {
 
 const editCustomer = (row) => {
   Object.assign(customerForm, row)
+  // 拷贝自定义字段，避免表单直接改行数据
+  customerForm.ext_data = { ...(row.ext_data || {}) }
+  showAddModal.value = true
+}
+
+const openAddCustomer = () => {
+  Object.assign(customerForm, {
+    id: null, name: '', phone: '', company: '', contact_name: '', email: '',
+    industry: '', region: '', address: '', level: 'B', source: '',
+    owner_id: '', last_follow: '', created_at: '', ext_data: {}
+  })
   showAddModal.value = true
 }
 
@@ -797,7 +1011,7 @@ let sourceChartInstance = null
 let regionChartInstance = null
 let funnelChartInstance = null
 
-const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
+const isAdmin = computed(() => authStore.has('data.view_all'))
 
 const fetchAnalysis = async () => {
   analysisLoading.value = true
@@ -951,8 +1165,11 @@ watch(showAnalysis, async (val) => {
 })
 
 onMounted(() => {
+  // 支持从其他页面（如AI情报中心客户画像）带关键字跳转定位客户
+  if (route.query.keyword) searchKeyword.value = String(route.query.keyword)
   fetchCustomers()
   fetchUsers()
+  fetchCustomFields()
   window.addEventListener('resize', handleAnalysisResize)
 })
 

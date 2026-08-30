@@ -8,8 +8,12 @@ export const useAuthStore = defineStore('auth', () => {
   const name = ref('')
   const role = ref('')
   const roles = ref([])
+  const permissions = ref(JSON.parse(localStorage.getItem('crm_permissions') || '[]'))
   const department = ref(localStorage.getItem('crm_department') || '')
   const isLoggedIn = ref(false)
+
+  // 权限判断：RBAC 权限点驱动
+  const has = (code) => permissions.value.includes(code)
 
   const login = async (usernameInput, password) => {
     try {
@@ -54,9 +58,11 @@ export const useAuthStore = defineStore('auth', () => {
         name.value = response.data.name
         role.value = response.data.role
         roles.value = response.data.roles
+        permissions.value = response.data.permissions || []
         department.value = response.data.department || ''
         isLoggedIn.value = true
         localStorage.setItem('crm_department', department.value)
+        localStorage.setItem('crm_permissions', JSON.stringify(permissions.value))
       }
     } catch (error) {
       logout()
@@ -85,6 +91,7 @@ export const useAuthStore = defineStore('auth', () => {
     name.value = ''
     role.value = ''
     roles.value = []
+    permissions.value = []
     department.value = ''
     isLoggedIn.value = false
 
@@ -92,6 +99,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('crm_username')
     localStorage.removeItem('crm_name')
     localStorage.removeItem('crm_role')
+    localStorage.removeItem('crm_permissions')
     localStorage.removeItem('crm_department')
   }
 
@@ -101,8 +109,10 @@ export const useAuthStore = defineStore('auth', () => {
     name,
     role,
     roles,
+    permissions,
     department,
     isLoggedIn,
+    has,
     login,
     getUserInfo,
     checkLogin,

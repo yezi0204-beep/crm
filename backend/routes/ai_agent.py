@@ -26,7 +26,7 @@ from datetime import datetime
 from flask import request, jsonify, Response
 
 from extensions import (
-    get_db, token_required, record_operation_log, update_customer_last_follow, DB_PATH,
+    get_db, token_required, record_operation_log, update_customer_last_follow, user_can, DB_PATH,
 )
 from qa_engine import (
     extract_write_intent, generate_visit_summary, generate_agent_reply,
@@ -142,7 +142,7 @@ def _match_customer(cursor, customer_name, username, role):
     if not customer_name:
         return None, 'none', []
     kw = f'%{customer_name}%'
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute(
             "SELECT id, name, company FROM customers WHERE company LIKE ? OR name LIKE ? ORDER BY id",
             (kw, kw))
@@ -240,7 +240,7 @@ def _exec_update_business(cursor, entities, username, role, text, confirm):
     if not b_id:
         if business_title:
             kw = f'%{business_title}%'
-            if role in ('主任', '院长'):
+            if user_can(username, 'data.view_all'):
                 cursor.execute("SELECT id, title FROM business WHERE title LIKE ? AND status='active'", (kw,))
             else:
                 cursor.execute("SELECT id, title FROM business WHERE owner_id=? AND title LIKE ? AND status='active'", (username, kw))
@@ -495,8 +495,7 @@ def ai_leads_evaluate():
     """
     payload = request.current_user
     data = request.get_json(silent=True) or {}
-    role = payload.get('role', '')
-    if role not in ('主任', '院长'):
+    if not user_can(payload['username'], 'data.view_all'):
         return jsonify({'code': 403, 'message': '仅主任/院长可使用线索评估', 'data': None})
 
     leads = data.get('leads', [])

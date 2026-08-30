@@ -1,7 +1,7 @@
 from flask import request, jsonify, g
 from extensions import (
     get_db, verify_token, create_token, check_password, hash_password,
-    record_operation_log, token_required, admin_required,
+    record_operation_log, token_required, admin_required, get_user_permissions,
     check_login_rate_limit, record_login_attempt, reset_login_rate_limit,
     LOGIN_ATTEMPTS, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS,
 )
@@ -135,7 +135,8 @@ def get_user_info():
             'name': payload['name'],
             'role': payload['role'],
             'roles': roles,
-            'department': department or ''
+            'department': department or '',
+            'permissions': get_user_permissions(payload['username'])
         }
     })
 

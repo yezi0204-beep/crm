@@ -28,7 +28,7 @@
 
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="quotes" stripe border class="data-table">
+        <el-table :data="quotes" stripe border class="data-table" max-height="70vh">
           <el-table-column prop="quote_no" label="报价单号" min-width="160" sortable />
           <el-table-column prop="title" label="标题" min-width="160" sortable show-overflow-tooltip />
           <el-table-column prop="customer_name" label="客户" min-width="140" show-overflow-tooltip>
@@ -233,7 +233,7 @@ import api from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
-const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
+const isAdmin = computed(() => authStore.has('data.view_all'))
 
 const quotes = ref([])
 const customers = ref([])

@@ -5,10 +5,13 @@ from datetime import datetime
 from flask import request, jsonify, send_from_directory
 from extensions import (
     get_db, verify_token, record_operation_log,
-    token_required, admin_required, UPLOAD_DIR,
+    token_required, admin_required, user_can, UPLOAD_DIR,
 )
 
 from . import contracts_bp
+
+# 合同附件允许的扩展名白名单
+CONTRACT_FILE_EXTENSIONS = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png', 'zip', 'rar'}
 
 
 @contracts_bp.route('/api/contracts', methods=['GET'])
@@ -31,7 +34,10 @@ def get_contracts():
     order_by_clause = sort_field + " " + sort_direction
 
     # 关联名：customer_name（客户公司名）、business_title（关联商机标题）
-    if role == '主任' or role == '院长':
+    # 权限：持有 data.view_all（主任/院长）或 contracts.view_all（默认含应用中心）→ 查全部；其他 → 仅自己
+    can_view_all = user_can(username, 'data.view_all') or user_can(username, 'contracts.view_all')
+
+    if can_view_all:
         if sort_field == 'pending_amt':
             cursor.execute(
                 "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title, "
@@ -80,6 +86,28 @@ def get_contracts():
     contracts = []
     for row in rows:
         contracts.append(dict(row))
+
+    # —— 关键修复：income/待验收额/验收日期 与验收管理数据源对齐 ——
+    # 不再信任 contracts.income 列（历史脏数据漏回填为 0），改为实时从
+    # contract_acceptances 表汇总（与验收管理 / 考核完全同源）
+    if contracts:
+        ids = [c['id'] for c in contracts]
+        placeholders = ','.join('?' * len(ids))
+        cursor.execute(
+            "SELECT contract_id, COALESCE(SUM(acceptance_amount), 0) as acc_sum, "
+            "MAX(acceptance_date) as acc_date "
+            f"FROM contract_acceptances WHERE contract_id IN ({placeholders}) "
+            "GROUP BY contract_id",
+            ids
+        )
+        acc_map = {r['contract_id']: (float(r['acc_sum']), r['acc_date']) for r in cursor.fetchall()}
+        for c in contracts:
+            if c['id'] in acc_map:
+                acc_sum, acc_date = acc_map[c['id']]
+                c['income'] = acc_sum
+                c['pending_acceptance_amount'] = float(c.get('total_amt') or 0) - acc_sum
+                if acc_date:
+                    c['acceptance_date'] = acc_date
 
     return jsonify({'code': 200, 'message': 'success', 'data': contracts})
 
@@ -241,7 +269,7 @@ def update_contract(contract_id):
 def update_contract_owner(contract_id):
     payload = request.current_user
 
-    if payload['role'] != '主任' and payload['role'] != '院长':
+    if not user_can(payload['username'], 'data.view_all'):
         return jsonify({'code': 403, 'message': '无权修改负责人', 'data': None})
 
     data = request.get_json(silent=True) or {}
@@ -305,7 +333,7 @@ def save_contract_commissions(contract_id):
     body: {commissions: [{username, ratio}, ...]}  ratio之和必须=100
     """
     payload = request.current_user
-    if payload['role'] != '主任' and payload['role'] != '院长':
+    if not user_can(payload['username'], 'data.view_all'):
         return jsonify({'code': 403, 'message': '无权设置分成', 'data': None})
     data = request.get_json(silent=True) or {}
     items = data.get('commissions') or []
@@ -362,6 +390,28 @@ def save_contract_commissions(contract_id):
 
 
 # ==================== 框架合同验收记录 ====================
+
+def _sync_contract_acceptance_fields(cur, contract_id):
+    """根据验收记录同步合同的 income/待验收额/验收日期，确保合同管理与验收管理数据联动。
+    收入(累计验收额) = SUM(acceptance_amount)
+    待验收合同额 = 合同额 - 累计验收额
+    验收日期 = 最近一次验收日期
+    """
+    cur.execute(
+        "SELECT COALESCE(SUM(acceptance_amount), 0), MAX(acceptance_date) "
+        "FROM contract_acceptances WHERE contract_id=?",
+        (contract_id,)
+    )
+    row = cur.fetchone()
+    acc_total = float(row[0] or 0)
+    latest_date = row[1]
+    cur.execute("SELECT COALESCE(total_amt, 0) FROM contracts WHERE id=?", (contract_id,))
+    total_amt = float(cur.fetchone()[0] or 0)
+    cur.execute(
+        "UPDATE contracts SET income=?, pending_acceptance_amount=?, acceptance_date=? WHERE id=?",
+        (acc_total, total_amt - acc_total, latest_date, contract_id)
+    )
+
 
 @contracts_bp.route('/api/contracts/<int:contract_id>/acceptances', methods=['GET'])
 @token_required
@@ -453,6 +503,8 @@ def add_acceptance(contract_id):
                 "VALUES (?, ?, ?, ?, ?)",
                 (acc_id, u, r, operator, now)
             )
+        # 联动同步：更新合同的收入/待验收额/验收日期
+        _sync_contract_acceptance_fields(cur, contract_id)
         db.commit()
         try:
             record_operation_log(operator, '新增验收', '合同管理',
@@ -471,7 +523,7 @@ def add_acceptance(contract_id):
 def delete_acceptance(acc_id):
     """删除一条验收记录（同时删除其分成）。"""
     payload = request.current_user
-    if payload['role'] != '主任' and payload['role'] != '院长':
+    if not user_can(payload['username'], 'data.view_all'):
         return jsonify({'code': 403, 'message': '无权删除验收记录', 'data': None})
     db = get_db()
     cur = db.cursor()
@@ -482,6 +534,8 @@ def delete_acceptance(acc_id):
     try:
         cur.execute("DELETE FROM acceptance_commissions WHERE acceptance_id=?", (acc_id,))
         cur.execute("DELETE FROM contract_acceptances WHERE id=?", (acc_id,))
+        # 联动同步：重新计算合同的收入/待验收额/验收日期
+        _sync_contract_acceptance_fields(cur, row['contract_id'])
         db.commit()
         try:
             record_operation_log(payload['username'], '删除验收', '合同管理',
@@ -716,8 +770,7 @@ def import_execute_contracts():
 @token_required
 def delete_contract(contract_id):
     payload = request.current_user
-    role = payload.get('role', '')
-    if role != '主任' and role != '院长':
+    if not user_can(payload['username'], 'data.view_all'):
         return jsonify({'code': 403, 'message': '权限不足，仅主任和院长可删除合同', 'data': None})
 
     db = get_db()
@@ -746,6 +799,9 @@ def upload_contract_file():
     contract_id = request.form.get('contract_id', type=int)
     file_type = request.form.get('file_type')
 
+    if file_type not in ('contract', 'tech'):
+        return jsonify({'code': 400, 'message': '无效的文件类型', 'data': None})
+
     if 'file' not in request.files:
         return jsonify({'code': 400, 'message': '请选择文件', 'data': None})
 
@@ -753,11 +809,16 @@ def upload_contract_file():
     if file.filename == '':
         return jsonify({'code': 400, 'message': '请选择文件', 'data': None})
 
+    # 扩展名白名单校验，防止上传可执行/脚本文件
+    ext = os.path.splitext(file.filename)[1].lower().lstrip('.')
+    if ext not in CONTRACT_FILE_EXTENSIONS:
+        return jsonify({'code': 400, 'message': f'不支持的文件格式（允许：{"、".join(sorted(CONTRACT_FILE_EXTENSIONS))}）', 'data': None})
+
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _, ext = os.path.splitext(file.filename)
-    filename = f"{contract_id}_{file_type}_{timestamp}{ext}"
+    # contract_id 为 int、file_type 已白名单校验、ext 已白名单校验，文件名无注入风险
+    filename = f"{contract_id}_{file_type}_{timestamp}.{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
 
     file.save(file_path)
@@ -906,6 +967,7 @@ def import_acceptances():
     fail_count = 0
     results = []
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    affected_contracts = set()  # 记录受影响的合同，用于联动同步
 
     for item in rows:
         row_data = item.get('data', item) if isinstance(item, dict) else {}
@@ -949,9 +1011,10 @@ def import_acceptances():
                 (contract_id, acc_date, acc_amt_yuan, note, username, now)
             )
             existing.add((contract_id, acc_date))
+            affected_contracts.add(contract_id)
 
             # 2) 可选：更新合同级字段（税额/业务方向）。
-            # 收入即验收金额，已记录在 contract_acceptances，不再单独存 contracts.income
+            # 收入/待验收额/验收日期由下方 _sync_contract_acceptance_fields 自动联动
             contract_updates = {}
             for field, parser in [
                 ('tax_amount', _parse_amt),
@@ -971,6 +1034,13 @@ def import_acceptances():
         except Exception as e:
             fail_count += 1
             results.append({'row_index': row_index, 'success': False, 'message': str(e)})
+
+    # 联动同步：更新所有受影响合同的收入/待验收额/验收日期
+    for cid in affected_contracts:
+        try:
+            _sync_contract_acceptance_fields(cursor, cid)
+        except Exception:
+            pass
 
     db.commit()
     if success_count > 0:

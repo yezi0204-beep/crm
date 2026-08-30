@@ -5,7 +5,7 @@
       <div class="toolbar">
         <div class="toolbar-left">
           <span class="toolbar-title">📊 业绩报表与业务洞察</span>
-          <el-tag type="info" size="small">{{ authStore.role === '主任' || authStore.role === '院长' ? '全局视角' : '个人视角' }}</el-tag>
+          <el-tag type="info" size="small">{{ authStore.has('data.view_all') ? '全局视角' : '个人视角' }}</el-tag>
         </div>
         <div class="toolbar-right">
           <span class="year-label">年份：</span>
@@ -343,7 +343,7 @@ import api from '../api'
 import * as echarts from 'echarts'
 
 const authStore = useAuthStore()
-const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
+const isAdmin = computed(() => authStore.has('data.view_all'))
 
 // 金额格式化：元 → 万元，精确到分需保留4位小数（0.0001万元 = 0.01元）
 const formatAmount = (value) => {

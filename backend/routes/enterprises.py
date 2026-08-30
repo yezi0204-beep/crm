@@ -1,5 +1,5 @@
 from flask import request, jsonify
-from extensions import get_db, record_operation_log, token_required
+from extensions import get_db, record_operation_log, token_required, user_can
 from datetime import datetime
 
 from . import enterprises_bp
@@ -22,7 +22,7 @@ def get_enterprises():
     conditions = []
     params = []
 
-    if role not in ('主任', '院长'):
+    if not user_can(payload['username'], 'data.view_all'):
         conditions.append("e.owner_id = ?")
         params.append(payload['username'])
 

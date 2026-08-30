@@ -1,5 +1,5 @@
 from flask import request, jsonify
-from extensions import get_db, record_operation_log, token_required
+from extensions import get_db, record_operation_log, token_required, user_can
 from datetime import datetime
 
 from . import quotes_bp
@@ -26,7 +26,7 @@ def get_quotes():
     conditions = []
     params = []
 
-    if role not in ('主任', '院长'):
+    if not user_can(username, 'data.view_all'):
         conditions.append("q.owner_id = ?")
         params.append(username)
 
@@ -72,7 +72,7 @@ def get_quote_detail(quote_id):
     db = get_db()
     cursor = db.cursor()
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT q.*, c.company as customer_name, c.name as customer_contact,
                    b.title as business_title, u.name as owner_name
@@ -192,7 +192,7 @@ def update_quote(quote_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '报价单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     # 已终态状态不允许编辑内容
@@ -202,7 +202,7 @@ def update_quote(quote_id):
     items = data.get('items') or []
     total_amount = _calc_total(items)
 
-    can_change_owner = role in ('主任', '院长')
+    can_change_owner = user_can(username, 'data.view_all')
     try:
         if can_change_owner and 'owner_id' in data:
             cursor.execute("""
@@ -261,7 +261,7 @@ def update_quote_status(quote_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '报价单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     new_status = (data.get('status') or '').lower()
@@ -293,7 +293,7 @@ def delete_quote(quote_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '报价单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     try:

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from extensions import (
     get_db, verify_token, token_required, admin_required,
-    record_operation_log, hash_password,
+    record_operation_log, hash_password, user_can,
 )
 
 from . import system_bp
@@ -260,7 +260,7 @@ def delete_user(username):
 def get_operation_logs():
     payload = request.current_user
     role = payload.get('role', '')
-    if role != '主任':
+    if not user_can(payload['username'], 'system.logs'):
         return jsonify({'code': 403, 'message': '权限不足，仅主任可查看操作日志', 'data': None})
 
     db = get_db()
@@ -308,7 +308,7 @@ def get_operation_logs():
 def get_unread_log_count():
     payload = request.current_user
     role = payload.get('role', '')
-    if role != '主任':
+    if not user_can(payload['username'], 'system.logs'):
         return jsonify({'code': 200, 'message': 'success', 'data': {'unread_count': 0}})
 
     db = get_db()
@@ -324,7 +324,7 @@ def get_unread_log_count():
 def mark_logs_read():
     payload = request.current_user
     role = payload.get('role', '')
-    if role != '主任':
+    if not user_can(payload['username'], 'system.logs'):
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     db = get_db()
@@ -358,7 +358,7 @@ def get_alerts():
     this_month = datetime.now().strftime('%Y-%m')
     next_month = (datetime.now() + timedelta(days=32)).strftime('%Y-%m')
 
-    if role == '主任' or role == '院长':
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT c.id, c.contract_name, c.expected_income_date, c.total_amt, c.paid_amt, c.owner_id, u.name as owner_name
             FROM contracts c

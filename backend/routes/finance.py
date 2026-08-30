@@ -2,7 +2,7 @@ from io import BytesIO
 from datetime import datetime
 from flask import request, jsonify
 
-from extensions import get_db, record_operation_log, token_required
+from extensions import get_db, record_operation_log, token_required, user_can
 
 from . import finance_bp
 
@@ -52,7 +52,7 @@ def get_payment_records():
             ORDER BY pr.payment_date DESC
         """, (contract_id,))
     else:
-        if role == '主任' or role == '院长':
+        if user_can(username, 'data.view_all'):
             cursor.execute("""
                 SELECT pr.*, c.contract_name, c.contract_no, c.party_a, u.name as owner_name
                 FROM payment_records pr
@@ -150,8 +150,7 @@ def update_payment_record(record_id):
 @token_required
 def delete_payment_record(record_id):
     payload = request.current_user
-    role = payload.get('role', '')
-    if role != '主任' and role != '院长':
+    if not user_can(payload['username'], 'data.view_all'):
         return jsonify({'code': 403, 'message': '权限不足，仅主任和院长可删除回款记录', 'data': None})
 
     db = get_db()

@@ -34,7 +34,7 @@
 
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="products" stripe border class="data-table">
+        <el-table :data="products" stripe border class="data-table" max-height="70vh">
           <el-table-column prop="name" label="产品名称" min-width="140" sortable show-overflow-tooltip />
           <el-table-column prop="model" label="型号" min-width="120" sortable show-overflow-tooltip />
           <el-table-column prop="category" label="分类" min-width="100" sortable />
@@ -219,7 +219,7 @@ const inventoryHistory = ref([])
 const showWarningsModal = ref(false)
 const warningList = ref([])
 
-const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
+const isAdmin = computed(() => authStore.has('data.view_all'))
 
 const categoryOptions = ref(['硬件', '软件', '服务', '耗材', '其它'])
 

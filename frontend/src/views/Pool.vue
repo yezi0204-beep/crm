@@ -28,7 +28,7 @@
     
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="filteredPoolData" stripe border @selection-change="handleSelectionChange" class="data-table">
+        <el-table :data="filteredPoolData" stripe border @selection-change="handleSelectionChange" class="data-table" max-height="70vh">
           <el-table-column type="selection" width="55" />
           <el-table-column prop="name" label="联系人" min-width="100" sortable />
           <el-table-column prop="phone" label="手机号" min-width="120" sortable />

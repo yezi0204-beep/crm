@@ -3,13 +3,16 @@ from functools import wraps
 import sqlite3
 import bcrypt
 import os
+import secrets
 import uuid
 import time
 import threading
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-SECRET_KEY = os.environ.get('SECRET_KEY', "crm_secret_key_2026")
+# 优先取环境变量；未设置时使用进程内随机密钥（认证基于 DB token，不依赖此值，
+# 因此重启失效不影响登录态）。切勿再回退到硬编码值。
+SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.environ.get('DB_PATH', os.path.join(BASE_DIR, "crm_app.db"))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(BASE_DIR, "uploads", "contracts"))
@@ -85,6 +88,8 @@ def _init_tables(db):
     _init_monthly_targets_table(cursor)
     _init_visits_table(cursor)
     _init_user_roles_table(cursor)
+    _init_rbac_tables(cursor)
+    _init_custom_fields_table(cursor)
     _init_knowledge_base_table(cursor)
     _init_knowledge_extension_tables(cursor)
     _init_lead_tables(cursor)
@@ -757,6 +762,345 @@ def _seed_lead_sources(cursor):
     except Exception:
         pass
 
+    # ========== Phase1: 关键词管理 + 原始情报库 + 采集器插件 ==========
+    _init_intelligence_tables(cursor)
+
+
+def _init_intelligence_tables(cursor):
+    """Phase1: 关键词管理 + 原始情报库 + 数据源扩展。"""
+    # lead_sources 扩展：采集器插件类型
+    try:
+        cursor.execute("ALTER TABLE lead_sources ADD COLUMN parser_type TEXT")
+    except:
+        pass
+
+    # 关键词分组（三级分类：民品/军品 → 业务领域 → 具体关键词）
+    try:
+        cursor.execute("""
+            CREATE TABLE keyword_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                parent_id INTEGER,
+                level INTEGER DEFAULT 1,
+                sort_order INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+
+    # 关键词（主词 + 同义词 + 关联词 + 排除词 + 业务标签）
+    try:
+        cursor.execute("""
+            CREATE TABLE keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER,
+                keyword TEXT NOT NULL,
+                synonyms TEXT,
+                related TEXT,
+                exclude_words TEXT,
+                business_tag TEXT,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (group_id) REFERENCES keyword_groups(id)
+            )
+        """)
+    except:
+        pass
+
+    # 原始情报库（统一采集池，所有数据源的原始数据都进这里）
+    try:
+        cursor.execute("""
+            CREATE TABLE raw_intelligence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id INTEGER,
+                url TEXT,
+                url_hash TEXT,
+                title TEXT,
+                content TEXT,
+                publish_date TEXT,
+                collected_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                content_hash TEXT,
+                attachment_path TEXT,
+                status TEXT DEFAULT 'pending',
+                error_message TEXT,
+                FOREIGN KEY (source_id) REFERENCES lead_sources(id)
+            )
+        """)
+    except:
+        pass
+    # Phase2: raw_intelligence 新增 snippet 字段（摘要）
+    try:
+        cursor.execute("ALTER TABLE raw_intelligence ADD COLUMN snippet TEXT")
+    except:
+        pass
+    # raw_intelligence 新增 keywords_matched 字段（命中的业务关键词，与关键词管理联动）
+    try:
+        cursor.execute("ALTER TABLE raw_intelligence ADD COLUMN keywords_matched TEXT")
+    except:
+        pass
+    # raw_intelligence 索引：URL Hash 去重
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_raw_intel_url_hash ON raw_intelligence(url_hash)")
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_raw_intel_status ON raw_intelligence(status)")
+    except:
+        pass
+
+    # 预置关键词分组（民品/军品 → 业务领域）
+    _seed_keyword_groups(cursor)
+
+    # 新增 procurement 类型的采购网站数据源
+    _seed_procurement_sources(cursor)
+
+    # Phase3: AI商机识别结果表
+    try:
+        cursor.execute("""
+            CREATE TABLE intelligence_leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                raw_intelligence_id INTEGER,
+                source_id INTEGER,
+                title TEXT,
+                buyer TEXT,
+                budget TEXT,
+                deadline TEXT,
+                project_type TEXT,
+                procurement_method TEXT,
+                region TEXT,
+                contact_person TEXT,
+                contact_phone TEXT,
+                competitors TEXT,
+                keywords_matched TEXT,
+                score INTEGER DEFAULT 0,
+                score_reason TEXT,
+                is_relevant INTEGER DEFAULT 1,
+                analysis_summary TEXT,
+                status TEXT DEFAULT 'analyzed',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (raw_intelligence_id) REFERENCES raw_intelligence(id)
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN reject_reason TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_intel_leads_score ON intelligence_leads(score DESC)")
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_intel_leads_status ON intelligence_leads(status)")
+    except:
+        pass
+    # Phase4: 转入CRM后的关联线索ID
+    try:
+        cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN converted_lead_id INTEGER")
+    except:
+        pass
+
+    # Phase5: AI日报存储表
+    try:
+        cursor.execute("""
+            CREATE TABLE ai_daily_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL,
+                title TEXT,
+                summary TEXT,
+                metrics TEXT,
+                opportunities TEXT,
+                recommendations TEXT,
+                generated_by TEXT DEFAULT 'manual',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_report_date ON ai_daily_reports(report_date)")
+    except:
+        pass
+
+    # Phase8: 客户画像表
+    try:
+        cursor.execute("""
+            CREATE TABLE customer_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                buyer TEXT NOT NULL UNIQUE,
+                industry TEXT,
+                region TEXT,
+                total_procurements INTEGER DEFAULT 0,
+                total_budget REAL DEFAULT 0,
+                avg_budget REAL DEFAULT 0,
+                procurement_methods TEXT,
+                competitors TEXT,
+                project_types TEXT,
+                latest_date TEXT,
+                avg_score REAL DEFAULT 0,
+                max_score INTEGER DEFAULT 0,
+                timeline TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+
+    # Phase8: 竞争对手画像表
+    try:
+        cursor.execute("""
+            CREATE TABLE competitor_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                appearance_count INTEGER DEFAULT 0,
+                customer_list TEXT,
+                project_types TEXT,
+                regions TEXT,
+                advantage_areas TEXT,
+                win_count INTEGER DEFAULT 0,
+                first_seen TEXT,
+                last_seen TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+
+    # Phase8: 销售提醒表
+    try:
+        cursor.execute("""
+            CREATE TABLE sales_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_type TEXT NOT NULL,
+                title TEXT,
+                detail TEXT,
+                priority TEXT DEFAULT 'normal',
+                related_id INTEGER,
+                related_type TEXT,
+                status TEXT DEFAULT 'unread',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                read_at TEXT
+            )
+        """)
+    except:
+        pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_status ON sales_alerts(status)")
+    except:
+        pass
+
+
+def _seed_keyword_groups(cursor):
+    """预置关键词三级分类。"""
+    groups = [
+        # Level 1: 民品/军品
+        (1, '民品', None, 1, 1),
+        (2, '军品', None, 1, 2),
+        # Level 2: 民品业务领域
+        (3, '遥感', 1, 2, 1),
+        (4, '监测', 1, 2, 2),
+        (5, '农业信息化', 1, 2, 3),
+        (6, '林业', 1, 2, 4),
+        (7, '自然资源', 1, 2, 5),
+        (8, '国土空间规划', 1, 2, 6),
+        (9, '水利', 1, 2, 7),
+        (10, '生态环境', 1, 2, 8),
+        (11, '信息化', 1, 2, 9),
+        (12, '软件开发', 1, 2, 10),
+        (13, '智能体', 1, 2, 11),
+        (14, 'AI', 1, 2, 12),
+        (15, '大数据', 1, 2, 13),
+        (16, '智慧农业', 1, 2, 14),
+        (17, '智慧渔业', 1, 2, 15),
+        (18, '鱼情', 1, 2, 16),
+        (19, '无人机', 1, 2, 17),
+        (20, 'GIS', 1, 2, 18),
+        (21, '数字孪生', 1, 2, 19),
+        # Level 2: 军品业务领域
+        (22, '信息化', 2, 2, 1),
+        (23, '软件开发', 2, 2, 2),
+        (24, '智能体', 2, 2, 3),
+        (25, 'AI', 2, 2, 4),
+        (26, '模拟训练/模训', 2, 2, 5),
+        (27, '装备', 2, 2, 6),
+        (28, '健康', 2, 2, 7),
+        (29, '管理', 2, 2, 8),
+        (30, '指挥控制/指控', 2, 2, 9),
+        (31, '情报', 2, 2, 10),
+        (32, '雷达', 2, 2, 11),
+        (33, '大数据', 2, 2, 12),
+        (34, '仿真', 2, 2, 13),
+        (35, '无人机', 2, 2, 14),
+        (36, '反无人机', 2, 2, 15),
+    ]
+    for gid, name, parent, level, sort in groups:
+        try:
+            cursor.execute("INSERT OR IGNORE INTO keyword_groups (id, name, parent_id, level, sort_order) VALUES (?, ?, ?, ?, ?)",
+                           (gid, name, parent, level, sort))
+        except:
+            pass
+
+    # 预置部分关键词（示例，用户可通过界面管理）
+    seed_keywords = [
+        # 民品-遥感
+        (3, '遥感', '遥感监测,遥感数据,遥感影像,卫星遥感', '遥感卫星,遥感数据,遥感影像', '百科,词典', '遥感'),
+        (3, '遥感数据', '遥感影像,卫星数据,遥感监测', '遥感,卫星', '', '遥感'),
+        # 民品-智慧农业
+        (16, '智慧农业', '数字农业,精准农业,农业信息化', '农业,物联网,大数据', '', '智慧农业'),
+        # 民品-无人机
+        (19, '无人机', '无人机系统,UAV,航拍,植保无人机', '无人机,飞行器,航测', '玩具,模型', '无人机'),
+        # 民品-GIS
+        (20, 'GIS', '地理信息系统,WebGIS,空间分析', '地图,地理,空间数据', '', 'GIS'),
+        # 民品-数字孪生
+        (21, '数字孪生', 'Digital Twin,数字孪生城市,数字孪生流域', '仿真,虚拟,BIM', '', '数字孪生'),
+        # 军品-雷达
+        (32, '雷达', '相控阵雷达,合成孔径雷达,雷达系统,毫米波雷达,机载雷达', '雷达探测,雷达系统', '百科,天气雷达', '雷达'),
+        # 军品-仿真
+        (34, '仿真', '半实物仿真,虚拟仿真,作战仿真,仿真系统,仿真平台', '模拟,仿真测试', '', '仿真'),
+        # 军品-模拟训练
+        (26, '模拟训练', '模拟器,训练模拟器,虚拟训练,模拟训练,驾驶模拟器', '仿真,训练', '游戏模拟器,安卓模拟器', '模拟训练'),
+        # 军品-装备
+        (27, '装备', '武器装备,军用装备,装备采购,装备保障', '装备,军用,国防', '', '装备'),
+    ]
+    for gid, kw, syn, rel, excl, tag in seed_keywords:
+        try:
+            cursor.execute("INSERT OR IGNORE INTO keywords (group_id, keyword, synonyms, related, exclude_words, business_tag) VALUES (?, ?, ?, ?, ?, ?)",
+                           (gid, kw, syn, rel, excl, tag))
+        except:
+            pass
+
+
+def _seed_procurement_sources(cursor):
+    """预置 procurement 类型的采购网站数据源。"""
+    from datetime import datetime
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    sources = [
+        ('中国政府采购网-地方公告', 'procurement',
+         'http://www.ccgp.gov.cn/cggg/dfgg/',
+         '{"max_items": 20}',
+         '遥感,仿真,雷达,智能体,软件,设备,系统,信息化,无人机',
+         '信息技术', '全国', 1, 12, '招投标监控'),
+        ('中国政府采购网-中央公告', 'procurement',
+         'http://www.ccgp.gov.cn/cggg/zygg/',
+         '{"max_items": 20}',
+         '遥感,仿真,雷达,智能体,软件,设备,系统,信息化,无人机',
+         '信息技术', '全国', 1, 12, '招投标监控'),
+    ]
+    for name, stype, url, config, keywords, industry, region, enabled, interval, category in sources:
+        try:
+            cursor.execute("SELECT id FROM lead_sources WHERE name=?", (name,))
+            if cursor.fetchone():
+                continue
+            cursor.execute("""
+                INSERT INTO lead_sources (name, source_type, url, config, keywords, industry,
+                                          region, enabled, interval_hours, last_scraped_at, created_at, category)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            """, (name, stype, url, config, keywords, industry, region, enabled, interval, now, category))
+        except:
+            pass
+
 
 def _init_user_roles_table(cursor):
     try:
@@ -792,6 +1136,150 @@ def _init_user_roles_table(cursor):
         pass
 
 
+# ============================================================
+# RBAC 表驱动权限
+# 权限判定主体：users.role（主角色）+ user_roles.role（多角色）
+#             + 'dept:{部门}' 部门伪角色（如 dept:应用中心）
+# 权限映射存 role_permissions 表，管理员改表后立即生效（无需重启）。
+# ============================================================
+
+# 权限点定义：code → 中文名
+_RBAC_PERMISSIONS = [
+    ('data.view_all',    '查看全部业务数据（不受负责人过滤）'),
+    ('system.admin',     '系统管理（用户管理等管理类接口）'),
+    ('system.logs',      '操作日志'),
+    ('cockpit.view',     'AI驾驶舱'),
+    ('intel.view',       '情报与线索'),
+    ('intel.leads',      'AI商机识别'),
+    ('intel.import',     '智能线索导入CRM'),
+    ('intel.profile',    '客户画像'),
+    ('intel.competitor', '竞争对手分析'),
+    ('intel.report',     'AI日报'),
+    ('intel.keywords',   '关键词管理'),
+    ('leads.view_all',   '线索库全局可见'),
+    ('contracts.view_all', '合同全部可见（含应用中心只读）'),
+    ('appraisal.view',   '月度考核查看'),
+]
+
+# 角色 → 权限点默认映射（seed，INSERT OR IGNORE 幂等）
+_RBAC_ROLE_PERMISSIONS = {
+    '主任': [p[0] for p in _RBAC_PERMISSIONS],
+    '院长': [p[0] for p in _RBAC_PERMISSIONS if p[0] != 'system.logs'],
+    '人力': ['appraisal.view'],
+    'dept:应用中心': ['intel.view', 'intel.leads', 'intel.import', 'leads.view_all', 'contracts.view_all'],
+}
+
+
+def _init_rbac_tables(cursor):
+    """建 permissions / role_permissions 表并 seed 默认角色-权限映射。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS permissions (
+                code TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )
+        """)
+    except Exception as e:
+        print(f"[init_rbac] 建表 permissions 失败: {e}")
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS role_permissions (
+                role_code TEXT NOT NULL,
+                permission_code TEXT NOT NULL,
+                UNIQUE(role_code, permission_code)
+            )
+        """)
+    except Exception as e:
+        print(f"[init_rbac] 建表 role_permissions 失败: {e}")
+    try:
+        for code, name in _RBAC_PERMISSIONS:
+            cursor.execute("INSERT OR IGNORE INTO permissions (code, name) VALUES (?, ?)", (code, name))
+        for role_code, perms in _RBAC_ROLE_PERMISSIONS.items():
+            for perm in perms:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO role_permissions (role_code, permission_code) VALUES (?, ?)",
+                    (role_code, perm))
+    except Exception as e:
+        print(f"[init_rbac] seed 默认权限映射失败: {e}")
+
+
+def _init_custom_fields_table(cursor):
+    """自定义字段：元数据表 + customers/business 的 ext_data JSON 扩展列。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS custom_fields (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                object_type TEXT NOT NULL,
+                field_key TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                field_type TEXT NOT NULL DEFAULT 'text',
+                options TEXT,
+                required INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(object_type, field_key)
+            )
+        """)
+    except Exception as e:
+        print(f"[init_custom_fields] 建 custom_fields 表失败: {e}")
+    for table in ('customers', 'business'):
+        try:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN ext_data TEXT")
+        except Exception:
+            pass  # 列已存在
+
+
+def get_user_permissions(username):
+    """查询用户全部权限点（主角色 + user_roles 多角色 + 部门伪角色并集）。
+
+    请求上下文内通过 g 缓存，每请求最多查询一次数据库。
+    """
+    from flask import has_request_context
+    if has_request_context():
+        cached = getattr(g, '_rbac_perms', None)
+        if cached is not None:
+            return cached
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("SELECT role FROM user_roles WHERE username = ?", (username,))
+    roles = {r['role'] for r in cursor.fetchall()}
+    cursor.execute("SELECT role, department FROM users WHERE username = ?", (username,))
+    u = cursor.fetchone()
+    if u:
+        if u['role']:
+            roles.add(u['role'])
+        if u['department']:
+            roles.add(f"dept:{u['department']}")
+    perms = set()
+    for role in roles:
+        cursor.execute("SELECT permission_code FROM role_permissions WHERE role_code = ?", (role,))
+        perms.update(r['permission_code'] for r in cursor.fetchall())
+    perms = sorted(perms)
+    if has_request_context():
+        g._rbac_perms = perms
+    return perms
+
+
+def user_can(username, permission_code):
+    """判断用户是否拥有指定权限点。"""
+    return permission_code in get_user_permissions(username)
+
+
+def require_permission(permission_code):
+    """RBAC 权限装饰器：当前用户须持有指定权限点，否则 403。"""
+    def decorator(f):
+        @wraps(f)
+        @token_required
+        def decorated(*args, **kwargs):
+            payload = request.current_user
+            if not user_can(payload['username'], permission_code):
+                return jsonify({'code': 403, 'message': '权限不足', 'data': None})
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+
+
 def _init_business_table(cursor):
     try:
         cursor.execute("ALTER TABLE business ADD COLUMN address TEXT")
@@ -815,6 +1303,10 @@ def _init_business_table(cursor):
         pass
     try:
         cursor.execute("ALTER TABLE business ADD COLUMN note TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE business ADD COLUMN reject_reason TEXT")
     except:
         pass
     try:
@@ -1530,24 +2022,37 @@ def token_required(f):
 
 
 def admin_required(f):
+    """管理类接口权限：等价于权限点 system.admin（默认授予 主任/院长，可改 role_permissions 表调整）。"""
     @wraps(f)
     @token_required
     def decorated(*args, **kwargs):
         payload = request.current_user
-        if payload['role'] not in ('主任', '院长'):
+        if not user_can(payload['username'], 'system.admin'):
             return jsonify({'code': 403, 'message': '权限不足', 'data': None})
         return f(*args, **kwargs)
     return decorated
 
 
 def appraisal_viewer_required(f):
-    """月度考核查看权限：主任/院长/人力。人力只能查看总览，不能配置/导出。"""
+    """月度考核查看权限：权限点 appraisal.view（默认 主任/院长/人力）。人力只能查看总览，不能配置/导出。"""
     @wraps(f)
     @token_required
     def decorated(*args, **kwargs):
         payload = request.current_user
-        if payload['role'] not in ('主任', '院长', '人力'):
+        if not user_can(payload['username'], 'appraisal.view'):
             return jsonify({'code': 403, 'message': '权限不足', 'data': None})
+        return f(*args, **kwargs)
+    return decorated
+
+
+def app_center_or_admin_required(f):
+    """智能线索导入权限：权限点 intel.import（默认授予 主任/院长 及应用中心部门成员）。"""
+    @wraps(f)
+    @token_required
+    def decorated(*args, **kwargs):
+        payload = request.current_user
+        if not user_can(payload['username'], 'intel.import'):
+            return jsonify({'code': 403, 'message': '权限不足，仅应用中心成员可操作', 'data': None})
         return f(*args, **kwargs)
     return decorated
 

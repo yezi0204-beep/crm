@@ -51,7 +51,7 @@
 
         <div class="table-container">
           <div class="table-wrapper">
-            <el-table :data="tickets" stripe border class="data-table">
+            <el-table :data="tickets" stripe border class="data-table" max-height="70vh">
               <el-table-column prop="ticket_no" label="工单号" min-width="150" sortable />
               <el-table-column prop="title" label="标题" min-width="180" sortable show-overflow-tooltip />
               <el-table-column label="类型" width="100">
@@ -129,7 +129,7 @@
 
         <div class="table-container">
           <div class="table-wrapper">
-            <el-table :data="surveyStats.surveys || []" stripe border class="data-table">
+            <el-table :data="surveyStats.surveys || []" stripe border class="data-table" max-height="70vh">
               <el-table-column prop="ticket_no" label="工单号" min-width="150" />
               <el-table-column prop="title" label="工单标题" min-width="160" show-overflow-tooltip />
               <el-table-column label="类型" width="90">

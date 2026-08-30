@@ -10,6 +10,9 @@ system_bp = Blueprint('system', __name__)
 misc_bp = Blueprint('misc', __name__)
 visits_bp = Blueprint('visits', __name__)
 reports_bp = Blueprint('reports', __name__)
+erp_bp = Blueprint('erp', __name__)
+custom_fields_bp = Blueprint('custom_fields', __name__)
+work_summary_bp = Blueprint('work_summary', __name__)
 ai_agent_bp = Blueprint('ai_agent', __name__)
 knowledge_bp = Blueprint('knowledge', __name__)
 knowledge_ext_bp = Blueprint('knowledge_ext', __name__)
@@ -23,6 +26,14 @@ marketing_bp = Blueprint('marketing', __name__)
 tickets_bp = Blueprint('tickets', __name__)
 security_bp = Blueprint('security', __name__)
 
+# Phase1: 关键词管理 + 原始情报
+keywords_bp = Blueprint('keywords', __name__)
+intelligence_bp = Blueprint('intelligence', __name__)
+
+# Phase6: AI驾驶舱
+cockpit_bp = Blueprint('cockpit', __name__)
+
+
 def register_blueprints(app):
     from .auth import register_routes as register_auth
     from .customers import register_routes as register_customers
@@ -34,6 +45,9 @@ def register_blueprints(app):
     from .misc import register_routes as register_misc
     from .visits import register_routes as register_visits
     from .reports import register_routes as register_reports
+    from .erp import register_routes as register_erp
+    from .custom_fields import register_routes as register_custom_fields
+    from .work_summary import register_routes as register_work_summary
     from .ai_agent import register_routes as register_ai_agent
     from .knowledge import register_routes as register_knowledge
     from .knowledge_ext import register_routes as register_knowledge_ext
@@ -46,6 +60,9 @@ def register_blueprints(app):
     from .marketing import register_routes as register_marketing
     from .tickets import register_routes as register_tickets
     from .security_api import register_routes as register_security_api
+    from .keywords import register_routes as register_keywords
+    from .intelligence import register_routes as register_intelligence
+    from .cockpit import register_routes as register_cockpit
 
     register_auth(app)
     register_customers(app)
@@ -57,6 +74,9 @@ def register_blueprints(app):
     register_misc(app)
     register_visits(app)
     register_reports(app)
+    register_erp(app)
+    register_custom_fields(app)
+    register_work_summary(app)
     register_ai_agent(app)
     register_knowledge(app)
     register_knowledge_ext(app)
@@ -69,6 +89,9 @@ def register_blueprints(app):
     register_marketing(app)
     register_tickets(app)
     register_security_api(app)
+    register_keywords(app)
+    register_intelligence(app)
+    register_cockpit(app)
 
     from .smart_import import smart_import_bp
     app.register_blueprint(smart_import_bp)

@@ -3,7 +3,7 @@
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">📡 智能线索管理</h2>
-        <p class="page-desc">六大能力域（招投标监控/军采监控/电商商机/企业客源/竞品情报/舆情痛点）多渠道自动抓取 → AI 评估意向 → 精准分配销售</p>
+        <p class="page-desc">线索统一链路：采集/人工导入 → 原始情报库 → AI商机识别 → 转入CRM → 分配销售。人工导入的数据在"原始情报"标签页中查看</p>
       </div>
       <div class="header-right">
         <el-button @click="fetchData" :loading="loading"><span>🔄</span><span>刷新</span></el-button>
@@ -74,21 +74,24 @@
             <el-option label="已分配" value="imported" />
           </el-select>
           <el-select v-model="filterSource" placeholder="全部来源" clearable @change="fetchLeads" style="width:180px">
+            <el-option label="🤖 AI商机识别" value="__ai__" />
             <el-option v-for="s in sources" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
           <el-input v-model="keyword" placeholder="搜索商机名称/公司/联系人/备注..." clearable @clear="fetchLeads" @keyup.enter="fetchLeads" style="width:280px">
             <template #append><el-button @click="fetchLeads">搜索</el-button></template>
           </el-input>
           <div class="action-group">
-            <el-button type="warning" @click="handleBatchEvaluate" :loading="evaluating" :disabled="!pendingCount">
+            <el-button v-if="isDirector" type="warning" @click="handleBatchEvaluate" :loading="evaluating" :disabled="!pendingCount">
               <span>🧠</span><span>批量AI评估</span>
             </el-button>
-            <el-button @click="scrapeAll" :loading="scraping"><span>🌐</span><span>抓取全部源</span></el-button>
-            <el-button @click="handleCleanup" type="info" plain><span>🧹</span><span>清理过期</span></el-button>
+            <el-button type="success" v-if="isDirector" @click="openBatchAssignDialog" :disabled="!unassignedCount">
+              <span>🧰</span><span>批量分配</span>
+            </el-button>
+            <el-button v-if="isDirector" @click="handleCleanup" type="info" plain><span>🧹</span><span>清理过期</span></el-button>
           </div>
         </div>
 
-        <el-table :data="leads" v-loading="loading" stripe class="leads-table">
+        <el-table :data="leads" v-loading="loading" stripe class="leads-table" max-height="70vh">
           <el-table-column type="index" label="#" width="50" />
           <el-table-column label="能力域" width="110">
             <template #default="{ row }">
@@ -170,9 +173,9 @@
           </el-table-column>
           <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
-              <el-button text size="small" @click="handleEvaluate(row)" v-if="row.status === 'pending'">评估</el-button>
-              <el-button text size="small" type="primary" @click="openAssignDialog(row)" v-if="row.status === 'evaluated'">分配</el-button>
-              <el-button text size="small" type="danger" @click="handleReject(row)" v-if="['pending','evaluated'].includes(row.status)">拒绝</el-button>
+              <el-button text size="small" @click="handleEvaluate(row)" v-if="isDirector && row.status === 'pending'">评估</el-button>
+              <el-button text size="small" type="primary" @click="openAssignDialog(row)" v-if="isDirector && row.status === 'evaluated'">分配</el-button>
+              <el-button text size="small" type="danger" @click="handleReject(row)" v-if="isDirector && ['pending','evaluated'].includes(row.status)">拒绝</el-button>
               <el-button text size="small" @click="openDetail(row)">详情</el-button>
             </template>
           </el-table-column>
@@ -187,12 +190,15 @@
 
       <!-- ==================== 线索源管理 ==================== -->
       <el-tab-pane label="线索源管理" name="sources">
+        <el-alert type="info" :closable="false" style="margin-bottom:12px"
+                  title="网络抓取已统一至「AI情报中心 → 原始情报库」"
+                  description="采集内容会按业务关键词自动过滤后存入原始情报库，经 AI 商机识别分析后可转入本页线索队列进行分配，避免重复抓取。本页用于维护线索源的增删改与启停。" />
         <div class="filter-bar">
-          <div class="source-tip">配置多渠道线索源，系统按「抓取间隔」自动抓取；也可手动触发单个源抓取</div>
-          <el-button type="primary" @click="openSourceDialog()"><span>✚</span><span>新增线索源</span></el-button>
+          <div class="source-tip">配置多渠道线索源，系统按「抓取间隔」定时采集并自动入库；抓取动作请在「AI情报中心 → 原始情报库」执行</div>
+          <el-button v-if="isDirector" type="primary" @click="openSourceDialog()"><span>✚</span><span>新增线索源</span></el-button>
         </div>
 
-        <el-table :data="sources" v-loading="loadingSources" stripe>
+        <el-table :data="sources" v-loading="loadingSources" stripe max-height="70vh">
           <el-table-column label="名称" min-width="160">
             <template #default="{ row }"><span class="src-name">{{ row.name }}</span></template>
           </el-table-column>
@@ -236,11 +242,10 @@
           <el-table-column label="上次抓取" width="150">
             <template #default="{ row }">{{ formatDate(row.last_scraped_at) || '从未' }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="240" fixed="right">
+          <el-table-column label="操作" width="160" fixed="right">
             <template #default="{ row }">
-              <el-button text size="small" type="success" @click="scrapeOne(row)" :loading="row._scraping">抓取</el-button>
-              <el-button text size="small" @click="openSourceDialog(row)">编辑</el-button>
-              <el-button text size="small" type="danger" @click="deleteSource(row)">删除</el-button>
+              <el-button v-if="isDirector" text size="small" @click="openSourceDialog(row)">编辑</el-button>
+              <el-button v-if="isDirector" text size="small" type="danger" @click="deleteSource(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -279,6 +284,168 @@
         <el-button @click="assignVisible = false">取消</el-button>
         <el-button type="primary" @click="handleAssign" :loading="assigning">确认分配</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 批量分配对话框（主任/院长专用） -->
+    <el-dialog v-model="batchAssignVisible" title="批量分配线索（主任确认后执行）" width="1120px" top="6vh"
+               :close-on-click-modal="false" :close-on-press-escape="false">
+      <!-- 顶部控制区 -->
+      <div class="batch-toolbar">
+        <div class="bt-left">
+          <el-select v-model="selectedSalesUsernames" multiple collapse-tags collapse-tags-tooltip
+                     collapse-tags-tooltip-offset="0"
+                     placeholder="选择参与分配的销售（默认全部）" style="min-width:300px;max-width:380px"
+                     :loading="previewLoading" @change="handleSalesSelectionChanged">
+            <template #header>
+              <div style="padding:4px 12px 6px; display:flex; justify-content:space-between; align-items:center">
+                <span style="color:#64748b;font-size:12px">共 {{ allSalesPool.length }} 位销售</span>
+                <div>
+                  <el-button link size="small" @click="selectAllSales">全选</el-button>
+                  <el-button link size="small" @click="clearSalesSelection">清空</el-button>
+                </div>
+              </div>
+            </template>
+            <el-option-group v-for="(group, gi) in salesOptionGroups" :key="gi" :label="group.label">
+              <el-option v-for="sp in group.items" :key="sp.username"
+                         :label="`${sp.name}（商机${sp.biz_count}单）`" :value="sp.username" />
+            </el-option-group>
+          </el-select>
+          <el-select v-model="batchScope" style="width:200px" @change="runPreview">
+            <el-option label="仅已评估未分配" value="evaluated" />
+            <el-option label="仅待评估（先评估再分配）" value="pending_eval" />
+            <el-option label="全部未分配（推荐）" value="all_unassigned" />
+          </el-select>
+          <el-radio-group v-model="batchMode" @change="runPreview">
+            <el-radio-button label="recommended">🧠 AI综合推荐</el-radio-button>
+            <el-radio-button label="average">⚖️ 按数量平均分配</el-radio-button>
+          </el-radio-group>
+          <el-checkbox v-model="reEvaluate" @change="runPreview" :disabled="batchScope === 'pending_eval'">
+            已评估线索重新评估
+          </el-checkbox>
+        </div>
+        <div class="bt-right">
+          <el-button :loading="previewLoading" @click="runPreview">🔄 重新生成草案</el-button>
+          <el-tag type="info" effect="plain" v-if="previewSummary.total">共 {{ previewSummary.total }} 条</el-tag>
+        </div>
+      </div>
+
+      <!-- 分配人数汇总条 -->
+      <div class="distribution-bar" v-if="batchAllocations.length">
+        <div v-for="sp in batchSalespeople" :key="sp.username" class="dist-card"
+             :class="{ 'dist-full': sp.username === maxDistUser }">
+          <div class="dist-name">{{ sp.name }}</div>
+          <div class="dist-count">{{ distribution[sp.username] || 0 }}条</div>
+          <div class="dist-extra">
+            商机{{ sp.biz_count }}单
+          </div>
+        </div>
+      </div>
+
+      <!-- 分配表格 -->
+      <div class="batch-table-wrap">
+        <el-table :data="batchAllocations" stripe border size="small" max-height="52vh"
+                  row-key="lead_id" :header-cell-style="{ background: '#f5f7fa' }">
+          <el-table-column type="index" label="#" width="56" />
+          <el-table-column label="招标单位/商机" min-width="230"
+                           :class-name="({row}) => isInvalidRow(row) ? 'row-invalid' : ''">
+            <template #default="{ row }">
+              <div class="lead-title" v-if="row.opportunity_name" :title="row.opportunity_name"
+                   :class="{ 'text-danger': isInvalidRow(row) }">
+                📌 {{ row.opportunity_name }}
+              </div>
+              <div class="lead-company" :title="row.company" :class="{ 'text-danger': isInvalidRow(row) }">
+                {{ row.company || '—' }}
+                <el-tag v-if="isInvalidRow(row)" size="small" type="danger" effect="dark" style="margin-left:6px">
+                  负责人不在候选集
+                </el-tag>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="能力域/行业" width="170">
+            <template #default="{ row }">
+              <div><span v-if="row.category" class="muted">{{ row.category }}</span><span v-else class="muted">—</span></div>
+              <div><span v-if="row.industry" class="muted">🏭 {{ row.industry }}</span><span v-else class="muted">—</span></div>
+            </template>
+          </el-table-column>
+          <el-table-column label="意向分" width="90" align="center">
+            <template #default="{ row }">
+              <span v-if="row.intent_score != null"
+                    :class="['score-badge', scoreClass(row.intent_score)]">{{ row.intent_score }}</span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="预算" width="130">
+            <template #default="{ row }">{{ row.budget || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="截止时间" width="150">
+            <template #default="{ row }">{{ row.deadline || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="分配给（可调整）" width="230">
+            <template #default="{ row }">
+              <el-select v-model="row.assigned_to" size="small" filterable
+                         :class="{ 'is-invalid': isInvalidRow(row) }"
+                         style="width:100%" @change="onRowAssignChange(row)">
+                <el-option v-for="s in batchSalespeople" :key="s.username"
+                           :label="`${s.name}（已分${distribution[s.username]||0}条，商机${s.biz_count}单）`"
+                           :value="s.username" />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="分配依据" min-width="280" show-overflow-tooltip>
+            <template #default="{ row }">
+              <div v-if="row.assign_mode === 'average'" class="avg-tag">⚖️ {{ row.assign_reason }}</div>
+              <div v-else>
+                <span v-if="row.assign_score" :class="['score-badge', scoreClass(row.assign_score)]">{{ row.assign_score }}分</span>
+                <span class="muted" v-if="row.assign_reason" style="margin-left:6px">{{ row.assign_reason }}</span>
+                <span v-else class="muted">AI推荐</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="100" align="center">
+            <template #default="{ $index }">
+              <el-button-group>
+                <el-button size="small" text @click="moveUp($index)" :disabled="$index===0" title="前移一条">↑</el-button>
+                <el-button size="small" text @click="moveDown($index)" :disabled="$index===batchAllocations.length-1" title="后移一条">↓</el-button>
+              </el-button-group>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="batch-footer">
+        <div class="batch-tip" v-if="batchSalespeople.length">
+          共 <b>{{ previewSummary.total }}</b> 条线索 · 在职销售 <b>{{ batchSalespeople.length }}</b> 人 ·
+          平均每人 <b>{{ batchSalespeople.length ? Math.ceil(previewSummary.total / batchSalespeople.length) : 0 }}</b> 条
+          <span v-if="invalidAllocationRows.length" class="done-err" style="margin-left:12px">
+            ⚠️ {{ invalidAllocationRows.length }} 行负责人不在候选销售集
+          </span>
+          <span v-if="previewSummary.successCount" class="done-ok" style="margin-left:12px">
+            本次已成功分配 {{ previewSummary.successCount }} 条
+          </span>
+          <span v-if="previewSummary.failCount" class="done-err" style="margin-left:12px">
+            失败 {{ previewSummary.failCount }} 条
+            <el-button link size="small" @click="showFailures = !showFailures">{{ showFailures ? '收起' : '查看详情' }}</el-button>
+          </span>
+        </div>
+        <div>
+          <el-button @click="batchAssignVisible = false">取消</el-button>
+          <el-button type="primary"
+                     :disabled="!batchAllocations.length || !!invalidAllocationRows.length"
+                     :loading="confirmLoading" @click="confirmBatchAssign">
+            <template v-if="invalidAllocationRows.length">请先修正 {{ invalidAllocationRows.length }} 行负责人</template>
+            <template v-else>主任确认并执行分配（{{ validAllocationCount }} 条）</template>
+          </el-button>
+        </div>
+      </div>
+
+      <!-- 失败明细 -->
+      <div v-if="showFailures && failList.length" class="fail-list">
+        <div class="section-title" style="margin:8px 0">分配失败明细</div>
+        <el-table :data="failList" size="small" border max-height="180">
+          <el-table-column prop="lead_id" label="线索ID" width="90" />
+          <el-table-column prop="message" label="原因" show-overflow-tooltip />
+        </el-table>
+      </div>
     </el-dialog>
 
     <!-- 线索详情对话框 -->
@@ -412,21 +579,25 @@
         </el-form-item>
         <el-form-item label="抓取方式" required>
           <el-select v-model="sourceForm.source_type" style="width:100%">
+            <el-option label="🏛 采购网站直抓" value="procurement" />
             <el-option label="🤖 AI智能体搜索" value="ai_search" />
             <el-option label="RSS订阅" value="rss" />
             <el-option label="API接口" value="api" />
             <el-option label="HTML网页" value="html" />
             <el-option label="手动导入" value="manual" />
           </el-select>
+          <div class="form-tip" v-if="sourceForm.source_type === 'procurement'">
+            🏛 直接抓取政府采购网站公告列表（ccgp.gov.cn / plap.cn / ggzy.gov.cn 等），用 LLM 从公告标题中筛选与关键词相关的商机。比搜索引擎更精准，结果全部为真实采购公告。
+          </div>
           <div class="form-tip" v-if="sourceForm.source_type === 'ai_search'">
-            🤖 AI 智能体搜索：通过 DuckDuckGo 搜索引擎主动搜集互联网数据，再用大语言模型（LLM）从搜索结果中提取结构化商机线索。无需配置 URL，仅需网络即可工作。LLM 不可用时降级为直接提取搜索结果（标题/链接/摘要）。
+            🤖 AI 智能体搜索：通过搜索引擎主动搜集互联网数据，再用 LLM 提取商机线索。无需配置 URL。
           </div>
           <div class="form-tip" v-else-if="sourceForm.source_type === 'html'">
-            HTML 源按能力域分发抓取器：招投标监控解析公告、电商商机解析榜单、企业客源解析企业信息、竞品情报解析产品价格、舆情痛点解析帖子痛点。动态页面需在配置中设置 {"dynamic": true}（需安装 playwright）
+            HTML 源按能力域分发抓取器。动态页面需在配置中设置 {"dynamic": true}。
           </div>
         </el-form-item>
-        <el-form-item label="URL" v-if="['rss','api','html'].includes(sourceForm.source_type)">
-          <el-input v-model="sourceForm.url" placeholder="RSS订阅地址 / API接口URL / 网页URL" />
+        <el-form-item label="URL" v-if="['rss','api','html','procurement'].includes(sourceForm.source_type)">
+          <el-input v-model="sourceForm.url" placeholder="采购网站公告列表URL（如 http://www.ccgp.gov.cn/cggg/dfgg/）" />
         </el-form-item>
         <el-form-item label="配置JSON">
           <el-input v-model="sourceForm.config" type="textarea" :rows="2"
@@ -509,11 +680,25 @@
                     />
                   </el-select>
                 </div>
+                <div v-if="activeModule === 'scraped_leads'" class="update-link-switcher">
+                  <el-checkbox v-model="updateLinkMode">仅更新已有线索的链接（按招标单位+商机名称匹配，不新建）</el-checkbox>
+                </div>
               </div>
 
-              <div class="preview-title">数据预览（前 50 行）</div>
-              <el-table :data="mappedPreview" stripe border size="small" max-height="320" class="preview-table">
+              <div class="preview-title">
+                数据预览（前 200 行）
+                <el-checkbox v-model="showInvalidOnly" size="small" style="margin-left:12px">只看无效行</el-checkbox>
+              </div>
+              <el-table :data="filteredPreview" stripe border size="small" max-height="320" class="preview-table">
                 <el-table-column label="行号" type="index" width="60" />
+                <el-table-column label="状态" width="80">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.__valid" size="small" type="success" effect="plain">有效</el-tag>
+                    <el-tooltip v-else :content="(row.__errors || []).join('; ')" placement="top">
+                      <el-tag size="small" type="danger" effect="dark">无效</el-tag>
+                    </el-tooltip>
+                  </template>
+                </el-table-column>
                 <el-table-column v-for="col in previewColumns" :key="col.key" :prop="col.key" :label="col.label" min-width="130" show-overflow-tooltip>
                   <template #default="{ row }">
                     <span :class="{ 'invalid-value': !row.__valid && !row._meta_ok }">{{ row[col.key] }}</span>
@@ -534,6 +719,76 @@
           </div>
           <el-input v-model="importText" type="textarea" :rows="12" placeholder='[{"company":"示例科技","contact_name":"张总","phone":"13800000000","industry":"信息技术","region":"全国","source":"手动导入","remark":"有采购需求"}]' />
         </el-tab-pane>
+
+        <el-tab-pane label="🖼️ 图片OCR导入" name="ocr">
+          <div class="ocr-import">
+            <div class="import-upload-area" @click="$refs.ocrFileInput?.click()" @dragover.prevent @drop.prevent="handleOcrDrop">
+              <el-upload
+                :show-file-list="false"
+                :before-upload="() => false"
+                accept="image/*"
+                :auto-upload="false"
+                ref="ocrFileInput"
+                multiple
+                :on-change="handleOcrFileChange"
+              >
+                <el-icon class="upload-icon" style="font-size: 48px; color: #3b82f6;"><Picture /></el-icon>
+                <div class="upload-text">
+                  <div class="upload-title">点击或拖拽图片到此处（支持批量上传）</div>
+                  <div class="upload-tip">支持 PNG / JPG / JPEG / BMP / WEBP / TIFF。OCR 识别文字后由 AI 自动解析为线索字段，可编辑后确认导入。</div>
+                </div>
+              </el-upload>
+            </div>
+
+            <div v-if="ocrProcessing" class="parse-loading">
+              <el-icon class="is-loading" style="font-size: 22px;"><Loading /></el-icon>
+              <span>正在 OCR 识别并 AI 解析（{{ ocrProgress.current }}/{{ ocrProgress.total }}）...</span>
+            </div>
+
+            <div v-else-if="ocrResults.length" class="parse-result">
+              <div class="parse-summary">
+                <span class="parse-stats">共识别 {{ ocrResults.length }} 张图片</span>
+                <el-tag v-if="ocrResults.filter(r => r.error).length" type="warning" effect="plain">
+                  {{ ocrResults.filter(r => r.error).length }} 张识别失败
+                </el-tag>
+              </div>
+              <div class="preview-title">线索预览（可编辑，公司为空的行将跳过）</div>
+              <el-table :data="ocrEditableLeads" stripe border size="small" max-height="400" class="preview-table">
+                <el-table-column label="图片" prop="image_name" width="120" show-overflow-tooltip />
+                <el-table-column label="公司/招标单位" prop="company" min-width="140">
+                  <template #default="{ row }"><el-input v-model="row.company" size="small" /></template>
+                </el-table-column>
+                <el-table-column label="商机名称" prop="opportunity_name" min-width="140">
+                  <template #default="{ row }"><el-input v-model="row.opportunity_name" size="small" /></template>
+                </el-table-column>
+                <el-table-column label="联系人" prop="contact_name" width="90">
+                  <template #default="{ row }"><el-input v-model="row.contact_name" size="small" /></template>
+                </el-table-column>
+                <el-table-column label="电话" prop="phone" width="120">
+                  <template #default="{ row }"><el-input v-model="row.phone" size="small" /></template>
+                </el-table-column>
+                <el-table-column label="邮箱" prop="email" width="150">
+                  <template #default="{ row }"><el-input v-model="row.email" size="small" /></template>
+                </el-table-column>
+                <el-table-column label="行业" prop="industry" width="90">
+                  <template #default="{ row }"><el-input v-model="row.industry" size="small" /></template>
+                </el-table-column>
+                <el-table-column label="地区" prop="region" width="90">
+                  <template #default="{ row }"><el-input v-model="row.region" size="small" /></template>
+                </el-table-column>
+                <el-table-column label="备注" prop="remark" min-width="130">
+                  <template #default="{ row }"><el-input v-model="row.remark" size="small" /></template>
+                </el-table-column>
+                <el-table-column label="状态" width="70">
+                  <template #default="{ row }">
+                    <el-tag v-if="row._error" type="danger" size="small">失败</el-tag>
+                    <el-tag v-else type="success" size="small">正常</el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
 
       <template #footer>
@@ -543,6 +798,9 @@
           确认导入（{{ selectedCount }} 行）
         </el-button>
         <el-button v-if="importTab === 'json'" type="primary" @click="handleImport" :loading="importing">导入</el-button>
+        <el-button v-if="importTab === 'ocr' && ocrResults.length" type="primary" @click="confirmOcrImport" :loading="ocrExecuting">
+          确认导入（{{ ocrValidCount }} 条）
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -551,7 +809,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Loading } from '@element-plus/icons-vue'
+import { Upload, Loading, Picture } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -562,7 +820,6 @@ const activeTab = ref('queue')
 const loading = ref(false)
 const loadingSources = ref(false)
 const evaluating = ref(false)
-const scraping = ref(false)
 const assigning = ref(false)
 const importing = ref(false)
 
@@ -570,6 +827,120 @@ const importing = ref(false)
 const importVisible = ref(false)
 const importTab = ref('excel')  // 'excel' | 'json'
 const importText = ref('')
+const updateLinkMode = ref(false)  // 仅更新已有线索链接（不新建）
+
+// ==================== 导入：图片OCR ====================
+const ocrProcessing = ref(false)
+const ocrProgress = ref({ current: 0, total: 0 })
+const ocrResults = ref([])
+const ocrEditableLeads = ref([])
+const ocrExecuting = ref(false)
+const ocrFileInput = ref(null)
+
+const ocrValidCount = computed(() => ocrEditableLeads.value.filter(r => (r.company || '').trim()).length)
+
+const handleOcrFileChange = (file) => {
+  // el-upload on-change 在 multiple 模式下逐个触发，收集后统一上传
+  if (file && file.raw) {
+    _ocrSelectedFiles = _ocrSelectedFiles.filter(f => f.uid !== file.uid)
+    _ocrSelectedFiles.push(file)
+    _ocrPendingTimer && clearTimeout(_ocrPendingTimer)
+    _ocrPendingTimer = setTimeout(() => {
+      uploadOcrImages(_ocrSelectedFiles.map(f => f.raw))
+      _ocrSelectedFiles = []
+    }, 500)
+  }
+}
+
+let _ocrSelectedFiles = []
+let _ocrPendingTimer = null
+
+const handleOcrDrop = (e) => {
+  const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type.startsWith('image/'))
+  if (files.length) uploadOcrImages(files)
+}
+
+const uploadOcrImages = async (files) => {
+  if (!files || !files.length) return
+  ocrProcessing.value = true
+  ocrProgress.value = { current: 0, total: files.length }
+  ocrResults.value = []
+  ocrEditableLeads.value = []
+  try {
+    const formData = new FormData()
+    files.forEach(f => formData.append('images', f))
+    const res = await api.post('/leads/ocr-images', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000
+    })
+    if (res.code === 200) {
+      ocrResults.value = res.data.results || []
+      ocrEditableLeads.value = ocrResults.value.map(r => ({
+        image_name: r.image_name || '',
+        company: r.parsed?.company || '',
+        opportunity_name: r.parsed?.opportunity_name || '',
+        contact_name: r.parsed?.contact_name || '',
+        phone: r.parsed?.phone || '',
+        email: r.parsed?.email || '',
+        industry: r.parsed?.industry || '',
+        region: r.parsed?.region || '',
+        link: r.parsed?.link || '',
+        remark: r.parsed?.remark || '',
+        tender_no: r.parsed?.tender_no || '',
+        budget: r.parsed?.budget || '',
+        deadline: r.parsed?.deadline || '',
+        publish_date: r.parsed?.publish_date || '',
+        agency: r.parsed?.agency || '',
+        agency_phone: r.parsed?.agency_phone || '',
+        _error: r.error || ''
+      }))
+      ocrProgress.value.current = files.length
+    } else {
+      ElMessage.error(res.message || 'OCR 识别失败')
+    }
+  } catch (error) {
+    const msg = error.message || '网络错误'
+    if (msg.includes('timeout') || msg.includes('Timeout')) {
+      ElMessage.error('OCR 识别超时：图片过大或服务器繁忙，请重试')
+    } else if (msg.includes('Network Error') || msg.includes('网络错误')) {
+      ElMessage.error('网络错误：无法连接到服务器，请检查后端是否正常运行')
+    } else {
+      ElMessage.error('OCR 识别失败：' + msg)
+    }
+  } finally {
+    ocrProcessing.value = false
+  }
+}
+
+const confirmOcrImport = async () => {
+  const validLeads = ocrEditableLeads.value.filter(r => (r.company || '').trim())
+  if (!validLeads.length) {
+    ElMessage.warning('没有可导入的有效线索（公司名不能为空）')
+    return
+  }
+  ocrExecuting.value = true
+  try {
+    const payload = validLeads.map(r => {
+      const { _error, image_name, ...fields } = r
+      return fields
+    })
+    const res = await api.post('/leads/ocr-images/execute', { leads: payload })
+    if (res.code === 200) {
+      ElMessage.success(`导入完成：成功 ${res.data.success_count} 条，失败 ${res.data.fail_count} 条`)
+      importVisible.value = false
+      ocrResults.value = []
+      ocrEditableLeads.value = []
+      fetchLeads()
+      fetchStats()
+    } else {
+      ElMessage.error(res.message || '导入失败')
+    }
+  } catch (error) {
+    ElMessage.error('导入失败：' + (error.message || '网络错误'))
+  } finally {
+    ocrExecuting.value = false
+  }
+}
 
 // ==================== 导入：表格上传（smart-import） ====================
 const currentFile = ref(null)
@@ -602,7 +973,7 @@ const previewColumns = computed(() => {
 const mappedPreview = computed(() => {
   const rows = currentSheet.value.rows || []
   const fm = currentSheet.value.all_field_maps?.[activeModule.value] || currentSheet.value.field_map || {}
-  return rows.slice(0, 50).map(r => {
+  return rows.slice(0, 200).map(r => {
     const data = r.data || {}
     const mapped = { __valid: r.valid, __errors: r.errors }
     Object.entries(fm).forEach(([colIdx, fieldName]) => {
@@ -611,6 +982,12 @@ const mappedPreview = computed(() => {
     })
     return mapped
   })
+})
+
+const showInvalidOnly = ref(false)
+const filteredPreview = computed(() => {
+  if (!showInvalidOnly.value) return mappedPreview.value
+  return mappedPreview.value.filter(r => !r.__valid)
 })
 
 const selectedCount = computed(() => {
@@ -700,11 +1077,12 @@ const confirmExcelImport = async () => {
   excelExecuting.value = true
   try {
     const resp = await api.post('/smart-import/execute', {
-      sheets: sheetsPayload, is_wan: false
+      sheets: sheetsPayload, is_wan: false,
+      mode: updateLinkMode.value ? 'update_link' : ''
     })
     if (resp.code === 200) {
       const { total_success, total_fail } = resp.data || {}
-      ElMessage.success(`导入完成：成功 ${total_success} 条，失败 ${total_fail} 条`)
+      ElMessage.success(`导入完成：成功 ${total_success} 条（已存入原始情报库），失败 ${total_fail} 条。请到"原始情报"标签页查看，经AI商机识别分析后转入CRM分配销售`)
       importVisible.value = false
       clearUploaded()
       fetchLeads()
@@ -773,6 +1151,15 @@ const categoryDesc = (c) => {
 
 const pendingCount = computed(() => stats.value.pending || 0)
 const totalCount = computed(() => Object.values(stats.value).reduce((a, b) => a + (b || 0), 0))
+const unassignedCount = computed(() => (stats.value.pending || 0) + (stats.value.evaluated || 0))
+const isDirector = computed(() => {
+  // 与项目其他模块（Contracts/Appraisal/Reports/Business...）一致的主任/院长角色判断
+  const r = authStore.role
+  if (r === '主任' || r === '院长') return true
+  // 多角色（roles 数组）兜底
+  const rs = Array.isArray(authStore.roles) ? authStore.roles : []
+  return rs.some(x => x === '主任' || x === '院长')
+})
 const currentRaw = computed(() => {
   if (!currentLead.value?.raw_data) return {}
   try { return JSON.parse(currentLead.value.raw_data) } catch (e) { return {} }
@@ -855,7 +1242,8 @@ const fetchLeads = async () => {
   try {
     const params = {}
     if (filterStatus.value) params.status = filterStatus.value
-    if (filterSource.value) params.source_id = filterSource.value
+    if (filterSource.value === '__ai__') params.source = 'AI商机识别'
+    else if (filterSource.value) params.source_id = filterSource.value
     if (filterCategory.value) params.category = filterCategory.value
     if (keyword.value) params.keyword = keyword.value
     const resp = await api.get('/leads', params)
@@ -999,33 +1387,178 @@ const handleReject = async (row) => {
 
 const openDetail = (row) => { currentLead.value = row; detailVisible.value = true }
 
-// ==================== 抓取 ====================
-const scrapeOne = async (row) => {
-  row._scraping = true
-  try {
-    const resp = await api.post(`/leads/sources/${row.id}/scrape`)
-    if (resp.code === 200) {
-      ElMessage.success(resp.message)
-      fetchSources(); fetchLeads(); fetchStats()
-    } else ElMessage.error(resp.message)
-  } catch (e) { ElMessage.error('抓取失败') }
-  finally { row._scraping = false }
+// ==================== 批量分配（主任/院长） ====================
+const batchAssignVisible = ref(false)
+const previewLoading = ref(false)
+const confirmLoading = ref(false)
+const batchScope = ref('all_unassigned')
+const batchMode = ref('average')
+const reEvaluate = ref(false)
+const batchSalespeople = ref([])           // 本次已选候选销售（过滤后）
+const allSalesPool = ref([])                // 全量销售列表（用于下拉多选 options，首次加载后缓存）
+const selectedSalesUsernames = ref([])      // 主任当前勾选的销售 username 数组
+const batchAllocations = ref([])
+const distribution = ref({})
+const failList = ref([])
+const showFailures = ref(false)
+const previewSummary = ref({ total: 0, successCount: 0, failCount: 0 })
+// —— 防并发请求 & 防初始化触发多余请求的控制标志 ——
+const _previewReqId = ref(0)                 // 请求序号：响应回来序号<最新则丢弃(过期响应)
+const _suppressSelectionChange = ref(false)  // true 时，销售选择@change 不触发 runPreview
+
+const handleSalesSelectionChanged = () => {
+  // 由程序初始化触发的选择变更（例如首次打开后自动全选填充）→ 不发请求
+  if (_suppressSelectionChange.value) return
+  runPreview()
 }
 
-const scrapeAll = async () => {
-  scraping.value = true
+const salesOptionGroups = computed(() => {
+  // 简化：单组"全部销售"；如需按部门分组可通过 allSalesPool[x].department 聚合
+  if (!allSalesPool.value.length) return []
+  const groups = {}
+  allSalesPool.value.forEach(sp => {
+    const dept = sp.department && sp.department.trim() ? sp.department : '默认部门'
+    if (!groups[dept]) groups[dept] = []
+    groups[dept].push(sp)
+  })
+  return Object.keys(groups).sort().map(dept => ({ label: dept, items: groups[dept] }))
+})
+
+const selectAllSales = () => {
+  selectedSalesUsernames.value = allSalesPool.value.map(s => s.username)
+}
+const clearSalesSelection = () => { selectedSalesUsernames.value = [] }
+
+const maxDistUser = computed(() => {
+  if (!distribution.value || !batchSalespeople.value.length) return ''
+  let best = '', bestN = -1
+  batchSalespeople.value.forEach(sp => {
+    const n = distribution.value[sp.username] || 0
+    if (n > bestN) { bestN = n; best = sp.username }
+  })
+  return best
+})
+
+// —— 候选销售集合 & 无效行判定（主任没选中的人不应出现在分配行里）
+const validUsernames = computed(() => new Set((batchSalespeople.value || []).map(s => s.username)))
+const isInvalidRow = (row) => {
+  if (!row) return false
+  const u = row.assigned_to
+  if (!u) return true
+  return !validUsernames.value.has(u)
+}
+const invalidAllocationRows = computed(() => batchAllocations.value.filter(isInvalidRow))
+const validAllocationCount = computed(() => batchAllocations.value.length - invalidAllocationRows.value.length)
+
+const recalcDistribution = () => {
+  const d = {}
+  batchSalespeople.value.forEach(sp => { d[sp.username] = 0 })
+  batchAllocations.value.forEach(row => {
+    const u = row.assigned_to
+    // 只统计落在候选销售集中的分配（主任删除的人不计入汇总，避免汇总卡显示非候选人也有数量）
+    if (u && validUsernames.value.has(u)) d[u] = (d[u] || 0) + 1
+  })
+  distribution.value = d
+}
+
+const onRowAssignChange = (_row) => { recalcDistribution() }
+
+const moveUp = (idx) => {
+  if (idx <= 0) return
+  const arr = batchAllocations.value
+  ;[arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]]
+}
+const moveDown = (idx) => {
+  const arr = batchAllocations.value
+  if (idx < 0 || idx >= arr.length - 1) return
+  ;[arr[idx + 1], arr[idx]] = [arr[idx], arr[idx + 1]]
+}
+
+const openBatchAssignDialog = async () => {
+  if (!isDirector.value) { ElMessage.warning('仅主任/院长可执行批量分配'); return }
+  previewSummary.value = { total: 0, successCount: 0, failCount: 0 }
+  failList.value = []
+  showFailures.value = false
+  // 打开对话框时：如有销售缓存，选中的销售保持；否则默认空（表示"全体参与"），后端按全体返回后再全选
+  batchAssignVisible.value = true
+  await runPreview()
+}
+
+const runPreview = async () => {
+  const reqId = ++_previewReqId.value
+  previewLoading.value = true
   try {
-    const resp = await api.post('/leads/scrape-all')
+    const payload = {
+      mode: batchMode.value,
+      scope: batchScope.value,
+      re_evaluate: reEvaluate.value,
+    }
+    if (selectedSalesUsernames.value.length) payload.sales_usernames = selectedSalesUsernames.value
+    const resp = await api.post('/leads/allocation-preview', payload)
+    // —— 竞态保护：若此期间又发了新请求(reqId 已变),丢弃本响应 ——
+    if (reqId !== _previewReqId.value) return
     if (resp.code === 200) {
-      ElMessage.success(resp.message)
-      if (resp.data?.details) {
-        const errs = resp.data.details.filter(d => d.error)
-        if (errs.length) ElMessage.warning(`${errs.length} 个源抓取异常`)
+      const d = resp.data || {}
+      batchSalespeople.value = d.salespeople || []
+      batchAllocations.value = d.allocations || []
+      distribution.value = d.distribution || {}
+      // 首次加载（没缓存销售列表）：把后端返回的销售存入全量池 + 初始化全选
+      if (!allSalesPool.value.length && batchSalespeople.value.length) {
+        allSalesPool.value = batchSalespeople.value.map(s => ({
+          username: s.username, name: s.name, biz_count: s.biz_count || 0, department: s.department || '',
+        }))
+        if (!selectedSalesUsernames.value.length) {
+          // 自动全选 → 打开 suppress 避免触发多余的 runPreview 请求（请求 1 已在进行中）
+          try {
+            _suppressSelectionChange.value = true
+            selectedSalesUsernames.value = allSalesPool.value.map(s => s.username)
+          } finally {
+            _suppressSelectionChange.value = false
+          }
+        }
       }
-      fetchSources(); fetchLeads(); fetchStats()
+      previewSummary.value.total = batchAllocations.value.length
+      previewSummary.value.successCount = 0
+      previewSummary.value.failCount = 0
+      if (!batchAllocations.value.length) ElMessage.info(resp.message || '暂无可分配线索')
     } else ElMessage.error(resp.message)
-  } catch (e) { ElMessage.error('批量抓取失败') }
-  finally { scraping.value = false }
+  } catch (e) { ElMessage.error('生成分配草案失败') }
+  finally {
+    if (reqId === _previewReqId.value) previewLoading.value = false
+  }
+}
+
+const confirmBatchAssign = async () => {
+  if (!batchAllocations.value.length) { ElMessage.warning('暂无可分配线索'); return }
+  try {
+    await ElMessageBox.confirm(
+      `将批量执行 ${batchAllocations.value.length} 条线索分配，每条线索会自动创建客户+商机。` +
+      `此步骤由主任确认并执行，确定继续？`, '确认批量分配',
+      { type: 'warning', confirmButtonText: '主任确认执行', cancelButtonText: '取消' }
+    )
+  } catch (e) { return }
+  confirmLoading.value = true
+  try {
+    const payload = batchAllocations.value.map(r => ({ lead_id: r.lead_id, assigned_to: r.assigned_to }))
+    const resp = await api.post('/leads/allocation-confirm', { allocations: payload })
+    if (resp.code === 200) {
+      const d = resp.data || {}
+      previewSummary.value.successCount = d.success_count || 0
+      previewSummary.value.failCount = d.fail_count || 0
+      failList.value = d.failures || []
+      // 从待分配列表中移除已成功的（失败的留在原列表方便主任处置）
+      const successIds = new Set((d.imported || []).map(x => x.lead_id))
+      batchAllocations.value = batchAllocations.value.filter(r => !successIds.has(r.lead_id))
+      recalcDistribution()
+      previewSummary.value.total = batchAllocations.value.length
+      ElMessage.success(resp.message)
+      fetchLeads(); fetchStats()
+      if (!batchAllocations.value.length) {
+        setTimeout(() => { batchAssignVisible.value = false }, 800)
+      }
+    } else ElMessage.error(resp.message)
+  } catch (e) { ElMessage.error('执行批量分配失败') }
+  finally { confirmLoading.value = false }
 }
 
 // ==================== 线索源 CRUD ====================
@@ -1073,6 +1606,7 @@ const deleteSource = async (row) => {
 // ==================== 导入（旧文本模式合并至顶部统一实现，此处仅保留 openImportDialog） ====================
 const openImportDialog = () => {
   importText.value = ''
+  updateLinkMode.value = false
   clearUploaded()
   importTab.value = 'excel'
   importVisible.value = true
@@ -1280,5 +1814,46 @@ onMounted(() => { fetchData() })
 .unmapped-tip {
   margin-top: 4px; font-size: 12px; color: #92400e; background: #fffbeb;
   padding: 8px 12px; border-radius: 6px; border: 1px solid #fde68a;
+}
+
+/* ===== 批量分配 ===== */
+.batch-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 4px 14px; gap: 16px; flex-wrap: wrap;
+}
+.batch-toolbar .bt-left, .batch-toolbar .bt-right {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+}
+.distribution-bar {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(120px, 1fr);
+  gap: 10px; margin-bottom: 14px;
+}
+.dist-card {
+  border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px;
+  background: #f8fafc; transition: all .15s ease-in;
+}
+.dist-card.dist-full { border-color: #fbbf24; background: linear-gradient(135deg,#fffbeb,#fef9c3); box-shadow: 0 1px 3px rgba(251,191,36,.2); }
+.dist-name { font-weight: 600; color: #0f172a; font-size: 14px; }
+.dist-count { font-size: 18px; font-weight: 700; color: #2563eb; margin-top: 2px; }
+.dist-extra { font-size: 12px; color: #64748b; margin-top: 2px; }
+.batch-table-wrap { border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; }
+.lead-title { font-weight: 600; color: #0f172a; margin-bottom: 2px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-company { color: #475569; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avg-tag { color: #b45309; font-weight: 500; }
+.batch-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 4px 0; border-top: 1px dashed #e2e8f0; margin-top: 12px; flex-wrap: wrap; gap: 10px;
+}
+.batch-tip { color: #475569; font-size: 13px; }
+.batch-tip .done-ok { color: #15803d; font-weight: 600; }
+.batch-tip .done-err { color: #b91c1c; font-weight: 600; }
+.fail-list { margin-top: 10px; }
+.muted { color: #94a3b8; font-size: 12px; }
+.text-danger { color: #b91c1c !important; font-weight: 500; }
+.row-invalid, .el-table .row-invalid td { background: #fef2f2 !important; }
+.is-invalid .el-select__wrapper {
+  border: 1px solid #f87171 !important;
+  box-shadow: 0 0 0 2px rgba(248,113,113,.15);
+  background: #fff5f5;
 }
 </style>

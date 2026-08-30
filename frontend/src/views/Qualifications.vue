@@ -29,7 +29,7 @@
           </el-button>
         </div>
 
-        <el-table :data="personnelList" v-loading="personnelLoading" stripe>
+        <el-table :data="personnelList" v-loading="personnelLoading" stripe max-height="70vh">
           <el-table-column prop="name" label="姓名" width="100" />
           <el-table-column prop="username" label="账号" width="120" />
           <el-table-column prop="qualification_type" label="资质类型" width="160" />
@@ -79,7 +79,7 @@
           </el-button>
         </div>
 
-        <el-table :data="companyList" v-loading="companyLoading" stripe>
+        <el-table :data="companyList" v-loading="companyLoading" stripe max-height="70vh">
           <el-table-column prop="qualification_type" label="资质类型" width="160" />
           <el-table-column prop="qualification_name" label="资质名称" min-width="180" />
           <el-table-column prop="certificate_no" label="证书编号" width="140" />

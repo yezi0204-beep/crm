@@ -60,13 +60,14 @@
     
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="filteredContracts" stripe border class="data-table" @sort-change="handleSortChange">
+        <el-table :data="filteredContracts" stripe border class="data-table" @sort-change="handleSortChange" max-height="70vh">
           <template v-for="col in visibleColumnConfigs" :key="col.prop">
             <el-table-column 
               v-if="col.prop === 'total_amt'" 
               :prop="col.prop" 
               :label="col.label" 
               :min-width="col.width || 110" 
+              align="right"
               sortable="custom"
               :sort-order="sortField === 'total_amt' ? sortOrder : undefined"
             >
@@ -80,6 +81,7 @@
               :prop="col.prop" 
               :label="col.label" 
               :min-width="col.width || 110" 
+              align="right"
               sortable="custom"
               :sort-order="sortField === 'paid_amt' ? sortOrder : undefined"
             >
@@ -93,6 +95,7 @@
               :prop="col.prop"
               :label="col.label"
               :min-width="col.width || 110"
+              align="right"
               sortable="custom"
               :sort-order="sortField === 'pending_amt' ? sortOrder : undefined"
             >
@@ -104,10 +107,24 @@
             </el-table-column>
 
             <el-table-column
-              v-else-if="col.prop === 'income' || col.prop === 'tax_amount' || col.prop === 'pending_acceptance_amount'"
+              v-else-if="col.prop === 'income' || col.prop === 'pending_acceptance_amount'"
               :prop="col.prop"
               :label="col.label"
               :min-width="col.width || 110"
+              align="right"
+              sortable="custom"
+            >
+              <template #default="scope">
+                {{ formatYuan(scope.row[col.prop]) }}
+              </template>
+            </el-table-column>
+
+            <el-table-column
+              v-else-if="col.prop === 'tax_amount'"
+              :prop="col.prop"
+              :label="col.label"
+              :min-width="col.width || 110"
+              align="right"
               sortable="custom"
             >
               <template #default="scope">
@@ -120,6 +137,7 @@
               :prop="col.prop" 
               :label="col.label" 
               :min-width="col.width || 80" 
+              align="center"
               sortable
             >
               <template #default="scope">
@@ -176,16 +194,17 @@
               :label="col.label" 
               :min-width="col.minWidth || (col.width || 100)" 
               :sortable="col.sortable !== false"
+              show-overflow-tooltip
             />
           </template>
           
-          <el-table-column label="操作" min-width="280" fixed="right">
+          <el-table-column label="操作" width="190" fixed="right">
             <template #default="scope">
-              <el-button size="small" @click="editContract(scope.row)">编辑</el-button>
-              <el-button v-if="isAdmin" size="small" type="danger" @click="deleteContract(scope.row)">删除</el-button>
-              <el-button v-if="isAdmin" size="small" type="warning" @click="openCommission(scope.row)">分成</el-button>
-              <el-button v-if="scope.row.is_framework" size="small" type="success" @click="openAcceptance(scope.row)">验收</el-button>
-              <el-button size="small" @click="previewFiles(scope.row)">预览</el-button>
+              <el-button v-if="isAdmin" link type="primary" size="small" @click="editContract(scope.row)">编辑</el-button>
+              <el-button v-if="isAdmin" link type="danger" size="small" @click="deleteContract(scope.row)">删除</el-button>
+              <el-button v-if="isAdmin" link type="warning" size="small" @click="openCommission(scope.row)">分成</el-button>
+              <el-button v-if="scope.row.is_framework" link type="success" size="small" @click="openAcceptance(scope.row)">验收</el-button>
+              <el-button link type="info" size="small" @click="previewFiles(scope.row)">预览</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -277,7 +296,7 @@
 
         <el-row :gutter="20">
           <el-col :span="8">
-            <el-form-item label="收入(万)">
+            <el-form-item label="收入(元)">
               <el-input-number v-model="contractForm.income" :min="0" :step="0.01" />
             </el-form-item>
           </el-col>
@@ -287,7 +306,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="待验收合同额(万)">
+            <el-form-item label="待验收合同额(元)">
               <el-input-number v-model="contractForm.pending_acceptance_amount" :min="0" :step="0.01" />
             </el-form-item>
           </el-col>
@@ -693,7 +712,7 @@ import { useRoute } from 'vue-router'
 const authStore = useAuthStore()
 const route = useRoute()
 const contracts = ref([])
-const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
+const isAdmin = computed(() => authStore.has('data.view_all'))
 const users = ref([])
 const customers = ref([])
 const businessList = ref([])
@@ -716,14 +735,14 @@ const importSummary = ref({ total: 0, valid_count: 0, invalid_count: 0 })
 const importResult = ref({ total: 0, success_count: 0, fail_count: 0, results: [] })
 
 const allColumns = [
-  { prop: 'contract_name', label: '合同名称', width: '', minWidth: 120 },
-  { prop: 'contract_no', label: '合同编号', width: 120 },
+  { prop: 'contract_name', label: '合同名称', width: '', minWidth: 160 },
+  { prop: 'contract_no', label: '合同编号', width: 130 },
   { prop: 'project_order_no', label: '项目令号', width: 120 },
-  { prop: 'party_a', label: '甲方', width: '', minWidth: 120 },
+  { prop: 'party_a', label: '甲方', width: '', minWidth: 140 },
   { prop: 'total_amt', label: '合同总额(万)', width: 110 },
-  { prop: 'income', label: '收入(万)', width: 110 },
+  { prop: 'income', label: '收入(元)', width: 110 },
   { prop: 'tax_amount', label: '税额(万)', width: 110 },
-  { prop: 'pending_acceptance_amount', label: '待验收合同额(万)', width: 140 },
+  { prop: 'pending_acceptance_amount', label: '待验收合同额(元)', width: 140 },
   { prop: 'paid_amt', label: '已回款(万)', width: 110 },
   { prop: 'pending_amt', label: '待回款(万)', width: 110 },
   { prop: 'sign_date', label: '签约日期', width: 110 },
@@ -738,10 +757,8 @@ const allColumns = [
 ]
 
 const visibleColumns = ref([
-  'contract_name', 'contract_no', 'project_order_no', 'party_a', 'total_amt',
-  'income', 'tax_amount', 'pending_acceptance_amount',
-  'paid_amt', 'pending_amt', 'sign_date', 'business_type', 'business_direction',
-  'classification', 'owner_name', 'acceptance_nodes', 'payment_nodes', 'note', 'status'
+  'contract_name', 'contract_no', 'party_a', 'total_amt',
+  'paid_amt', 'pending_amt', 'sign_date', 'owner_name', 'status'
 ])
 
 const visibleColumnConfigs = computed(() => {
@@ -761,7 +778,7 @@ const filteredContracts = computed(() => {
 })
 
 const isAdminRole = computed(() => {
-  return authStore.role === '主任' || authStore.role === '院长'
+  return authStore.has('data.view_all')
 })
 
 // ==================== 合同销售分成 ====================
@@ -972,7 +989,7 @@ const validateContractNoRule = async (rule, value, callback) => {
     if (contractForm.id) {
       params.exclude_id = contractForm.id
     }
-    const response = await api.get('/contracts/check-no', { params })
+    const response = await api.get('/contracts/check-no', params)
     if (response.code === 200 && response.data.exists) {
       callback(new Error('合同编号已存在，请重新输入'))
     } else {
@@ -1184,9 +1201,9 @@ const saveContract = async () => {
       const payload = {
         ...contractForm,
         total_amt: (contractForm.total_amt || 0) * 10000,
-        income: (contractForm.income || 0) * 10000,
+        income: contractForm.income || 0,
         tax_amount: (contractForm.tax_amount || 0) * 10000,
-        pending_acceptance_amount: (contractForm.pending_acceptance_amount || 0) * 10000
+        pending_acceptance_amount: contractForm.pending_acceptance_amount || 0
       }
       
       if (!contractForm.id) {
@@ -1199,7 +1216,6 @@ const saveContract = async () => {
         if (contractForm.id) {
           response = await api.put(`/contracts/${contractForm.id}`, payload)
         } else {
-          console.log('Creating contract with payload:', JSON.stringify(payload))
           response = await api.post('/contracts', payload)
         }
         
@@ -1221,9 +1237,9 @@ const saveContract = async () => {
 const editContract = (row) => {
   Object.assign(contractForm, row)
   contractForm.total_amt = (row.total_amt || 0) / 10000
-  contractForm.income = (row.income || 0) / 10000
+  contractForm.income = row.income || 0
   contractForm.tax_amount = (row.tax_amount || 0) / 10000
-  contractForm.pending_acceptance_amount = (row.pending_acceptance_amount || 0) / 10000
+  contractForm.pending_acceptance_amount = row.pending_acceptance_amount || 0
   contractFileList.value = []
   techFileList.value = []
   if (row.contract_file_path) {
@@ -1242,7 +1258,6 @@ const startEditOwner = (row) => {
 const saveOwnerChange = async (contractId, newOwnerId) => {
   savingOwnerId.value = contractId
   try {
-    console.log('saveOwnerChange called:', contractId, newOwnerId)
     const response = await api.post(`/contracts/${contractId}/owner`, {
       owner_id: newOwnerId
     })
@@ -1592,6 +1607,21 @@ watch(showImportModal, (newVal) => {
 .data-table {
   width: 100%;
   min-width: 100%;
+  --el-table-header-bg-color: #f5f7fa;
+  --el-table-header-text-color: #303133;
+  --el-table-row-hover-bg-color: #ecf5ff;
+  --el-table-border-color: #ebeef5;
+}
+
+.data-table :deep(.el-table__header th.el-table__cell) {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.data-table :deep(.el-table__body .cell) {
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .preview-section {

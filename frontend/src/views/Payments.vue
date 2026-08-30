@@ -36,7 +36,7 @@
     
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="paymentRecords" stripe border class="data-table">
+        <el-table :data="paymentRecords" stripe border class="data-table" max-height="70vh">
           <el-table-column prop="contract_name" label="合同名称" min-width="160" sortable show-overflow-tooltip />
           <el-table-column prop="contract_no" label="合同编号" min-width="130" sortable />
           <el-table-column prop="payment_date" label="回款日期" min-width="120" sortable />
@@ -251,7 +251,7 @@ import api from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
-const isAdmin = computed(() => authStore.role === '主任' || authStore.role === '院长')
+const isAdmin = computed(() => authStore.has('data.view_all'))
 const allPaymentRecords = ref([])
 const contracts = ref([])
 const showAddModal = ref(false)

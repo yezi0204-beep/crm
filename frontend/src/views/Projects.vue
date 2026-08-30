@@ -25,7 +25,7 @@
     </div>
     
     <el-card>
-      <el-table :data="projectsData" stripe>
+      <el-table :data="projectsData" stripe max-height="70vh">
         <el-table-column prop="project_name" label="项目名称" sortable />
         <el-table-column prop="customer_name" label="客户名称" sortable />
         <el-table-column prop="start_date" label="开始日期" sortable />

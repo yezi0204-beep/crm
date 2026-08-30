@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from flask import request, jsonify
 
-from extensions import get_db, token_required
+from extensions import get_db, token_required, user_can
 
 from . import dashboard_bp
 
@@ -49,7 +49,7 @@ def get_dashboard():
 
     date_cond, contract_cond, payment_cond, date_params, contract_params, payment_params = build_date_filter(time_range, year)
 
-    if role == '主任' or role == '院长':
+    if user_can(username, 'data.view_all'):
         cursor.execute("SELECT COUNT(*) as total FROM customers WHERE 1=1 " + date_cond, date_params)
         result['total_customers'] = cursor.fetchone()['total']
 

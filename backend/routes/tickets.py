@@ -1,5 +1,5 @@
 from flask import request, jsonify
-from extensions import get_db, record_operation_log, token_required
+from extensions import get_db, record_operation_log, token_required, user_can
 from datetime import datetime
 
 from . import tickets_bp
@@ -52,7 +52,7 @@ def get_tickets():
     params = []
 
     # 普通销售：可见自己负责的 + 自己创建的；管理层可见全部
-    if role not in ('主任', '院长'):
+    if not user_can(username, 'data.view_all'):
         conditions.append("(t.owner_id = ? OR t.created_by = ?)")
         params.extend([username, username])
 
@@ -105,7 +105,7 @@ def get_ticket_detail(ticket_id):
     db = get_db()
     cursor = db.cursor()
 
-    if role in ('主任', '院长'):
+    if user_can(username, 'data.view_all'):
         cursor.execute("""
             SELECT t.*, c.company as customer_name, c.name as customer_contact,
                    p.name as product_name, u.name as owner_name,
@@ -225,7 +225,7 @@ def update_ticket(ticket_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '工单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username and row['created_by'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username and row['created_by'] != username:
         return jsonify({'code': 403, 'message': '权限不足，只能操作自己的工单', 'data': None})
 
     # closed 状态不可编辑
@@ -240,7 +240,7 @@ def update_ticket(ticket_id):
     if data.get('priority') and priority not in VALID_PRIORITIES:
         return jsonify({'code': 400, 'message': f'priority 必须为 {VALID_PRIORITIES} 之一', 'data': None})
 
-    can_change_owner = role in ('主任', '院长')
+    can_change_owner = user_can(username, 'data.view_all')
     try:
         if can_change_owner and 'owner_id' in data:
             cursor.execute("""
@@ -296,7 +296,7 @@ def delete_ticket(ticket_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '工单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username and row['created_by'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username and row['created_by'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     try:
@@ -329,7 +329,7 @@ def update_ticket_status(ticket_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '工单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username and row['created_by'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username and row['created_by'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     new_status = (data.get('status') or '').lower()
@@ -399,11 +399,11 @@ def get_ticket_messages(ticket_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '工单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username and row['created_by'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username and row['created_by'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     # 管理层可见内部记录；普通用户仅可见非内部记录
-    if role in ('主任', '院长') or row['owner_id'] == username or row['created_by'] == username:
+    if user_can(username, 'data.view_all') or row['owner_id'] == username or row['created_by'] == username:
         cursor.execute("""
             SELECT * FROM ticket_messages
             WHERE ticket_id = ?
@@ -439,7 +439,7 @@ def add_ticket_message(ticket_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '工单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username and row['created_by'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username and row['created_by'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     is_internal = 1 if data.get('is_internal') else 0
@@ -485,7 +485,7 @@ def submit_survey(ticket_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '工单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username and row['created_by'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username and row['created_by'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     if row['status'] not in ('resolved', 'closed'):
@@ -549,7 +549,7 @@ def get_survey(ticket_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '工单不存在', 'data': None})
-    if role not in ('主任', '院长') and row['owner_id'] != username and row['created_by'] != username:
+    if not user_can(username, 'data.view_all') and row['owner_id'] != username and row['created_by'] != username:
         return jsonify({'code': 403, 'message': '权限不足', 'data': None})
 
     cursor.execute("SELECT * FROM ticket_surveys WHERE ticket_id=?", (ticket_id,))
@@ -570,7 +570,7 @@ def get_surveys_summary():
 
     owner_filter = ""
     params = []
-    if role not in ('主任', '院长'):
+    if not user_can(username, 'data.view_all'):
         owner_filter = "AND (t.owner_id = ? OR t.created_by = ?)"
         params.extend([username, username])
 
@@ -618,7 +618,7 @@ def get_ticket_statistics():
 
     owner_filter = ""
     params = []
-    if role not in ('主任', '院长'):
+    if not user_can(username, 'data.view_all'):
         owner_filter = "WHERE (owner_id = ? OR created_by = ?)"
         params.extend([username, username])
 

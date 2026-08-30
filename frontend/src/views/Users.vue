@@ -23,7 +23,7 @@
     
     <div class="table-container">
       <div class="table-wrapper">
-        <el-table :data="filteredUsers" stripe border class="data-table">
+        <el-table :data="filteredUsers" stripe border class="data-table" max-height="70vh">
           <el-table-column prop="username" label="用户名" min-width="120" sortable />
           <el-table-column prop="name" label="姓名" min-width="100" sortable />
           <el-table-column prop="department" label="部门" min-width="100" sortable>
