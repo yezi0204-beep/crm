@@ -46,6 +46,9 @@ def _build_prompt(title, content, keywords, snippet=''):
 公告正文（截取）：
 {text}
 
+重要判断规则：
+- 若为"中标公告/成交公告/结果公告/结果公示"（即项目已定标），is_relevant 必须为 false——项目已名花有主，不再作为可跟进商机。但仍提取中标方（写入 competitors）供竞争对手分析使用。
+
 请返回 JSON 格式（不要其他文字）：
 {{
   "is_relevant": true/false,
@@ -155,7 +158,7 @@ def analyze_intelligence(raw_intel_id, db=None):
                     {'role': 'system', 'content': '你是一个专业的商机分析师，擅长从采购公告中识别商机并提取关键信息。只返回JSON。'},
                     {'role': 'user', 'content': prompt},
                 ]
-                content = call_llm(messages, max_tokens=4000, timeout=60, enable_thinking=False)
+                content = call_llm(messages, max_tokens=18000, timeout=360, enable_thinking=False)
                 if content:
                     result = _extract_json_from_text(content)
             except Exception as e:
@@ -165,14 +168,35 @@ def analyze_intelligence(raw_intel_id, db=None):
         if not result:
             result = _rule_based_analysis(row, keywords)
 
+        # 商机评分模型：7 维度加权 + 规则/LLM 混合
+        from scoring_model import score_lead
+        lead_for_scoring = {
+            'title': row['title'] or '',
+            'buyer': result.get('buyer', ''),
+            'budget': result.get('budget', ''),
+            'deadline': result.get('deadline', ''),
+            'procurement_method': result.get('procurement_method', ''),
+            'region': result.get('region', ''),
+            'competitors': result.get('competitors', []),
+            'keywords_matched': result.get('keywords_matched', []),
+            'analysis_summary': result.get('analysis_summary', ''),
+            'status': 'analyzed',
+        }
+        scoring = score_lead(lead_for_scoring)
+
+        # 商机生命周期：根据采购方式推断初始阶段
+        from lifecycle_model import derive_stage
+        lifecycle_stage = derive_stage(result.get('procurement_method', ''))
+
         # 保存结果
         cursor = db.execute("""
             INSERT INTO intelligence_leads (
                 raw_intelligence_id, source_id, title, buyer, budget, deadline,
                 project_type, procurement_method, region, contact_person, contact_phone,
                 competitors, keywords_matched, score, score_reason, is_relevant,
-                analysis_summary, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'analyzed')
+                analysis_summary, status, score_dimensions, score_grade, score_method,
+                lifecycle_stage
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'analyzed', ?, ?, ?, ?)
         """, (
             raw_intel_id,
             row['source_id'],
@@ -187,16 +211,35 @@ def analyze_intelligence(raw_intel_id, db=None):
             result.get('contact_phone', ''),
             json.dumps(result.get('competitors', []), ensure_ascii=False),
             json.dumps(result.get('keywords_matched', []), ensure_ascii=False),
-            int(result.get('score', 0)),
-            result.get('score_reason', ''),
+            scoring['score'],
+            scoring['reason'],
             1 if result.get('is_relevant', True) else 0,
             result.get('analysis_summary', ''),
+            json.dumps(scoring['dimensions'], ensure_ascii=False),
+            scoring['grade'],
+            scoring['method'],
+            lifecycle_stage,
         ))
         db.commit()
 
         # 更新原始情报状态
         db.execute("UPDATE raw_intelligence SET status='analyzed' WHERE id=?", (raw_intel_id,))
         db.commit()
+
+        # 项目关联：自动将新公告关联到已有项目或创建新项目
+        try:
+            from project_model import auto_associate_project
+            new_lead = db.execute(
+                "SELECT * FROM intelligence_leads WHERE id=?", (cursor.lastrowid,)
+            ).fetchone()
+            proj_result = auto_associate_project(cursor.lastrowid, new_lead, db)
+            db.commit()
+            if proj_result['action'] == 'created':
+                logger.info(f'创建新项目 #{proj_result["project_id"]}: {proj_result["project_name"]}')
+            elif proj_result['action'] == 'linked':
+                logger.info(f'公告#{cursor.lastrowid} 关联到项目#{proj_result["project_id"]}')
+        except Exception as e:
+            logger.warning(f'项目关联失败（不影响分析结果）: {e}')
 
         return cursor.lastrowid, None
     except Exception as e:
@@ -252,8 +295,12 @@ def _rule_based_analysis(row, keywords):
         score += 10
     score = min(score, 50)
 
+    # 中标/成交结果公告：项目已定标，不再作为可跟进商机
+    title_lower = (row['title'] or '')
+    is_win_result = any(kw in title_lower for kw in ('中标', '成交结果', '结果公告', '结果公示'))
+
     return {
-        'is_relevant': len(matched) > 0,
+        'is_relevant': len(matched) > 0 and not is_win_result,
         'buyer': _extract_buyer(text),
         'budget': budget,
         'deadline': deadline,

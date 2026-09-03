@@ -101,13 +101,9 @@
             <span class="menu-icon">🚀</span>
             <span>AI驾驶舱</span>
           </el-menu-item>
-          <el-menu-item index="/intelligence" v-if="has('intel.view')">
+          <el-menu-item index="/intelligence" v-if="has('intel.view') || has('intel.leads')">
             <span class="menu-icon">📡</span>
             <span>情报与线索</span>
-          </el-menu-item>
-          <el-menu-item index="/intel-leads" v-if="has('intel.leads')">
-            <span class="menu-icon">🎯</span>
-            <span>AI商机识别</span>
           </el-menu-item>
           <el-menu-item index="/customer-profiles" v-if="has('intel.profile')">
             <span class="menu-icon">🏢</span>
@@ -117,6 +113,18 @@
             <span class="menu-icon">⚔️</span>
             <span>竞争对手分析</span>
           </el-menu-item>
+          <el-menu-item index="/opportunity-radar" v-if="has('intel.leads')">
+            <span class="menu-icon">🛰️</span>
+            <span>商机雷达</span>
+          </el-menu-item>
+          <el-menu-item index="/capabilities" v-if="has('system.admin') || has('intel.keywords')">
+            <span class="menu-icon">💪</span>
+            <span>能力模型</span>
+          </el-menu-item>
+          <el-menu-item index="/task-monitor" v-if="has('system.admin')">
+            <span class="menu-icon">🧵</span>
+            <span>任务监控</span>
+          </el-menu-item>
           <el-menu-item index="/daily-report" v-if="has('intel.report')">
             <span class="menu-icon">📰</span>
             <span>AI日报</span>
@@ -124,6 +132,10 @@
           <el-menu-item index="/keywords" v-if="has('intel.keywords')">
             <span class="menu-icon">🏷️</span>
             <span>关键词管理</span>
+          </el-menu-item>
+          <el-menu-item index="/business-tags" v-if="has('intel.keywords')">
+            <span class="menu-icon">🧬</span>
+            <span>业务标签</span>
           </el-menu-item>
           <el-menu-item index="/enterprises">
             <span class="menu-icon">🗄️</span>
@@ -164,6 +176,10 @@
           <el-menu-item index="/users" v-if="has('system.admin')">
             <span class="menu-icon">👥</span>
             <span>{{ t('menuItem.users') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/data-sources" v-if="has('system.admin') || has('data.view_all')">
+            <span class="menu-icon">📡</span>
+            <span>数据源管理</span>
           </el-menu-item>
           <el-menu-item index="/alerts">
             <span class="menu-icon">🔔</span>

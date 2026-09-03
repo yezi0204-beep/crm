@@ -214,12 +214,28 @@ def create_contract():
 @contracts_bp.route('/api/contracts/<int:contract_id>', methods=['PUT'])
 @token_required
 def update_contract(contract_id):
+    """编辑合同：管理员可编辑任何合同；合同负责人可编辑自己负责的合同，但不能改负责人。"""
     payload = request.current_user
     data = request.get_json(silent=True) or {}
     username = payload['username']
 
     db = get_db()
     cursor = db.cursor()
+
+    # 检查权限：管理员 OR 合同负责人
+    cursor.execute("SELECT owner_id FROM contracts WHERE id=?", (contract_id,))
+    contract_row = cursor.fetchone()
+    if not contract_row:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+
+    is_admin = user_can(username, 'data.view_all')
+    is_owner = (contract_row['owner_id'] == username)
+
+    if not is_admin and not is_owner:
+        return jsonify({'code': 403, 'message': '无权编辑非自己负责的合同', 'data': None})
+
+    # 负责人不能通过编辑修改合同负责人（强制保留原值）
+    effective_owner_id = data.get('owner_id') if is_admin else contract_row['owner_id']
 
     try:
         # 关联客户/商机，并做一致性兜底：若传了 b_id，以商机的 cust_id 为准，防数据撕裂
@@ -247,7 +263,7 @@ def update_contract(contract_id):
             data.get('total_amt'), data.get('sign_date'), data.get('classification'), data.get('is_audit'),
             data.get('pending_acceptance_amount'), data.get('cost'), data.get('gross_profit'),
             data.get('acceptance_date'), data.get('expected_income_date'), data.get('expected_income_year'),
-            data.get('business_type'), data.get('status'), data.get('owner_id'),
+            data.get('business_type'), data.get('status'), effective_owner_id,
             cust_id, b_id,
             data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'),
             1 if data.get('is_framework') else 0,
@@ -455,8 +471,19 @@ def get_acceptances(contract_id):
 def add_acceptance(contract_id):
     """新增一条验收记录（可同时传入分成）。
     body: {acceptance_date, acceptance_amount, note, commissions: [{username, ratio}]}
+    管理员或合同负责人可用。
     """
     payload = request.current_user
+    username = payload['username']
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT owner_id FROM contracts WHERE id=?", (contract_id,))
+    c = cur.fetchone()
+    if not c:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    if not user_can(username, 'data.view_all') and c['owner_id'] != username:
+        return jsonify({'code': 403, 'message': '无权操作非自己负责的合同验收', 'data': None})
+
     data = request.get_json(silent=True) or {}
     acc_date = (data.get('acceptance_date') or '').strip()
     acc_amt = float(data.get('acceptance_amount') or 0)
@@ -480,11 +507,6 @@ def add_acceptance(contract_id):
     if commissions and abs(total_ratio - 100.0) > 0.01:
         return jsonify({'code': 400, 'message': f'分成比例之和为 {total_ratio}%，必须等于 100%', 'data': None})
 
-    db = get_db()
-    cur = db.cursor()
-    cur.execute("SELECT 1 FROM contracts WHERE id=?", (contract_id,))
-    if not cur.fetchone():
-        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     operator = payload['username']
     try:

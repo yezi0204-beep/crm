@@ -1,6 +1,7 @@
 from flask import Flask, g, request, jsonify
 from functools import wraps
 import sqlite3
+import json
 import bcrypt
 import os
 import secrets
@@ -88,8 +89,26 @@ def _init_tables(db):
     _init_monthly_targets_table(cursor)
     _init_visits_table(cursor)
     _init_user_roles_table(cursor)
+    # 兼容已部署环境：lead_sources 幂等补齐字段
+    try:
+        existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(lead_sources)")]
+        for col, ddl in {
+            'parser_type': "ALTER TABLE lead_sources ADD COLUMN parser_type TEXT",
+            'category': "ALTER TABLE lead_sources ADD COLUMN category TEXT",
+            'collection_method': "ALTER TABLE lead_sources ADD COLUMN collection_method TEXT DEFAULT '自动采集'",
+            'frequency': "ALTER TABLE lead_sources ADD COLUMN frequency TEXT DEFAULT '每日'",
+            'next_collect_at': "ALTER TABLE lead_sources ADD COLUMN next_collect_at TEXT",
+            'notes': "ALTER TABLE lead_sources ADD COLUMN notes TEXT",
+            'collector_plugin': "ALTER TABLE lead_sources ADD COLUMN collector_plugin TEXT",
+        }.items():
+            if col not in existing_cols:
+                cursor.execute(ddl)
+    except Exception as e:
+        print(f"[init_lead_sources_cols] 迁移失败: {e}")
+
     _init_rbac_tables(cursor)
     _init_custom_fields_table(cursor)
+    _init_business_tags_table(cursor)
     _init_knowledge_base_table(cursor)
     _init_knowledge_extension_tables(cursor)
     _init_lead_tables(cursor)
@@ -901,6 +920,117 @@ def _init_intelligence_tables(cursor):
         cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN converted_lead_id INTEGER")
     except:
         pass
+    # 商机评分模型：7 维度明细 / 等级 / 评分方法
+    try:
+        cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN score_dimensions TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN score_grade TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN score_method TEXT")
+    except:
+        pass
+    # 商机生命周期：情报 8 阶段（intelligence/procurement_intent/project_preview/
+    # bidding_announcement/bidding/won_bid/lost_bid/deal_closed）
+    try:
+        cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN lifecycle_stage TEXT DEFAULT 'intelligence'")
+    except:
+        pass
+    # 生命周期流转日志表
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS lifecycle_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                from_stage TEXT,
+                to_stage TEXT NOT NULL,
+                reason TEXT,
+                operator TEXT,
+                crm_stage TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (lead_id) REFERENCES intelligence_leads(id)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lifecycle_logs_lead ON lifecycle_logs(lead_id, created_at)"
+        )
+    except:
+        pass
+    # 多级去重：疑似重复候选表
+    try:
+        cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN dedup_status TEXT DEFAULT 'clean'")
+    except:
+        pass
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS duplicate_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_a_id INTEGER NOT NULL,
+                lead_b_id INTEGER NOT NULL,
+                match_level INTEGER NOT NULL,
+                match_level_name TEXT,
+                similarity REAL,
+                match_reason TEXT,
+                status TEXT DEFAULT 'pending',
+                ai_is_same INTEGER,
+                ai_confidence REAL,
+                ai_reason TEXT,
+                operator TEXT,
+                resolved_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (lead_a_id) REFERENCES intelligence_leads(id),
+                FOREIGN KEY (lead_b_id) REFERENCES intelligence_leads(id)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dup_cand_a ON duplicate_candidates(lead_a_id, status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dup_cand_b ON duplicate_candidates(lead_b_id, status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dup_cand_status ON duplicate_candidates(status)"
+        )
+    except:
+        pass
+    # 项目实体：多个公告关联到同一 Project，避免 CRM 重复商机
+    try:
+        cursor.execute("ALTER TABLE intelligence_leads ADD COLUMN project_id INTEGER")
+    except:
+        pass
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                buyer TEXT,
+                region TEXT,
+                budget TEXT,
+                lifecycle_stage TEXT DEFAULT 'intelligence',
+                score INTEGER DEFAULT 0,
+                score_grade TEXT,
+                status TEXT DEFAULT 'active',
+                crm_lead_id INTEGER,
+                announcement_count INTEGER DEFAULT 0,
+                keywords_matched TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_projects_buyer ON projects(buyer, status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_projects_stage ON projects(lifecycle_stage, status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_il_project ON intelligence_leads(project_id)"
+        )
+    except:
+        pass
 
     # Phase5: AI日报存储表
     try:
@@ -947,6 +1077,21 @@ def _init_intelligence_tables(cursor):
         """)
     except:
         pass
+    # AI 客户画像增强字段
+    for col, col_def in [
+        ('customer_tier', "TEXT DEFAULT 'potential'"),
+        ('ai_tier_suggestion', "TEXT"),
+        ('ai_status', "TEXT DEFAULT 'confirmed'"),
+        ('procurement_frequency', "TEXT"),
+        ('key_suppliers', "TEXT"),
+        ('potential_projects', "TEXT"),
+        ('ai_analysis', "TEXT"),
+        ('ai_generated', "INTEGER DEFAULT 0"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE customer_profiles ADD COLUMN {col} {col_def}")
+        except:
+            pass
 
     # Phase8: 竞争对手画像表
     try:
@@ -965,6 +1110,99 @@ def _init_intelligence_tables(cursor):
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+    except:
+        pass
+    # 竞争对手数据库扩展字段
+    for col, col_def in [
+        ('aliases', "TEXT"),                # 别名（JSON数组）
+        ('website', "TEXT"),                # 官网
+        ('main_business', "TEXT"),          # 主营业务
+        ('products', "TEXT"),               # 产品（JSON数组）
+        ('industry', "TEXT"),               # 行业
+        ('compete_fields', "TEXT"),         # 竞争领域（JSON数组）
+        ('strengths', "TEXT"),              # 优势（AI生成）
+        ('weaknesses', "TEXT"),             # 弱点（AI生成）
+        ('recent_news', "TEXT"),            # 最近动态（JSON数组）
+        ('risk_level', "TEXT DEFAULT 'medium'"),  # 风险等级 low/medium/high
+        ('win_amount', "REAL DEFAULT 0"),   # 中标金额（万）
+        ('our_strategy', "TEXT"),           # 我方竞争策略（AI生成）
+        ('ai_analyzed_at', "TEXT"),         # AI分析时间
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE competitor_profiles ADD COLUMN {col} {col_def}")
+        except:
+            pass
+
+    # Phase9: 我方能力模型
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS capabilities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                level TEXT DEFAULT 'mature',
+                description TEXT,
+                products TEXT,
+                solutions TEXT,
+                cases TEXT,
+                keywords TEXT,
+                synonyms TEXT,
+                related_industries TEXT,
+                enabled INTEGER DEFAULT 1,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except:
+        pass
+
+    # Phase9: AI操作日志（model/prompt_version/token/latency）
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_operation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operator_id INTEGER,
+                operator_name TEXT,
+                operation_type TEXT,
+                data_source TEXT,
+                model_name TEXT,
+                prompt_version TEXT DEFAULT 'v1',
+                token_usage INTEGER DEFAULT 0,
+                latency INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'success',
+                error_message TEXT,
+                result_summary TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ai_log_type ON ai_operation_logs(operation_type, created_at)"
+        )
+    except:
+        pass
+
+    # Phase9: 异步任务表（轻量级，适配 SQLite 单机环境）
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                status TEXT DEFAULT 'PENDING',
+                payload TEXT,
+                result TEXT,
+                error_message TEXT,
+                retry_count INTEGER DEFAULT 0,
+                max_retries INTEGER DEFAULT 3,
+                timeout_seconds INTEGER DEFAULT 600,
+                progress TEXT,
+                created_by TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                started_at TEXT,
+                finished_at TEXT,
+                duration_ms INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ai_tasks_status ON ai_tasks(status, task_type)"
+        )
     except:
         pass
 
@@ -1228,6 +1466,58 @@ def _init_custom_fields_table(cursor):
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN ext_data TEXT")
         except Exception:
             pass  # 列已存在
+
+
+def _init_business_tags_table(cursor):
+    """业务标签（三级树）：同义词用于情报匹配命中，排除词用于过滤误报，关联词备用。
+
+    数据全部由后台管理界面维护，代码不写死任何标签。
+    """
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS business_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_id INTEGER,
+                name TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 1,
+                synonyms TEXT,
+                related_words TEXT,
+                exclude_words TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except Exception as e:
+        print(f"[init_business_tags] 建表失败: {e}")
+        return
+
+    # 首次初始化种子数据（逐项判存在，管理员后续修改不受影响）
+    try:
+        existing = {r['name'] for r in cursor.execute("SELECT name FROM business_tags")}
+        seed = [
+            ('遥感', ['卫星遥感', 'SAR', '光学遥感', '遥感监测', '遥感解译', '遥感平台']),
+            ('农业', ['智慧农业', '农业遥感', '农业物联网', '农业大数据', '智慧渔业', '鱼情']),
+            ('AI', ['人工智能', '大模型', '智能体', 'Agent', 'AI平台', 'AI应用']),
+        ]
+        syn_map = {
+            'SAR': ['合成孔径雷达'], '大模型': ['LLM', '大语言模型'],
+            '智能体': ['AI Agent'], '卫星遥感': ['卫星影像'],
+        }
+        for i, (root_name, children) in enumerate(seed):
+            if root_name in existing:
+                continue
+            cursor.execute(
+                "INSERT INTO business_tags (parent_id, name, level, sort_order) VALUES (NULL, ?, 1, ?)",
+                (root_name, i))
+            root_id = cursor.lastrowid
+            for j, child in enumerate(children):
+                cursor.execute(
+                    "INSERT INTO business_tags (parent_id, name, level, sort_order, synonyms) VALUES (?, ?, 2, ?, ?)",
+                    (root_id, child, j, json.dumps(syn_map.get(child, []), ensure_ascii=False)))
+    except Exception as e:
+        print(f"[init_business_tags] 种子数据失败: {e}")
 
 
 def get_user_permissions(username):

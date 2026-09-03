@@ -41,111 +41,10 @@ from . import leads_bp
 
 # ==================== 线索源 CRUD ====================
 
-@leads_bp.route('/api/leads/sources', methods=['GET'])
-@token_required
-def list_sources():
-    payload = request.current_user
-    if payload.get('role') not in ('主任', '院长'):
-        return jsonify({'code': 403, 'message': '仅主任/院长可管理线索源', 'data': None})
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("""
-        SELECT s.*, (SELECT COUNT(*) FROM scraped_leads sl WHERE sl.source_id = s.id) as lead_count
-        FROM lead_sources s ORDER BY s.created_at DESC
-    """)
-    rows = [dict(r) for r in cursor.fetchall()]
-    return jsonify({'code': 200, 'message': 'success', 'data': rows})
-
-
-@leads_bp.route('/api/leads/sources', methods=['POST'])
-@token_required
-def create_source():
-    payload = request.current_user
-    if payload.get('role') not in ('主任', '院长'):
-        return jsonify({'code': 403, 'message': '仅主任/院长可管理线索源', 'data': None})
-    data = request.get_json(silent=True) or {}
-    name = (data.get('name') or '').strip()
-    if not name:
-        return jsonify({'code': 400, 'message': '请输入线索源名称', 'data': None})
-    source_type = data.get('source_type', 'sample')
-    if source_type not in ('rss', 'api', 'sample', 'manual', 'html', 'ai_search'):
-        return jsonify({'code': 400, 'message': '源类型非法（rss/api/html/ai_search/sample/manual）', 'data': None})
-    category = (data.get('category') or '').strip()
-    # html/ai_search 源必须指定能力域类别以分发到对应抓取器
-    if source_type in ('html', 'ai_search') and not category:
-        return jsonify({'code': 400, 'message': '该源类型必须选择能力域类别（招投标监控/电商商机/企业客源/竞品情报/舆情痛点）', 'data': None})
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO lead_sources (name, source_type, url, config, keywords, industry,
-                                      region, enabled, interval_hours, category, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (
-            name, source_type, data.get('url', ''),
-            data.get('config', ''), data.get('keywords', ''),
-            data.get('industry', ''), data.get('region', ''),
-            1 if data.get('enabled', True) else 0,
-            int(data.get('interval_hours', 24)),
-            category,
-        ))
-        db.commit()
-        record_operation_log(payload['username'], '创建', '线索源', f'创建线索源：{name}({source_type}/{category})')
-        return jsonify({'code': 200, 'message': '创建成功', 'data': {'id': cursor.lastrowid}})
-    except Exception as e:
-        db.rollback()
-        return jsonify({'code': 500, 'message': str(e), 'data': None})
-
-
-@leads_bp.route('/api/leads/sources/<int:source_id>', methods=['PUT'])
-@token_required
-def update_source(source_id):
-    payload = request.current_user
-    if payload.get('role') not in ('主任', '院长'):
-        return jsonify({'code': 403, 'message': '权限不足', 'data': None})
-    data = request.get_json(silent=True) or {}
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT id FROM lead_sources WHERE id=?", (source_id,))
-    if not cursor.fetchone():
-        return jsonify({'code': 404, 'message': '线索源不存在', 'data': None})
-    try:
-        updates, params = [], []
-        for f in ['name', 'source_type', 'url', 'config', 'keywords', 'industry', 'region', 'interval_hours', 'category']:
-            if f in data:
-                updates.append(f"{f}=?")
-                params.append(data[f])
-        if 'enabled' in data:
-            updates.append("enabled=?")
-            params.append(1 if data['enabled'] else 0)
-        if updates:
-            params.append(source_id)
-            cursor.execute(f"UPDATE lead_sources SET {', '.join(updates)} WHERE id=?", params)
-            db.commit()
-            record_operation_log(payload['username'], '编辑', '线索源', f'编辑线索源 ID:{source_id}')
-        return jsonify({'code': 200, 'message': '更新成功', 'data': None})
-    except Exception as e:
-        db.rollback()
-        return jsonify({'code': 500, 'message': str(e), 'data': None})
-
-
-@leads_bp.route('/api/leads/sources/<int:source_id>', methods=['DELETE'])
-@token_required
-def delete_source(source_id):
-    payload = request.current_user
-    if payload.get('role') not in ('主任', '院长'):
-        return jsonify({'code': 403, 'message': '权限不足', 'data': None})
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        cursor.execute("DELETE FROM scraped_leads WHERE source_id=?", (source_id,))
-        cursor.execute("DELETE FROM lead_sources WHERE id=?", (source_id,))
-        db.commit()
-        record_operation_log(payload['username'], '删除', '线索源', f'删除线索源 ID:{source_id}')
-        return jsonify({'code': 200, 'message': '删除成功', 'data': None})
-    except Exception as e:
-        db.rollback()
-        return jsonify({'code': 500, 'message': str(e), 'data': None})
+# ==================== 线索源管理已迁移至 /api/data-sources ====================
+# 说明：数据源 CRUD + 采集器插件管理 + 手动采集已统一至 routes/data_sources.py，
+# 操作同一张 lead_sources 表，权限改为 RBAC（system.admin / data.view_all）。
+# 旧 /api/leads/sources 接口已删除，前端请调用 /api/data-sources。
 
 
 # ==================== 抓取引擎 ====================
@@ -595,8 +494,8 @@ def _llm_extract_leads(search_results, keywords, category, max_items):
         {'role': 'system', 'content': '你是商机线索分析助手，只返回JSON数组，不要任何其他文字。'},
         {'role': 'user', 'content': prompt}
     ]
-    # 关闭思考模式，60 秒超时，4000 token 足够
-    raw = call_llm(messages, max_tokens=4000, timeout=60, enable_thinking=False)
+    # 关闭思考模式，60 秒超时，18000 token 足够
+    raw = call_llm(messages, max_tokens=18000, timeout=360, enable_thinking=False)
     if not raw:
         return None
     # 解析 LLM 返回的 JSON
@@ -856,7 +755,7 @@ def _llm_filter_procurement(announcements, keywords, category, max_items):
         {'role': 'system', 'content': '你是商机分析助手，只返回JSON数组。'},
         {'role': 'user', 'content': prompt}
     ]
-    raw = call_llm(messages, max_tokens=4000, timeout=60, enable_thinking=False)
+    raw = call_llm(messages, max_tokens=18000, timeout=360, enable_thinking=False)
     if not raw:
         return None
     try:

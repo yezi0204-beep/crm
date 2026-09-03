@@ -54,6 +54,11 @@ const routes = [
         component: () => import('../views/Users.vue')
       },
       {
+        path: 'data-sources',
+        name: 'DataSources',
+        component: () => import('../views/DataSources.vue')
+      },
+      {
         path: 'pool',
         name: 'Pool',
         component: () => import('../views/Pool.vue')
@@ -148,14 +153,18 @@ const routes = [
         component: () => import('../views/Keywords.vue')
       },
       {
+        path: 'business-tags',
+        name: 'BusinessTags',
+        component: () => import('../views/BusinessTags.vue')
+      },
+      {
         path: 'intelligence',
         name: 'Intelligence',
         component: () => import('../views/IntelligenceHub.vue')
       },
       {
         path: 'intel-leads',
-        name: 'IntelligenceLeads',
-        component: () => import('../views/IntelligenceLeads.vue')
+        redirect: { path: '/intelligence', query: { tab: 'ai-leads' } }
       },
       {
         path: 'daily-report',
@@ -176,6 +185,21 @@ const routes = [
         path: 'competitor-analysis',
         name: 'CompetitorAnalysis',
         component: () => import('../views/CompetitorAnalysis.vue')
+      },
+      {
+        path: 'opportunity-radar',
+        name: 'OpportunityRadar',
+        component: () => import('../views/OpportunityRadar.vue')
+      },
+      {
+        path: 'capabilities',
+        name: 'Capabilities',
+        component: () => import('../views/Capabilities.vue')
+      },
+      {
+        path: 'task-monitor',
+        name: 'TaskMonitor',
+        component: () => import('../views/TaskMonitor.vue')
       }
     ]
   }

@@ -249,7 +249,7 @@ def generate_summary():
         {'role': 'system', 'content': system_prompt},
         {'role': 'user', 'content': json.dumps(user_prompt, ensure_ascii=False, default=str)}
     ]
-    answer = call_llm(messages, max_tokens=8192, timeout=120, enable_thinking=False)
+    answer = call_llm(messages, max_tokens=18000, timeout=360, enable_thinking=False)
     if not answer:
         return jsonify({'code': 500, 'message': 'LLM 服务未启用或调用失败，无法生成总结', 'data': None})
 

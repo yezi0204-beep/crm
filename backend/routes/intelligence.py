@@ -32,9 +32,13 @@ def list_intelligence():
     sql = """
         SELECT ri.id, ri.source_id, ri.url, ri.title, ri.publish_date,
                ri.collected_at, ri.status, ri.error_message,
-               ls.name as source_name
+               ls.name as source_name,
+               il.id as lead_id, il.score as lead_score, il.score_grade as lead_grade,
+               ag.id as agent_result_id, ag.final_score as agent_score
         FROM raw_intelligence ri
         LEFT JOIN lead_sources ls ON ri.source_id = ls.id
+        LEFT JOIN intelligence_leads il ON il.raw_intelligence_id = ri.id
+        LEFT JOIN intelligence_agent_results ag ON ag.raw_intelligence_id = ri.id
         WHERE 1=1
     """
     params = []
@@ -175,6 +179,44 @@ def _match_business_keywords(title, content, snippet, match_list, exclude_list):
     return (bool(matched), matched)
 
 
+def _load_content_matcher(db):
+    """构建内容匹配器：业务标签（三级树）优先，无启用标签时回退旧关键词表。"""
+    from .business_tags import load_tag_matcher
+    tag_map, exclude_list, has_tags = load_tag_matcher(db)
+    if has_tags:
+        return {'mode': 'tags', 'tag_map': tag_map, 'exclude': exclude_list}
+    match_list, exclude_list = _load_active_keywords(db)
+    return {'mode': 'keywords', 'match_list': match_list, 'exclude': exclude_list}
+
+
+def _match_content(title, content, snippet, matcher):
+    """按匹配器判断内容是否与业务相关。
+
+    规则（两种模式一致）：
+    - 命中排除词 → 直接丢弃
+    - tags 模式：文本命中任一标签名/同义词 → 保留，返回命中的标签路径（如 "遥感/SAR"）
+    - keywords 模式：未配置启用关键词 → 全部保留；否则命中关键词（或同义词）→ 保留
+    返回 (是否保留, 命中列表)
+    """
+    text = f"{title or ''}\n{snippet or ''}\n{(content or '')[:3000]}".lower()
+    for ex in matcher.get('exclude', []):
+        if ex.lower() in text:
+            return False, []
+    if matcher['mode'] == 'tags':
+        seen, matched = set(), []
+        for word, path in matcher['tag_map'].items():
+            if word in text and path not in seen:
+                seen.add(path)
+                matched.append(path)
+        return (bool(matched), matched)
+    # keywords 模式
+    match_list = matcher['match_list']
+    if not match_list:
+        return True, []
+    matched = [kw for kw in match_list if kw.lower() in text]
+    return (bool(matched), matched)
+
+
 def _save_raw_intelligence(source_id, url, title, content, publish_date='', snippet='', attachment_path='', keywords_matched=''):
     """保存原始情报到统一采集池，URL Hash 去重。
 
@@ -254,7 +296,7 @@ def collect_from_source(source_id):
 
     # 抓取详情页 + 保存
     fetch_detail = request.args.get('fetch_detail', '1') != '0'
-    match_list, exclude_list = _load_active_keywords(db)
+    matcher = _load_content_matcher(db)
     new_count = 0
     dup_count = 0
     filtered_count = 0
@@ -270,8 +312,8 @@ def collect_from_source(source_id):
             from utils.cleaner import clean_title, is_junk_content
             title = clean_title(item.title) if item.title else ''
 
-            # 关键词管理联动：排除词过滤 + 业务关键词匹配（与业务无关的内容不入库）
-            keep, matched = _match_business_keywords(title, item.content, item.snippet, match_list, exclude_list)
+            # 业务标签/关键词联动：排除词过滤 + 标签（同义词）匹配（与业务无关的内容不入库）
+            keep, matched = _match_content(title, item.content, item.snippet, matcher)
             if not keep:
                 filtered_count += 1
                 continue
@@ -360,15 +402,15 @@ def collect_all_sources():
             collector = collector_cls(source_dict, config)
             items = collector.collect()
 
-            match_list, exclude_list = _load_active_keywords(db)
+            matcher = _load_content_matcher(db)
             new_count = 0
             filtered_count = 0
             for item in items:
                 item = collector.fetch_detail(item) if item.url else item
                 from utils.cleaner import clean_title, is_junk_content
                 title = clean_title(item.title) if item.title else ''
-                # 关键词管理联动：排除词过滤 + 业务关键词匹配
-                keep, matched = _match_business_keywords(title, item.content, item.snippet, match_list, exclude_list)
+                # 业务标签/关键词联动：排除词过滤 + 标签（同义词）匹配
+                keep, matched = _match_content(title, item.content, item.snippet, matcher)
                 if not keep:
                     filtered_count += 1
                     continue
@@ -494,6 +536,80 @@ def analyze_batch():
     return jsonify({'code': 200, 'data': result})
 
 
+# ============================================================
+# 多 Agent 协同分析（7 个专职 Agent 顺序协同）
+# ============================================================
+@intelligence_bp.route('/agent-analyze/<int:rid>', methods=['POST'])
+@admin_required
+def agent_analyze(rid):
+    """7-Agent 协同分析单条情报。
+
+    Agent1 信息分类 / Agent2 业务分类 / Agent3 实体识别 /
+    Agent4 项目分析 / Agent5 能力匹配 / Agent6 商机评分 / Agent7 销售建议
+
+    参数 ?force=true 强制重新分析（覆盖旧结果）；默认已分析过则直接返回已有结果。
+    """
+    from ai_agents import analyze_with_agents, get_agent_result
+
+    db = get_db()
+    row = db.execute("SELECT id, title, status FROM raw_intelligence WHERE id=?", (rid,)).fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '情报不存在'})
+
+    force = request.args.get('force', '').lower() == 'true'
+    result, err = analyze_with_agents(rid, db, force=force)
+    if err:
+        return jsonify({'code': 500, 'message': f'分析失败: {err}'})
+
+    if result is None:
+        # 已分析过（非强制）：直接返回已保存结果，前端可直接展示
+        saved = get_agent_result(rid, db)
+        return jsonify({'code': 200, 'data': saved, 'message': '已分析过，返回已有结果'})
+
+    record_operation_log(
+        request.current_user, 'agent_analyze', 'raw_intelligence',
+        f'7-Agent分析:{row["title"]} 评分:{result.get("final_score", 0)}'
+    )
+    return jsonify({'code': 200, 'data': result})
+
+
+@intelligence_bp.route('/agent-analyze-batch', methods=['POST'])
+@admin_required
+def agent_analyze_batch():
+    """批量 7-Agent 协同分析 pending 状态情报。
+
+    参数：
+    - source_id: 限定数据源（可选）
+    - limit: 最多分析条数（默认 10，上限 50，因单条需 7 次 LLM 调用）
+    """
+    from ai_agents import batch_analyze_with_agents
+
+    source_id = request.args.get('source_id', type=int)
+    limit = request.args.get('limit', 10, type=int)
+    if limit > 50:
+        limit = 50
+
+    result = batch_analyze_with_agents(source_id=source_id, limit=limit)
+    record_operation_log(
+        request.current_user, 'agent_analyze_batch', 'raw_intelligence',
+        f'7-Agent批量分析{result["analyzed"]}条 成功{result["success"]} 失败{result["failed"]}'
+    )
+    return jsonify({'code': 200, 'data': result})
+
+
+@intelligence_bp.route('/agent-result/<int:rid>', methods=['GET'])
+@token_required
+def agent_result(rid):
+    """获取已保存的 7-Agent 分析结果。"""
+    from ai_agents import get_agent_result
+
+    db = get_db()
+    result = get_agent_result(rid, db)
+    if not result:
+        return jsonify({'code': 404, 'message': '尚未分析'})
+    return jsonify({'code': 200, 'data': result})
+
+
 @intelligence_bp.route('/leads', methods=['GET'])
 @token_required
 def list_leads():
@@ -525,6 +641,21 @@ def list_leads():
     if is_relevant is not None:
         sql += " AND il.is_relevant = ?"
         params.append(is_relevant)
+    # 等级筛选：S/A/B/C
+    grade = request.args.get('grade', '').strip().upper()
+    if grade in ('S', 'A', 'B', 'C'):
+        sql += " AND il.score_grade = ?"
+        params.append(grade)
+    # 生命周期阶段筛选
+    lifecycle_stage = request.args.get('lifecycle_stage', '').strip()
+    if lifecycle_stage:
+        sql += " AND il.lifecycle_stage = ?"
+        params.append(lifecycle_stage)
+    # 去重状态筛选：clean/suspect/merged
+    dedup_status = request.args.get('dedup_status', '').strip()
+    if dedup_status:
+        sql += " AND il.dedup_status = ?"
+        params.append(dedup_status)
 
     total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql})", params).fetchone()['cnt']
 
@@ -562,6 +693,590 @@ def get_lead(lid):
     if not row:
         return jsonify({'code': 404, 'message': '商机不存在'})
     return jsonify({'code': 200, 'data': dict(row)})
+
+
+@intelligence_bp.route('/leads/<int:lid>/score', methods=['POST'])
+@admin_required
+def rescore_lead(lid):
+    """商机评分模型重评分：7 维度加权 + 规则/LLM 混合。"""
+    from scoring_model import score_lead
+
+    db = get_db()
+    row = db.execute("SELECT * FROM intelligence_leads WHERE id=?", (lid,)).fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '商机不存在'})
+
+    result = score_lead(row, db=db)
+    db.execute("""
+        UPDATE intelligence_leads
+        SET score=?, score_reason=?, score_dimensions=?, score_grade=?, score_method=?
+        WHERE id=?
+    """, (
+        result['score'],
+        result['reason'],
+        json.dumps(result['dimensions'], ensure_ascii=False),
+        result['grade'],
+        result['method'],
+        lid
+    ))
+    db.commit()
+    record_operation_log(
+        request.current_user, 'score', 'intelligence_leads',
+        f'商机#{lid} 评分{result["score"]}({result["grade"]}级,{result["method"]})'
+    )
+    lead = db.execute("SELECT * FROM intelligence_leads WHERE id=?", (lid,)).fetchone()
+    return jsonify({'code': 200, 'data': dict(lead), 'scoring': result})
+
+
+# ==================== 商机生命周期 ====================
+
+@intelligence_bp.route('/lifecycle/config', methods=['GET'])
+@token_required
+def lifecycle_config():
+    """生命周期配置：情报 8 阶段 + CRM 5 阶段映射。"""
+    from lifecycle_model import INTEL_STAGES, CRM_STAGES
+    return jsonify({
+        'code': 200,
+        'data': {
+            'intel_stages': INTEL_STAGES,
+            'crm_stages': CRM_STAGES,
+        }
+    })
+
+
+@intelligence_bp.route('/leads/<int:lid>/lifecycle', methods=['GET'])
+@token_required
+def get_lifecycle(lid):
+    """获取商机生命周期进度与流转日志。"""
+    from lifecycle_model import get_lifecycle_progress, STAGE_BY_KEY
+    db = get_db()
+    row = db.execute(
+        "SELECT id, lifecycle_stage FROM intelligence_leads WHERE id=?", (lid,)
+    ).fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '商机不存在'})
+    stage = row['lifecycle_stage'] or 'intelligence'
+    progress = get_lifecycle_progress(stage)
+    logs = db.execute("""
+        SELECT id, from_stage, to_stage, reason, operator, crm_stage, created_at
+        FROM lifecycle_logs
+        WHERE lead_id=?
+        ORDER BY created_at DESC
+        LIMIT 50
+    """, (lid,)).fetchall()
+    return jsonify({
+        'code': 200,
+        'data': {
+            'lead_id': lid,
+            'current_stage': stage,
+            'current_label': STAGE_BY_KEY.get(stage, {}).get('label', '情报'),
+            'progress': progress,
+            'logs': [dict(r) for r in logs],
+        }
+    })
+
+
+@intelligence_bp.route('/leads/<int:lid>/lifecycle', methods=['POST'])
+@token_required
+def update_lifecycle(lid):
+    """流转商机生命周期阶段。
+
+    Body: {"to_stage": "bidding", "reason": "已开标"}
+    规则：终态阶段不可流转；记录日志；同步映射到 CRM 阶段。
+    """
+    from lifecycle_model import (
+        can_transition, get_stage_info, map_to_crm_stage,
+        build_lifecycle_reason, STAGE_BY_KEY
+    )
+    data = request.get_json(silent=True) or {}
+    to_stage = (data.get('to_stage') or '').strip()
+    reason = (data.get('reason') or '').strip()
+
+    if to_stage not in STAGE_BY_KEY:
+        return jsonify({'code': 400, 'message': f'无效的生命周期阶段: {to_stage}'})
+
+    db = get_db()
+    row = db.execute(
+        "SELECT id, lifecycle_stage, status FROM intelligence_leads WHERE id=?", (lid,)
+    ).fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '商机不存在'})
+
+    from_stage = row['lifecycle_stage'] or 'intelligence'
+    # 作废商机不允许流转
+    if row['status'] == 'rejected':
+        return jsonify({'code': 400, 'message': '已作废商机不可流转生命周期'})
+
+    ok, msg = can_transition(from_stage, to_stage)
+    if not ok:
+        return jsonify({'code': 400, 'message': msg})
+
+    crm_stage = map_to_crm_stage(to_stage)
+    transition_reason = build_lifecycle_reason(from_stage, to_stage, reason)
+
+    # 更新阶段 + 写日志
+    db.execute(
+        "UPDATE intelligence_leads SET lifecycle_stage=? WHERE id=?",
+        (to_stage, lid)
+    )
+    db.execute("""
+        INSERT INTO lifecycle_logs (lead_id, from_stage, to_stage, reason, operator, crm_stage)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        lid, from_stage, to_stage, transition_reason,
+        request.current_user.get('username', ''), crm_stage
+    ))
+    db.commit()
+
+    record_operation_log(
+        request.current_user, 'lifecycle', 'intelligence_leads',
+        f'商机#{lid} 生命周期流转: {transition_reason}'
+    )
+
+    from lifecycle_model import get_lifecycle_progress
+    progress = get_lifecycle_progress(to_stage)
+    return jsonify({
+        'code': 200,
+        'message': f'已流转至[{get_stage_info(to_stage)["label"]}]阶段',
+        'data': {
+            'lead_id': lid,
+            'from_stage': from_stage,
+            'to_stage': to_stage,
+            'crm_stage': crm_stage,
+            'reason': transition_reason,
+            'progress': progress,
+        }
+    })
+
+
+# ==================== 商机多级去重 ====================
+
+@intelligence_bp.route('/leads/<int:lid>/dedup', methods=['POST'])
+@token_required
+def detect_duplicates_for_lead(lid):
+    """对指定商机执行 4 级去重检测。
+
+    Level 1: URL Hash
+    Level 2: 标题相似度 ≥ 0.85
+    Level 3: 客户+项目+地区 ≥ 0.80
+    Level 4: Embedding 相似度 > 0.90
+
+    检测结果写入 duplicate_candidates 表（status=pending），不自动删除。
+    """
+    from dedup_model import detect_duplicates, DEDUP_LEVELS
+    db = get_db()
+    lead = db.execute("SELECT * FROM intelligence_leads WHERE id=?", (lid,)).fetchone()
+    if not lead:
+        return jsonify({'code': 404, 'message': '商机不存在'})
+
+    # 取其他活跃商机作为对比集（排除已作废/已合并）
+    others = db.execute("""
+        SELECT il.*, ri.url
+        FROM intelligence_leads il
+        LEFT JOIN raw_intelligence ri ON il.raw_intelligence_id = ri.id
+        WHERE il.id != ? AND il.status NOT IN ('rejected', 'merged')
+    """, (lid,)).fetchall()
+
+    candidates = detect_duplicates(lead, others, use_embedding=True)
+
+    # 写入候选表（去重：同对已存在 pending 候选则跳过）
+    new_count = 0
+    for c in candidates:
+        existing = db.execute("""
+            SELECT id FROM duplicate_candidates
+            WHERE lead_a_id=? AND lead_b_id=? AND status='pending'
+        """, (lid, c['lead_id'])).fetchone()
+        if existing:
+            continue
+        db.execute("""
+            INSERT INTO duplicate_candidates
+                (lead_a_id, lead_b_id, match_level, match_level_name, similarity, match_reason, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+        """, (
+            lid, c['lead_id'], c['match_level'], c['match_level_name'],
+            c['similarity'], c['match_reason']
+        ))
+        new_count += 1
+
+    # 更新商机去重状态
+    if candidates:
+        db.execute("UPDATE intelligence_leads SET dedup_status='suspect' WHERE id=?", (lid,))
+        for c in candidates:
+            db.execute("UPDATE intelligence_leads SET dedup_status='suspect' WHERE id=?", (c['lead_id'],))
+
+    db.commit()
+    record_operation_log(
+        request.current_user, 'dedup', 'intelligence_leads',
+        f'商机#{lid} 去重检测：发现{len(candidates)}个疑似重复，新增{new_count}条候选'
+    )
+    return jsonify({
+        'code': 200,
+        'message': f'检测完成：发现{len(candidates)}个疑似重复',
+        'data': {'candidates': candidates, 'new_count': new_count}
+    })
+
+
+@intelligence_bp.route('/duplicates', methods=['GET'])
+@token_required
+def list_duplicates():
+    """疑似重复候选列表。"""
+    db = get_db()
+    status = request.args.get('status', 'pending')
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    offset = (page - 1) * per_page
+
+    sql = """
+        SELECT dc.*,
+               a.title as a_title, a.buyer as a_buyer, a.score as a_score,
+               a.lifecycle_stage as a_stage, a.status as a_status,
+               b.title as b_title, b.buyer as b_buyer, b.score as b_score,
+               b.lifecycle_stage as b_stage, b.status as b_status
+        FROM duplicate_candidates dc
+        LEFT JOIN intelligence_leads a ON dc.lead_a_id = a.id
+        LEFT JOIN intelligence_leads b ON dc.lead_b_id = b.id
+        WHERE dc.status = ?
+        ORDER BY dc.match_level ASC, dc.similarity DESC, dc.created_at DESC
+        LIMIT ? OFFSET ?
+    """
+    rows = db.execute(sql, (status, per_page, offset)).fetchall()
+
+    count_sql = "SELECT COUNT(*) as cnt FROM duplicate_candidates WHERE status = ?"
+    total = db.execute(count_sql, (status,)).fetchone()['cnt']
+
+    return jsonify({
+        'code': 200,
+        'data': [dict(r) for r in rows],
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+    })
+
+
+@intelligence_bp.route('/duplicates/<int:cid>/ai-judge', methods=['POST'])
+@token_required
+def ai_judge_duplicate_pair(cid):
+    """AI 判断两条商机是否为同一项目。"""
+    from dedup_model import ai_judge_duplicate
+    db = get_db()
+    cand = db.execute("SELECT * FROM duplicate_candidates WHERE id=?", (cid,)).fetchone()
+    if not cand:
+        return jsonify({'code': 404, 'message': '候选记录不存在'})
+
+    lead_a = db.execute("SELECT * FROM intelligence_leads WHERE id=?", (cand['lead_a_id'],)).fetchone()
+    lead_b = db.execute("SELECT * FROM intelligence_leads WHERE id=?", (cand['lead_b_id'],)).fetchone()
+    if not lead_a or not lead_b:
+        return jsonify({'code': 404, 'message': '商机不存在'})
+
+    result = ai_judge_duplicate(lead_a, lead_b)
+    if result is None:
+        return jsonify({'code': 503, 'message': 'AI 判断不可用（LLM未启用或调用失败）'})
+
+    db.execute("""
+        UPDATE duplicate_candidates
+        SET ai_is_same=?, ai_confidence=?, ai_reason=?,
+            status=?, resolved_at=CURRENT_TIMESTAMP
+        WHERE id=?
+    """, (
+        1 if result['is_same'] else 0,
+        result['confidence'],
+        result['reason'],
+        'ai_same' if result['is_same'] else 'ai_diff',
+        cid
+    ))
+    db.commit()
+    record_operation_log(
+        request.current_user, 'ai_judge', 'duplicate_candidates',
+        f'候选#{cid} AI判断: {"同一项目" if result["is_same"] else "不同项目"} (置信度{result["confidence"]:.0%})'
+    )
+    return jsonify({
+        'code': 200,
+        'data': {
+            'is_same': result['is_same'],
+            'confidence': result['confidence'],
+            'reason': result['reason'],
+            'status': 'ai_same' if result['is_same'] else 'ai_diff',
+        }
+    })
+
+
+@intelligence_bp.route('/duplicates/<int:cid>/merge', methods=['POST'])
+@token_required
+def merge_duplicate_pair(cid):
+    """合并两条商机：保留 lead_a，将 lead_b 标记为已合并。
+
+    Body: {"keep": "a"|"b"} 指定保留哪条，默认保留 a。
+    """
+    from dedup_model import build_merge_summary
+    data = request.get_json(silent=True) or {}
+    keep = (data.get('keep') or 'a').strip().lower()
+
+    db = get_db()
+    cand = db.execute("SELECT * FROM duplicate_candidates WHERE id=?", (cid,)).fetchone()
+    if not cand:
+        return jsonify({'code': 404, 'message': '候选记录不存在'})
+
+    # 确定保留/合并方
+    if keep == 'b':
+        keep_id, merge_id = cand['lead_b_id'], cand['lead_a_id']
+    else:
+        keep_id, merge_id = cand['lead_a_id'], cand['lead_b_id']
+
+    keep_lead = db.execute("SELECT * FROM intelligence_leads WHERE id=?", (keep_id,)).fetchone()
+    merge_lead = db.execute("SELECT * FROM intelligence_leads WHERE id=?", (merge_id,)).fetchone()
+    if not keep_lead or not merge_lead:
+        return jsonify({'code': 404, 'message': '商机不存在'})
+    if merge_lead['status'] == 'merged':
+        return jsonify({'code': 400, 'message': '该商机已被合并'})
+
+    merge_note = build_merge_summary(keep_lead, merge_lead)
+
+    # 被合并方标记为 merged，状态更新
+    db.execute("""
+        UPDATE intelligence_leads
+        SET status='merged', dedup_status='merged',
+            reject_reason=COALESCE(reject_reason, '') || ' [' || ? || ']'
+        WHERE id=?
+    """, (merge_note, merge_id))
+
+    # 候选记录标记为已合并
+    db.execute("""
+        UPDATE duplicate_candidates
+        SET status='merged', operator=?, resolved_at=CURRENT_TIMESTAMP
+        WHERE id=?
+    """, (request.current_user.get('username', ''), cid))
+
+    # 同时关闭涉及该合并方的其他 pending 候选
+    db.execute("""
+        UPDATE duplicate_candidates
+        SET status='merged', operator=?, resolved_at=CURRENT_TIMESTAMP
+        WHERE (lead_a_id=? OR lead_b_id=?) AND status='pending' AND id!=?
+    """, (request.current_user.get('username', ''), merge_id, merge_id, cid))
+
+    db.commit()
+    record_operation_log(
+        request.current_user, 'merge', 'intelligence_leads',
+        f'合并商机：保留#{keep_id}，合并#{merge_id}（{merge_note[:60]}）'
+    )
+    return jsonify({
+        'code': 200,
+        'message': f'已合并：保留#{keep_id}，合并#{merge_id}',
+        'data': {'keep_id': keep_id, 'merge_id': merge_id}
+    })
+
+
+@intelligence_bp.route('/duplicates/<int:cid>/keep', methods=['POST'])
+@token_required
+def keep_duplicate_pair(cid):
+    """人工确认两条商机保留独立（不合并）。"""
+    db = get_db()
+    cand = db.execute("SELECT * FROM duplicate_candidates WHERE id=?", (cid,)).fetchone()
+    if not cand:
+        return jsonify({'code': 404, 'message': '候选记录不存在'})
+
+    db.execute("""
+        UPDATE duplicate_candidates
+        SET status='kept', operator=?, resolved_at=CURRENT_TIMESTAMP
+        WHERE id=?
+    """, (request.current_user.get('username', ''), cid))
+
+    # 恢复两条商机的去重状态为 clean（如果无其他 pending 候选）
+    for lead_id in (cand['lead_a_id'], cand['lead_b_id']):
+        other_pending = db.execute("""
+            SELECT COUNT(*) as cnt FROM duplicate_candidates
+            WHERE (lead_a_id=? OR lead_b_id=?) AND status='pending'
+        """, (lead_id, lead_id)).fetchone()['cnt']
+        if other_pending == 0:
+            db.execute("UPDATE intelligence_leads SET dedup_status='clean' WHERE id=?", (lead_id,))
+
+    db.commit()
+    record_operation_log(
+        request.current_user, 'keep', 'duplicate_candidates',
+        f'候选#{cid} 确认保留独立'
+    )
+    return jsonify({'code': 200, 'message': '已确认保留独立'})
+
+
+# ==================== 项目关联：多公告 → 一 Project ====================
+
+@intelligence_bp.route('/projects', methods=['GET'])
+@token_required
+def list_projects():
+    """项目列表：多个公告关联的统一项目视图。"""
+    db = get_db()
+    search = request.args.get('search', '').strip()
+    lifecycle_stage = request.args.get('lifecycle_stage', '').strip()
+    status = request.args.get('status', 'active')
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    offset = (page - 1) * per_page
+
+    sql = "SELECT * FROM projects WHERE 1=1"
+    params = []
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    if search:
+        sql += " AND (name LIKE ? OR buyer LIKE ? OR region LIKE ?)"
+        params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
+    if lifecycle_stage:
+        sql += " AND lifecycle_stage=?"
+        params.append(lifecycle_stage)
+
+    total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql})", params).fetchone()['cnt']
+    sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+    params.extend([per_page, offset])
+    rows = db.execute(sql, params).fetchall()
+
+    return jsonify({
+        'code': 200,
+        'data': [dict(r) for r in rows],
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+    })
+
+
+@intelligence_bp.route('/projects/<int:pid>', methods=['GET'])
+@token_required
+def get_project_detail(pid):
+    """项目详情：项目信息 + 关联公告列表 + 生命周期进度。"""
+    from project_model import get_project_summary
+    db = get_db()
+    summary = get_project_summary(pid, db)
+    if not summary:
+        return jsonify({'code': 404, 'message': '项目不存在'})
+    return jsonify({'code': 200, 'data': summary})
+
+
+@intelligence_bp.route('/projects/<int:pid>/link', methods=['POST'])
+@token_required
+def link_lead_to_project(pid):
+    """手动将公告关联到项目。
+
+    Body: {"lead_id": 123}
+    """
+    from project_model import link_to_project
+    data = request.get_json(silent=True) or {}
+    lead_id = data.get('lead_id')
+    if not lead_id:
+        return jsonify({'code': 400, 'message': '缺少 lead_id'})
+
+    db = get_db()
+    project = db.execute("SELECT id, name FROM projects WHERE id=?", (pid,)).fetchone()
+    if not project:
+        return jsonify({'code': 404, 'message': '项目不存在'})
+    lead = db.execute(
+        "SELECT id, title FROM intelligence_leads WHERE id=?", (lead_id,)
+    ).fetchone()
+    if not lead:
+        return jsonify({'code': 404, 'message': '公告不存在'})
+
+    link_to_project(lead_id, pid, db)
+    db.commit()
+    record_operation_log(
+        request.current_user, 'link', 'projects',
+        f'公告#{lead_id} 关联到项目#{pid}({project["name"][:30]})'
+    )
+    return jsonify({'code': 200, 'message': f'已关联到项目：{project["name"][:30]}'})
+
+
+@intelligence_bp.route('/projects/<int:pid>/merge', methods=['POST'])
+@token_required
+def merge_projects(pid):
+    """合并两个项目：保留当前项目，将另一项目的公告全部转移过来。
+
+    Body: {"merge_project_id": 456}
+    """
+    data = request.get_json(silent=True) or {}
+    merge_pid = data.get('merge_project_id')
+    if not merge_pid:
+        return jsonify({'code': 400, 'message': '缺少 merge_project_id'})
+
+    db = get_db()
+    keep = db.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    merge = db.execute("SELECT * FROM projects WHERE id=?", (merge_pid,)).fetchone()
+    if not keep or not merge:
+        return jsonify({'code': 404, 'message': '项目不存在'})
+
+    # 转移公告
+    db.execute(
+        "UPDATE intelligence_leads SET project_id=? WHERE project_id=?",
+        (pid, merge_pid)
+    )
+    # 标记被合并项目为 closed
+    db.execute(
+        "UPDATE projects SET status='closed' WHERE id=?", (merge_pid,)
+    )
+    # 重新聚合保留项目信息
+    from project_model import link_to_project
+    leads = db.execute(
+        "SELECT id FROM intelligence_leads WHERE project_id=? LIMIT 1", (pid,)
+    ).fetchone()
+    if leads:
+        link_to_project(leads['id'], pid, db)
+    db.commit()
+    record_operation_log(
+        request.current_user, 'merge', 'projects',
+        f'合并项目：保留#{pid}({keep["name"][:20]})，合并#{merge_pid}({merge["name"][:20]})'
+    )
+    return jsonify({
+        'code': 200,
+        'message': f'已合并：保留#{pid}，合并#{merge_pid}',
+        'data': {'keep_id': pid, 'merge_id': merge_pid}
+    })
+
+
+@intelligence_bp.route('/leads/<int:lid>/project', methods=['GET'])
+@token_required
+def get_lead_project(lid):
+    """获取公告所属项目信息。"""
+    db = get_db()
+    lead = db.execute(
+        "SELECT id, project_id FROM intelligence_leads WHERE id=?", (lid,)
+    ).fetchone()
+    if not lead:
+        return jsonify({'code': 404, 'message': '公告不存在'})
+    if not lead['project_id']:
+        return jsonify({'code': 200, 'data': None})
+    from project_model import get_project_summary
+    summary = get_project_summary(lead['project_id'], db)
+    return jsonify({'code': 200, 'data': summary})
+
+
+@intelligence_bp.route('/projects/auto-associate', methods=['POST'])
+@token_required
+def auto_associate_all():
+    """批量自动关联所有未关联项目的公告。"""
+    from project_model import auto_associate_project
+    db = get_db()
+    # 取所有未关联项目且已分析的公告
+    leads = db.execute("""
+        SELECT il.*, ri.url
+        FROM intelligence_leads il
+        LEFT JOIN raw_intelligence ri ON il.raw_intelligence_id = ri.id
+        WHERE il.project_id IS NULL AND il.status NOT IN ('rejected', 'merged')
+    """).fetchall()
+
+    linked = 0
+    created = 0
+    for lead in leads:
+        result = auto_associate_project(lead['id'], lead, db)
+        if result['action'] == 'linked':
+            linked += 1
+        elif result['action'] == 'created':
+            created += 1
+    db.commit()
+
+    record_operation_log(
+        request.current_user, 'auto_associate', 'projects',
+        f'批量关联：关联{linked}条，新建{created}个项目'
+    )
+    return jsonify({
+        'code': 200,
+        'message': f'关联{linked}条公告到已有项目，新建{created}个项目',
+        'data': {'linked': linked, 'created': created, 'total': len(leads)}
+    })
 
 
 # ==================== Phase4: 商机转入CRM ====================
@@ -702,6 +1417,19 @@ def convert_lead(lid):
     # 更新 intelligence_leads 状态
     db.execute("UPDATE intelligence_leads SET status='converted', converted_lead_id=? WHERE id=?",
                (new_lead_id, lid))
+
+    # 记录生命周期流转：关联 CRM 线索（情报→线索）
+    from lifecycle_model import map_to_crm_stage, get_stage_info
+    current_stage = lead_row['lifecycle_stage'] or 'intelligence'
+    crm_stage = map_to_crm_stage(current_stage)
+    db.execute("""
+        INSERT INTO lifecycle_logs (lead_id, from_stage, to_stage, reason, operator, crm_stage)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        lid, current_stage, current_stage,
+        f'转入CRM线索#{new_lead_id}（CRM阶段：线索）',
+        request.current_user.get('username', ''), 'lead'
+    ))
     db.commit()
 
     record_operation_log(

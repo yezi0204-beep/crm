@@ -6,6 +6,9 @@ SERVER_PORT = int(os.environ.get('SERVER_PORT', '5000'))
 LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
 LLM_API_BASE = os.environ.get('LLM_API_BASE', 'http://10.200.100.74:8000/v1')
 LLM_MODEL = os.environ.get('LLM_MODEL', '/hdd/qwen/Qwen3.5-122B-A10B-FP8')
+# LLM Gateway 配置（支持 openai_compatible / vllm / ollama）
+LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'vllm')
+EMBEDDING_MODEL = os.environ.get('EMBEDDING_MODEL', 'text-embedding-3-small')
 
 USE_LLM = bool(LLM_API_KEY)
 

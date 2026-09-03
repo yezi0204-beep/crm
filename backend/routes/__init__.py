@@ -13,6 +13,8 @@ reports_bp = Blueprint('reports', __name__)
 erp_bp = Blueprint('erp', __name__)
 custom_fields_bp = Blueprint('custom_fields', __name__)
 work_summary_bp = Blueprint('work_summary', __name__)
+business_tags_bp = Blueprint('business_tags', __name__)
+data_sources_bp = Blueprint('data_sources', __name__)
 ai_agent_bp = Blueprint('ai_agent', __name__)
 knowledge_bp = Blueprint('knowledge', __name__)
 knowledge_ext_bp = Blueprint('knowledge_ext', __name__)
@@ -48,6 +50,8 @@ def register_blueprints(app):
     from .erp import register_routes as register_erp
     from .custom_fields import register_routes as register_custom_fields
     from .work_summary import register_routes as register_work_summary
+    from .business_tags import register_routes as register_business_tags
+    from .data_sources import register_routes as register_data_sources
     from .ai_agent import register_routes as register_ai_agent
     from .knowledge import register_routes as register_knowledge
     from .knowledge_ext import register_routes as register_knowledge_ext
@@ -63,6 +67,11 @@ def register_blueprints(app):
     from .keywords import register_routes as register_keywords
     from .intelligence import register_routes as register_intelligence
     from .cockpit import register_routes as register_cockpit
+    from .tasks import register_routes as register_tasks
+    from .capabilities import register_routes as register_capabilities
+
+    # Phase9: LLM Gateway（/api/ai/*）
+    from llm_gateway import register_routes as register_ai_gateway
 
     register_auth(app)
     register_customers(app)
@@ -77,6 +86,8 @@ def register_blueprints(app):
     register_erp(app)
     register_custom_fields(app)
     register_work_summary(app)
+    register_business_tags(app)
+    register_data_sources(app)
     register_ai_agent(app)
     register_knowledge(app)
     register_knowledge_ext(app)
@@ -92,6 +103,9 @@ def register_blueprints(app):
     register_keywords(app)
     register_intelligence(app)
     register_cockpit(app)
+    register_tasks(app)
+    register_capabilities(app)
+    register_ai_gateway(app)
 
     from .smart_import import smart_import_bp
     app.register_blueprint(smart_import_bp)

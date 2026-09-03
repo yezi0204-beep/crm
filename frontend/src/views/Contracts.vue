@@ -200,10 +200,10 @@
           
           <el-table-column label="操作" width="190" fixed="right">
             <template #default="scope">
-              <el-button v-if="isAdmin" link type="primary" size="small" @click="editContract(scope.row)">编辑</el-button>
+              <el-button v-if="canEdit(scope.row)" link type="primary" size="small" @click="editContract(scope.row)">编辑</el-button>
               <el-button v-if="isAdmin" link type="danger" size="small" @click="deleteContract(scope.row)">删除</el-button>
               <el-button v-if="isAdmin" link type="warning" size="small" @click="openCommission(scope.row)">分成</el-button>
-              <el-button v-if="scope.row.is_framework" link type="success" size="small" @click="openAcceptance(scope.row)">验收</el-button>
+              <el-button v-if="scope.row.is_framework && (isAdmin || scope.row.owner_id === authStore.username)" link type="success" size="small" @click="openAcceptance(scope.row)">验收</el-button>
               <el-button link type="info" size="small" @click="previewFiles(scope.row)">预览</el-button>
             </template>
           </el-table-column>
@@ -713,6 +713,7 @@ const authStore = useAuthStore()
 const route = useRoute()
 const contracts = ref([])
 const isAdmin = computed(() => authStore.has('data.view_all'))
+const canEdit = (row) => isAdmin.value || row.owner_id === authStore.username
 const users = ref([])
 const customers = ref([])
 const businessList = ref([])

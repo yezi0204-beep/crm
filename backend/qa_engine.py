@@ -4,7 +4,7 @@ import requests
 from config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL, USE_LLM, SYSTEM_PROMPT
 
 
-def call_llm(messages, stream=False, max_tokens=4000, timeout=120, enable_thinking=False):
+def call_llm(messages, stream=False, max_tokens=18000, timeout=360, enable_thinking=False):
     """调用 LLM API。
 
     Args:

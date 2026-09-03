@@ -188,67 +188,17 @@
         </div>
       </el-tab-pane>
 
-      <!-- ==================== 线索源管理 ==================== -->
+      <!-- ==================== 线索源管理（已迁移至系统管理→数据源管理） ==================== -->
       <el-tab-pane label="线索源管理" name="sources">
-        <el-alert type="info" :closable="false" style="margin-bottom:12px"
-                  title="网络抓取已统一至「AI情报中心 → 原始情报库」"
-                  description="采集内容会按业务关键词自动过滤后存入原始情报库，经 AI 商机识别分析后可转入本页线索队列进行分配，避免重复抓取。本页用于维护线索源的增删改与启停。" />
-        <div class="filter-bar">
-          <div class="source-tip">配置多渠道线索源，系统按「抓取间隔」定时采集并自动入库；抓取动作请在「AI情报中心 → 原始情报库」执行</div>
-          <el-button v-if="isDirector" type="primary" @click="openSourceDialog()"><span>✚</span><span>新增线索源</span></el-button>
+        <el-alert type="success" :closable="false" style="margin-bottom:12px"
+                  title="线索源管理已统一至「系统管理 → 数据源管理」"
+                  description="数据源 CRUD、采集器插件绑定、手动采集已收口至统一的数据源管理页面，支持插件式采集器、三级业务标签过滤、采集频率调度。" />
+        <div class="source-redirect">
+          <el-button type="primary" size="large" @click="$router.push('/data-sources')">
+            📡 前往数据源管理
+          </el-button>
+          <span class="redirect-tip">或在左侧菜单「🔧 系统管理 → 📡 数据源管理」进入</span>
         </div>
-
-        <el-table :data="sources" v-loading="loadingSources" stripe max-height="70vh">
-          <el-table-column label="名称" min-width="160">
-            <template #default="{ row }"><span class="src-name">{{ row.name }}</span></template>
-          </el-table-column>
-          <el-table-column label="能力域" width="120">
-            <template #default="{ row }">
-              <span v-if="row.category" :class="['cat-badge', 'cb-' + categoryKey(row.category)]">
-                {{ categoryIcon(row.category) }} {{ row.category }}
-              </span>
-              <span v-else class="muted">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="类型" width="100" align="center">
-            <template #default="{ row }">
-              <span :class="['type-badge', 'tp-' + row.source_type]">{{ typeLabel(row.source_type) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="URL/配置" min-width="200" show-overflow-tooltip>
-            <template #default="{ row }">
-              <div v-if="row.url" class="mono">{{ row.url }}</div>
-              <div v-else class="muted">（无URL，示例/手动）</div>
-              <div class="muted mono" v-if="row.config">{{ row.config }}</div>
-            </template>
-          </el-table-column>
-          <el-table-column label="关键词" min-width="140" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span v-if="row.keywords">{{ row.keywords }}</span><span v-else class="muted">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="行业/区域" width="140">
-            <template #default="{ row }">
-              <div>{{ row.industry || '—' }}</div><div class="muted">{{ row.region || '—' }}</div>
-            </template>
-          </el-table-column>
-          <el-table-column label="间隔(h)" width="90" align="center" prop="interval_hours" />
-          <el-table-column label="状态" width="80" align="center">
-            <template #default="{ row }">
-              <el-switch :model-value="!!row.enabled" @change="(v) => toggleSource(row, v)" />
-            </template>
-          </el-table-column>
-          <el-table-column label="已抓取" width="80" align="center" prop="lead_count" />
-          <el-table-column label="上次抓取" width="150">
-            <template #default="{ row }">{{ formatDate(row.last_scraped_at) || '从未' }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="160" fixed="right">
-            <template #default="{ row }">
-              <el-button v-if="isDirector" text size="small" @click="openSourceDialog(row)">编辑</el-button>
-              <el-button v-if="isDirector" text size="small" type="danger" @click="deleteSource(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
       </el-tab-pane>
     </el-tabs>
 
@@ -565,66 +515,6 @@
       </div>
     </el-dialog>
 
-    <!-- 线索源新建/编辑对话框 -->
-    <el-dialog v-model="sourceVisible" :title="sourceForm.id ? '编辑线索源' : '新增线索源'" width="640px" :close-on-click-modal="false" :close-on-press-escape="false">
-      <el-form :model="sourceForm" label-width="100px">
-        <el-form-item label="名称" required>
-          <el-input v-model="sourceForm.name" placeholder="如：政府采购招标信息" />
-        </el-form-item>
-        <el-form-item label="能力域" required>
-          <el-select v-model="sourceForm.category" placeholder="选择能力域类别" style="width:100%">
-            <el-option v-for="c in categories" :key="c.value" :label="c.icon + ' ' + c.label" :value="c.value" />
-          </el-select>
-          <div class="form-tip">{{ categoryDesc(sourceForm.category) }}</div>
-        </el-form-item>
-        <el-form-item label="抓取方式" required>
-          <el-select v-model="sourceForm.source_type" style="width:100%">
-            <el-option label="🏛 采购网站直抓" value="procurement" />
-            <el-option label="🤖 AI智能体搜索" value="ai_search" />
-            <el-option label="RSS订阅" value="rss" />
-            <el-option label="API接口" value="api" />
-            <el-option label="HTML网页" value="html" />
-            <el-option label="手动导入" value="manual" />
-          </el-select>
-          <div class="form-tip" v-if="sourceForm.source_type === 'procurement'">
-            🏛 直接抓取政府采购网站公告列表（ccgp.gov.cn / plap.cn / ggzy.gov.cn 等），用 LLM 从公告标题中筛选与关键词相关的商机。比搜索引擎更精准，结果全部为真实采购公告。
-          </div>
-          <div class="form-tip" v-if="sourceForm.source_type === 'ai_search'">
-            🤖 AI 智能体搜索：通过搜索引擎主动搜集互联网数据，再用 LLM 提取商机线索。无需配置 URL。
-          </div>
-          <div class="form-tip" v-else-if="sourceForm.source_type === 'html'">
-            HTML 源按能力域分发抓取器。动态页面需在配置中设置 {"dynamic": true}。
-          </div>
-        </el-form-item>
-        <el-form-item label="URL" v-if="['rss','api','html','procurement'].includes(sourceForm.source_type)">
-          <el-input v-model="sourceForm.url" placeholder="采购网站公告列表URL（如 http://www.ccgp.gov.cn/cggg/dfgg/）" />
-        </el-form-item>
-        <el-form-item label="配置JSON">
-          <el-input v-model="sourceForm.config" type="textarea" :rows="2"
-                    :placeholder='sourceForm.source_type === "ai_search" ? "{\"max_items\":15,\"max_queries\":3} max_items=每条查询最多结果数，max_queries=最多搜索查询数" : "{\"max_items\":20,\"dynamic\":true} 留空使用默认值；HTML动态页面需设置dynamic:true"' />
-        </el-form-item>
-        <el-form-item label="关键词">
-          <el-input v-model="sourceForm.keywords" placeholder="多个关键词用逗号分隔，命中才入库" />
-        </el-form-item>
-        <el-form-item label="行业">
-          <el-input v-model="sourceForm.industry" placeholder="如：信息技术,航天,通信" />
-        </el-form-item>
-        <el-form-item label="区域">
-          <el-input v-model="sourceForm.region" placeholder="如：全国" />
-        </el-form-item>
-        <el-form-item label="抓取间隔">
-          <el-input-number v-model="sourceForm.interval_hours" :min="1" :max="168" /> <span class="muted">小时</span>
-        </el-form-item>
-        <el-form-item label="启用">
-          <el-switch v-model="sourceForm.enabled" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="sourceVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveSource">保存</el-button>
-      </template>
-    </el-dialog>
-
     <!-- 导入线索对话框（JSON / 表格上传双模式） -->
     <el-dialog v-model="importVisible" title="导入线索" width="860px" :close-on-click-modal="false" :close-on-press-escape="false" top="6vh">
       <el-tabs v-model="importTab" class="import-tabs">
@@ -810,15 +700,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, Loading, Picture } from '@element-plus/icons-vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const activeTab = ref('queue')
 const loading = ref(false)
-const loadingSources = ref(false)
 const evaluating = ref(false)
 const assigning = ref(false)
 const importing = ref(false)
@@ -1112,42 +1002,38 @@ const handleImport = async () => {
 }
 
 const leads = ref([])
-const sources = ref([])
 const salespeople = ref([])
 const stats = ref({})
 const categoryStats = ref({})
 const avgScore = ref(0)
 const enabledSources = ref(0)
+// 线索源管理已迁移至 /data-sources，此处保留空数组仅用于来源筛选下拉占位
+const sources = ref([])
+
+// 五大能力域定义（用于能力域筛选条与表格分类标签）
+const categories = [
+  { value: '招标标志管控', label: '招标标志管控', icon: '📌' },
+  { value: '军采监控', label: '军采监控', icon: '🎖️' },
+  { value: '电商商机', label: '电商商机', icon: '📦' },
+  { value: '企业客源', label: '企业客源', icon: '📇' },
+  { value: '竞品情报', label: '竞品情报', icon: '📊' },
+  { value: '舆情痛点', label: '舆情痛点', icon: '💗' }
+]
+const categoryKeyMap = {
+  '招标标志管控': 'bidding', '军采监控': 'military', '电商商机': 'ecommerce', '企业客源': 'b2b',
+  '竞品情报': 'competitor', '舆情痛点': 'forum'
+}
+const categoryIconMap = {
+  '招标标志管控': '📌', '军采监控': '🎖️', '电商商机': '📦', '企业客源': '📇',
+  '竞品情报': '📊', '舆情痛点': '💗'
+}
+const categoryKey = (c) => categoryKeyMap[c] || 'other'
+const categoryIcon = (c) => categoryIconMap[c] || '📌'
 
 const filterStatus = ref('')
 const filterSource = ref('')
 const filterCategory = ref('')
 const keyword = ref('')
-
-// 六大能力域定义
-const categories = [
-  { value: '招投标监控', label: '招投标监控', icon: '📋', desc: '定时抓取全国/省市招投标网站，通过关键词筛选最新标讯，第一时间跟进投标' },
-  { value: '军采监控', label: '军采监控', icon: '🎖️', desc: '定向搜索全军武器装备采购信息网(plap.cn)、军队采购网，抓取装备/武器/军用物资采购公告' },
-  { value: '电商商机', label: '电商商机', icon: '🛒', desc: '批量抓取亚马逊/TikTok Shop/淘宝等平台商品销量、评论增长率及热搜词，分析"高需求低竞争"潜在爆款' },
-  { value: '企业客源', label: '企业客源', icon: '🏢', desc: '从企业信用公示系统、黄页网站批量提取特定行业新注册企业、联系方式及高管信息' },
-  { value: '竞品情报', label: '竞品情报', icon: '🎯', desc: '监控竞品官网价格变动、新产品上线动态、促销活动，抓取社媒负面评价优化营销' },
-  { value: '舆情痛点', label: '舆情痛点', icon: '💡', desc: '抓取知乎/小红书/贴吧等垂直论坛用户吐槽，挖掘未被满足的需求痛点作为新功能商机' },
-]
-const categoryKeyMap = {
-  '招投标监控': 'bidding', '军采监控': 'military', '电商商机': 'ecommerce', '企业客源': 'b2b',
-  '竞品情报': 'competitor', '舆情痛点': 'forum'
-}
-const categoryIconMap = {
-  '招投标监控': '📋', '军采监控': '🎖️', '电商商机': '🛒', '企业客源': '🏢',
-  '竞品情报': '🎯', '舆情痛点': '💡'
-}
-
-const categoryKey = (c) => categoryKeyMap[c] || 'other'
-const categoryIcon = (c) => categoryIconMap[c] || '📌'
-const categoryDesc = (c) => {
-  const found = categories.find(x => x.value === c)
-  return found ? found.desc : '请选择能力域类别，系统按类别分发到对应抓取器'
-}
 
 const pendingCount = computed(() => stats.value.pending || 0)
 const totalCount = computed(() => Object.values(stats.value).reduce((a, b) => a + (b || 0), 0))
@@ -1203,18 +1089,10 @@ const dimPercent = (val, key) => {
 
 const assignVisible = ref(false)
 const detailVisible = ref(false)
-const sourceVisible = ref(false)
 const currentLead = ref(null)
 const assignForm = ref({ assigned_to: '' })
-const sourceForm = ref(defaultSourceForm())
-
-function defaultSourceForm() {
-  return { id: null, name: '', source_type: 'ai_search', url: '', config: '', keywords: '',
-           industry: '信息技术', region: '全国', interval_hours: 24, enabled: true, category: '招投标监控' }
-}
 
 const statusLabel = (s) => ({ pending: '待评估', evaluated: '已评估', imported: '已分配' }[s] || s)
-const typeLabel = (t) => ({ rss: 'RSS', api: 'API', html: 'HTML', ai_search: 'AI搜索', sample: '示例', manual: '手动' }[t] || t)
 
 const setCategory = (cat) => {
   filterCategory.value = cat
@@ -1226,11 +1104,6 @@ const scoreClass = (score) => {
   if (score >= 60) return 'sc-mid'
   if (score >= 40) return 'sc-low'
   return 'sc-vlow'
-}
-
-const formatDate = (s) => {
-  if (!s) return ''
-  return String(s).replace('T', ' ').substring(0, 16)
 }
 
 const formatRaw = (raw) => {
@@ -1256,16 +1129,6 @@ const fetchLeads = async () => {
   finally { loading.value = false }
 }
 
-const fetchSources = async () => {
-  loadingSources.value = true
-  try {
-    const resp = await api.get('/leads/sources')
-    if (resp.code === 200) sources.value = resp.data || []
-    else ElMessage.error(resp.message)
-  } catch (e) { ElMessage.error('加载线索源失败') }
-  finally { loadingSources.value = false }
-}
-
 const fetchStats = async () => {
   try {
     const resp = await api.get('/leads/stats')
@@ -1281,7 +1144,7 @@ const fetchStats = async () => {
 }
 
 const fetchData = async () => {
-  await Promise.all([fetchLeads(), fetchSources(), fetchStats()])
+  await Promise.all([fetchLeads(), fetchStats()])
 }
 
 const loadSalespeople = async () => {
@@ -1561,47 +1424,7 @@ const confirmBatchAssign = async () => {
   finally { confirmLoading.value = false }
 }
 
-// ==================== 线索源 CRUD ====================
-const openSourceDialog = (row) => {
-  if (row) {
-    sourceForm.value = { id: row.id, name: row.name, source_type: row.source_type, url: row.url || '',
-                         config: row.config || '', keywords: row.keywords || '', industry: row.industry || '',
-                         region: row.region || '', interval_hours: row.interval_hours, enabled: !!row.enabled,
-                         category: row.category || '' }
-  } else {
-    sourceForm.value = defaultSourceForm()
-  }
-  sourceVisible.value = true
-}
-
-const saveSource = async () => {
-  if (!sourceForm.value.name) { ElMessage.warning('请输入名称'); return }
-  try {
-    const payload = { ...sourceForm.value, enabled: sourceForm.value.enabled ? 1 : 0 }
-    let resp
-    if (payload.id) resp = await api.put(`/leads/sources/${payload.id}`, payload)
-    else resp = await api.post('/leads/sources', payload)
-    if (resp.code === 200) { ElMessage.success('保存成功'); sourceVisible.value = false; fetchSources(); fetchStats() }
-    else ElMessage.error(resp.message)
-  } catch (e) { ElMessage.error('保存失败') }
-}
-
-const toggleSource = async (row, enabled) => {
-  try {
-    const resp = await api.put(`/leads/sources/${row.id}`, { enabled: enabled ? 1 : 0 })
-    if (resp.code === 200) { ElMessage.success(enabled ? '已启用' : '已停用'); fetchSources(); fetchStats() }
-    else ElMessage.error(resp.message)
-  } catch (e) { ElMessage.error('操作失败') }
-}
-
-const deleteSource = async (row) => {
-  try {
-    await ElMessageBox.confirm(`确定删除线索源「${row.name}」？关联的线索也将一并删除`, '提示', { type: 'warning' })
-    const resp = await api.delete(`/leads/sources/${row.id}`)
-    if (resp.code === 200) { ElMessage.success('删除成功'); fetchSources(); fetchLeads(); fetchStats() }
-    else ElMessage.error(resp.message)
-  } catch (e) { /* cancelled */ }
-}
+// ==================== 线索源管理已迁移至 /data-sources，此处不再维护 ====================
 
 // ==================== 导入（旧文本模式合并至顶部统一实现，此处仅保留 openImportDialog） ====================
 const openImportDialog = () => {
@@ -1612,7 +1435,12 @@ const openImportDialog = () => {
   importVisible.value = true
 }
 
-onMounted(() => { fetchData() })
+onMounted(() => {
+  // 支持从原始情报页跳转过来时预填搜索
+  const q = String(route.query.search || '').trim()
+  if (q) keyword.value = q
+  fetchData()
+})
 </script>
 
 <style scoped>
@@ -1641,6 +1469,8 @@ onMounted(() => { fetchData() })
 .filter-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 .action-group { margin-left: auto; display: flex; gap: 8px; }
 .source-tip { color: #64748b; font-size: 13px; margin-right: auto; }
+.source-redirect { display: flex; align-items: center; gap: 16px; padding: 30px 0; justify-content: center; }
+.redirect-tip { color: #909399; font-size: 13px; }
 
 .leads-table { width: 100%; }
 .company-cell .company-name { font-weight: 600; color: #1e293b; }

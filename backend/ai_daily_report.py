@@ -205,7 +205,7 @@ def generate_daily_report(report_date=None, db=None):
                     {'role': 'system', 'content': '你是一个专业的销售情报分析师，负责生成每日销售情报日报。只返回JSON。'},
                     {'role': 'user', 'content': prompt},
                 ]
-                content = call_llm(messages, max_tokens=4000, timeout=60, enable_thinking=False)
+                content = call_llm(messages, max_tokens=18000, timeout=360, enable_thinking=False)
                 if content:
                     result = _extract_json(content)
                     if result:
