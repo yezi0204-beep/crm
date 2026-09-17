@@ -79,7 +79,7 @@
           <el-date-picker v-model="paymentForm.payment_date" type="date" />
         </el-form-item>
         <el-form-item label="金额(万)" prop="amount">
-          <el-input-number v-model="paymentForm.amount" :min="0" :step="0.01" />
+          <el-input-number v-model="paymentForm.amount" :min="0" :step="0.01" :precision="6" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="paymentForm.note" type="textarea" />
@@ -142,7 +142,7 @@
             <el-table-column prop="data.payment_date" label="回款日期" width="130" />
             <el-table-column prop="data.amount" label="金额(万)" width="120">
               <template #default="scope">
-                {{ (scope.row.data.amount || 0) / 10000 }}
+                {{ Number(((scope.row.data.amount || 0) / 10000).toFixed(6)) }}
               </template>
             </el-table-column>
             <el-table-column prop="data.note" label="备注" />
@@ -210,8 +210,8 @@
             <el-table-column label="金额对比(万)" width="180">
               <template #default="scope">
                 <div class="compare-cell">
-                  <span class="import-label">导入：{{ (scope.row.data.amount || 0) / 10000 }}</span>
-                  <span class="system-label">系统：{{ (scope.row.existing_data?.amount || 0) / 10000 }}</span>
+                  <span class="import-label">导入：{{ Number(((scope.row.data.amount || 0) / 10000).toFixed(6)) }}</span>
+                  <span class="system-label">系统：{{ Number(((scope.row.existing_data?.amount || 0) / 10000).toFixed(6)) }}</span>
                 </div>
               </template>
             </el-table-column>
@@ -275,7 +275,8 @@ const rules = {
 }
 
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(4)
+  // 元 → 万元，精确到分：0.000001万元 = 0.01元，去尾零显示
+  return Number(((value || 0) / 10000).toFixed(6))
 }
 
 const exportPayments = () => {
@@ -312,9 +313,9 @@ const exportPayments = () => {
   data.forEach(row => {
     const rowData = exportColumns.map(col => {
       let value = row[col.prop]
-      // 金额精确到分：存储单位为元，导出为万元且保留 4 位小数（0.0001 万 = 0.01 元）
+      // 金额精确到分：存储单位为元，导出为万元保留 6 位小数（0.000001 万 = 0.01 元）
       if (col.prop === 'amount') {
-        value = ((value || 0) / 10000).toFixed(4)
+        value = ((value || 0) / 10000).toFixed(6)
       }
       return escapeCsvValue(value)
     })

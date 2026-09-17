@@ -12,6 +12,7 @@
 import os
 import json
 import uuid
+import logging
 import tempfile
 from datetime import datetime
 
@@ -24,8 +25,11 @@ from vector_search import (
     generate_embedding, rebuild_all_vectors
 )
 from ai_analyzer import analyze_document, batch_analyze
+from visit_enrichment import enrich_visit_summary, clean_visit_summaries
 
 from . import knowledge_ext_bp
+
+logger = logging.getLogger(__name__)
 
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'uploads', 'knowledge')
@@ -714,6 +718,9 @@ def sync_crm_data():
                     '拜访纪要'
                 ))
                 if cursor.rowcount > 0:
+                    new_id = cursor.lastrowid
+                    # 同步后立即丰富化：生成摘要、标签、关联客户
+                    enrich_visit_summary(db, new_id)
                     synced += 1
             db.commit()
             sync_results['visits'] = f'同步{synced}条拜访纪要'
@@ -1265,6 +1272,82 @@ def get_document_analysis(doc_id):
             'analysis': analysis,
             'analysis_status': doc['analysis_status'] or 'pending',
             'analyzed_at': doc['analyzed_at']
+        }
+    })
+
+
+@knowledge_ext_bp.route('/api/knowledge/visit-summaries/optimize', methods=['POST'])
+@token_required
+def optimize_visit_summaries():
+    """拜访纪要批量优化：清洗 + 关联客户 + 生成摘要 + 补全标签 + 重建向量索引。
+
+    步骤：
+    1. 清理无效记录（内容过短）和重复记录
+    2. 逐条丰富化（提取结构化信息、关联客户、生成摘要、补全标签）
+    3. 重建向量索引，提升检索复用价值
+    """
+    data = request.current_user
+    username = data.get('username', '')
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # 步骤1：清洗
+    deleted_short, deleted_dup = clean_visit_summaries(db)
+
+    # 步骤2：丰富化
+    cursor.execute("""
+        SELECT id FROM knowledge_documents
+        WHERE doc_type = 'visit_summary'
+        ORDER BY id ASC
+    """)
+    doc_ids = [row['id'] for row in cursor.fetchall()]
+
+    enriched = 0
+    cust_matched = 0
+    for doc_id in doc_ids:
+        updates, matched = enrich_visit_summary(db, doc_id)
+        if updates:
+            enriched += 1
+        if matched:
+            cust_matched += 1
+
+    # 步骤3：重建向量索引（仅拜访纪要，提升检索权重）
+    cursor.execute("DELETE FROM knowledge_vectors WHERE doc_id IN (SELECT id FROM knowledge_documents WHERE doc_type='visit_summary')")
+    db.commit()
+
+    vector_count = 0
+    cursor.execute("SELECT id, title, content FROM knowledge_documents WHERE doc_type='visit_summary' AND content IS NOT NULL AND content != ''")
+    for row in cursor.fetchall():
+        try:
+            index_document(row['id'], f"{row['title']}\n{row['content']}")
+            vector_count += 1
+        except Exception as e:
+            logger.warning(f"向量索引失败 doc_id={row['id']}: {e}")
+
+    record_operation_log(username, '优化', '拜访纪要',
+                         f'清洗{deleted_short+deleted_dup}条，丰富化{enriched}条，关联客户{cust_matched}条，向量索引{vector_count}条')
+
+    cursor.execute("SELECT COUNT(*) as total FROM knowledge_documents WHERE doc_type='visit_summary'")
+    total_after = cursor.fetchone()['total']
+    cursor.execute("SELECT COUNT(*) as cnt FROM knowledge_documents WHERE doc_type='visit_summary' AND cust_id IS NOT NULL")
+    with_cust = cursor.fetchone()['cnt']
+    cursor.execute("SELECT COUNT(*) as cnt FROM knowledge_documents WHERE doc_type='visit_summary' AND summary IS NOT NULL AND summary != ''")
+    with_summary = cursor.fetchone()['cnt']
+
+    return jsonify({
+        'code': 200,
+        'message': '拜访纪要优化完成',
+        'data': {
+            'cleaned': {'deleted_short': deleted_short, 'deleted_duplicate': deleted_dup},
+            'enriched_count': enriched,
+            'customer_matched': cust_matched,
+            'vector_indexed': vector_count,
+            'stats': {
+                'total': total_after,
+                'with_customer': with_cust,
+                'with_summary': with_summary,
+            }
         }
     })
 

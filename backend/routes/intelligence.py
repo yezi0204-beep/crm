@@ -7,6 +7,7 @@ from flask import Blueprint, request, jsonify
 from extensions import get_db, token_required, admin_required, app_center_or_admin_required, record_operation_log
 import hashlib
 import json
+import re
 import logging
 
 logger = logging.getLogger(__name__)
@@ -309,8 +310,13 @@ def collect_from_source(source_id):
                 item = collector.fetch_detail(item)
 
             # 清洗标题
-            from utils.cleaner import clean_title, is_junk_content
+            from utils.cleaner import clean_title, is_junk_content, is_result_announcement
             title = clean_title(item.title) if item.title else ''
+
+            # 结果类公告（中标/成交/废标/合同等已定标信息）不入库
+            if is_result_announcement(title):
+                filtered_count += 1
+                continue
 
             # 业务标签/关键词联动：排除词过滤 + 标签（同义词）匹配（与业务无关的内容不入库）
             keep, matched = _match_content(title, item.content, item.snippet, matcher)
@@ -407,8 +413,12 @@ def collect_all_sources():
             filtered_count = 0
             for item in items:
                 item = collector.fetch_detail(item) if item.url else item
-                from utils.cleaner import clean_title, is_junk_content
+                from utils.cleaner import clean_title, is_junk_content, is_result_announcement
                 title = clean_title(item.title) if item.title else ''
+                # 结果类公告（中标/成交/废标/合同等已定标信息）不入库
+                if is_result_announcement(title):
+                    filtered_count += 1
+                    continue
                 # 业务标签/关键词联动：排除词过滤 + 标签（同义词）匹配
                 keep, matched = _match_content(title, item.content, item.snippet, matcher)
                 if not keep:
@@ -613,7 +623,12 @@ def agent_result(rid):
 @intelligence_bp.route('/leads', methods=['GET'])
 @token_required
 def list_leads():
-    """商机列表（AI 分析结果），支持分页/筛选/排序。"""
+    """商机列表（AI 分析结果），支持分页/筛选/排序。
+
+    基础筛选：search/min_score/is_relevant/grade/lifecycle_stage/dedup_status/sort
+    雷达筛选（原商机雷达）：industry/business/region/buyer/competitor/
+                           budget_min/budget_max(万元)/date_from/date_to
+    """
     db = get_db()
     search = request.args.get('search', '').strip()
     min_score = request.args.get('min_score', 0, type=int)
@@ -623,12 +638,25 @@ def list_leads():
     per_page = request.args.get('per_page', 20, type=int)
     offset = (page - 1) * per_page
 
+    # 雷达维度筛选
+    industry = request.args.get('industry', '').strip()
+    business = request.args.get('business', '').strip()
+    region = request.args.get('region', '').strip()
+    buyer = request.args.get('buyer', '').strip()
+    competitor = request.args.get('competitor', '').strip()
+    budget_min = request.args.get('budget_min', type=float)
+    budget_max = request.args.get('budget_max', type=float)
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
+
     sql = """
         SELECT il.*, ri.url, ri.publish_date,
-               ls.name as source_name
+               ls.name as source_name,
+               sl.assigned_to as owner_name
         FROM intelligence_leads il
         LEFT JOIN raw_intelligence ri ON il.raw_intelligence_id = ri.id
         LEFT JOIN lead_sources ls ON il.source_id = ls.id
+        LEFT JOIN scraped_leads sl ON il.converted_lead_id = sl.id
         WHERE 1=1
     """
     params = []
@@ -656,20 +684,72 @@ def list_leads():
     if dedup_status:
         sql += " AND il.dedup_status = ?"
         params.append(dedup_status)
+    # 雷达维度
+    if industry:
+        sql += " AND il.project_type LIKE ?"
+        params.append(f'%{industry}%')
+    if business:
+        sql += " AND il.keywords_matched LIKE ?"
+        params.append(f'%{business}%')
+    if region:
+        sql += " AND il.region LIKE ?"
+        params.append(f'%{region}%')
+    if buyer:
+        sql += " AND il.buyer LIKE ?"
+        params.append(f'%{buyer}%')
+    if competitor:
+        sql += " AND il.competitors LIKE ?"
+        params.append(f'%{competitor}%')
+    if date_from:
+        sql += " AND date(il.created_at) >= date(?)"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date(il.created_at) <= date(?)"
+        params.append(date_to)
 
-    total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql})", params).fetchone()['cnt']
+    # 预算为文本格式，金额筛选需内存过滤
+    need_budget_filter = budget_min is not None or budget_max is not None
+
+    def parse_wan(budget_str):
+        if not budget_str:
+            return 0
+        m = re.search(r'([\d.]+)\s*万', str(budget_str))
+        if m:
+            return float(m.group(1))
+        m2 = re.search(r'([\d.]+)\s*元', str(budget_str))
+        if m2:
+            return float(m2.group(1)) / 10000
+        return 0
+
+    if not need_budget_filter:
+        total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql})", params).fetchone()['cnt']
 
     if sort == 'created_at':
         sql += " ORDER BY il.created_at DESC"
     else:
         sql += " ORDER BY il.score DESC, il.created_at DESC"
-    sql += " LIMIT ? OFFSET ?"
-    params.extend([per_page, offset])
 
-    rows = db.execute(sql, params).fetchall()
+    if need_budget_filter:
+        # 预算过滤：取出全部匹配行后内存筛选
+        rows = db.execute(sql, params).fetchall()
+        lo = budget_min if budget_min is not None else 0
+        hi = budget_max if budget_max is not None else 10 ** 9
+        rows = [r for r in rows if lo <= parse_wan(r['budget']) < hi]
+        total = len(rows)
+        rows = rows[offset:offset + per_page]
+    else:
+        sql += " LIMIT ? OFFSET ?"
+        rows = db.execute(sql, params + [per_page, offset]).fetchall()
+
+    items = []
+    for r in rows:
+        item = dict(r)
+        item['budget_wan'] = parse_wan(r['budget'])
+        items.append(item)
+
     return jsonify({
         'code': 200,
-        'data': [dict(r) for r in rows],
+        'data': items,
         'total': total,
         'page': page,
         'per_page': per_page
@@ -1388,7 +1468,15 @@ def convert_lead(lid):
     # 构造线索数据并插入
     lead_data = _build_lead_from_intel(lead_row, raw_row)
     if not lead_data['company']:
-        return jsonify({'code': 400, 'message': '采购单位为空，无法转入CRM'})
+        # 尝试从 analysis_summary 提取采购单位
+        summary = lead_row['analysis_summary'] or ''
+        import re as _re
+        m = _re.search(r'(?:采购单位|采购人|招标人|买方|甲方)[：:]\s*([^\n，,。]+)', summary)
+        if m:
+            lead_data['company'] = m.group(1).strip()[:100]
+        else:
+            # 回退：用"未知采购单位"占位，允许转入后用户手动补全
+            lead_data['company'] = '未知采购单位'
 
     cursor = db.execute("""
         INSERT INTO scraped_leads (
@@ -1619,11 +1707,16 @@ def convert_leads_batch():
                 skipped += 1
                 continue
 
-            if not company:
-                skipped += 1
-                continue
-
             lead_data = _build_lead_from_intel(lead_row, raw_row)
+            if not lead_data['company']:
+                # 尝试从 analysis_summary 提取
+                summary = lead_row['analysis_summary'] or ''
+                import re as _re
+                m = _re.search(r'(?:采购单位|采购人|招标人|买方|甲方)[：:]\s*([^\n，,。]+)', summary)
+                if m:
+                    lead_data['company'] = m.group(1).strip()[:100]
+                else:
+                    lead_data['company'] = '未知采购单位'
             cursor = db.execute("""
                 INSERT INTO scraped_leads (
                     source_id, company, opportunity_name, contact_name, phone, email,

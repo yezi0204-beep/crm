@@ -113,10 +113,6 @@
             <span class="menu-icon">⚔️</span>
             <span>竞争对手分析</span>
           </el-menu-item>
-          <el-menu-item index="/opportunity-radar" v-if="has('intel.leads')">
-            <span class="menu-icon">🛰️</span>
-            <span>商机雷达</span>
-          </el-menu-item>
           <el-menu-item index="/capabilities" v-if="has('system.admin') || has('intel.keywords')">
             <span class="menu-icon">💪</span>
             <span>能力模型</span>
@@ -168,6 +164,10 @@
           <el-menu-item index="/appraisal">
             <span class="menu-icon">🧾</span>
             <span>{{ t('menuItem.appraisal') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/work-cost" v-if="has('workhour.view') || has('workhour.manage') || has('data.view_all')">
+            <span class="menu-icon">⏱️</span>
+            <span>工时分摊</span>
           </el-menu-item>
         </div>
 
@@ -387,6 +387,7 @@ const pageTitleMap = computed(() => ({
   '/pool': t('menuItem.pool'),
   '/leads': t('menuItem.leads'),
   '/workhours': t('menuItem.workhours'),
+  '/work-cost': '工时分摊',
   '/projects': t('menuItem.projects'),
   '/users': t('menuItem.users'),
   '/alerts': t('menuItem.alerts'),

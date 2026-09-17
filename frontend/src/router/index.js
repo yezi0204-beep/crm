@@ -69,6 +69,11 @@ const routes = [
         component: () => import('../views/WorkHours.vue')
       },
       {
+        path: 'work-cost',
+        name: 'WorkCost',
+        component: () => import('../views/WorkCost.vue')
+      },
+      {
         path: 'projects',
         name: 'Projects',
         component: () => import('../views/Projects.vue')
@@ -188,8 +193,7 @@ const routes = [
       },
       {
         path: 'opportunity-radar',
-        name: 'OpportunityRadar',
-        component: () => import('../views/OpportunityRadar.vue')
+        redirect: { path: '/intelligence', query: { tab: 'ai-leads' } }
       },
       {
         path: 'capabilities',

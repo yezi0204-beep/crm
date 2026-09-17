@@ -106,6 +106,7 @@
             <el-option label="采购" value="采购" />
             <el-option label="项目经理" value="项目经理" />
             <el-option label="人力" value="人力" />
+            <el-option label="财务" value="财务" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -154,7 +155,8 @@ const getRoleType = (role) => {
     '技术研发': 'primary',
     '采购': '',
     '项目经理': 'info',
-    '人力': 'success'
+    '人力': 'success',
+    '财务': 'warning'
   }
   return types[role] || 'info'
 }

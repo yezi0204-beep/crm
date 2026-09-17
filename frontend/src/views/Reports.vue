@@ -345,9 +345,9 @@ import * as echarts from 'echarts'
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.has('data.view_all'))
 
-// 金额格式化：元 → 万元，精确到分需保留4位小数（0.0001万元 = 0.01元）
+// 金额格式化：元 → 万元，精确到分需保留6位小数（0.000001万元 = 0.01元），去尾零显示
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(4)
+  return Number(((value || 0) / 10000).toFixed(6))
 }
 
 // 年份选择
@@ -473,8 +473,8 @@ const fetchTrendComparison = async () => {
         return {
           key,
           label: labelMap[key] || key,
-          current: isAmount ? (val.current / 10000).toFixed(4) : val.current,
-          previous: isAmount ? (val.previous / 10000).toFixed(4) : val.previous,
+          current: isAmount ? Number((val.current / 10000).toFixed(6)) : val.current,
+          previous: isAmount ? Number((val.previous / 10000).toFixed(6)) : val.previous,
           growth_rate: val.growth_rate
         }
       })
@@ -734,7 +734,7 @@ const updateConversionChart = () => {
   conversionChartInstance.setOption({
     tooltip: { trigger: 'item', formatter: (p) => {
       const stage = stages[p.dataIndex] || {}
-      return `${p.name}<br/>商机数: ${stage.count || 0} 个<br/>金额: ${((stage.amount || 0) / 10000).toFixed(4)} 万<br/>转化率: ${stage.conversion_rate || 0}%<br/>流失率: ${stage.drop_rate || 0}%`
+      return `${p.name}<br/>商机数: ${stage.count || 0} 个<br/>金额: ${Number(((stage.amount || 0) / 10000).toFixed(6))} 万<br/>转化率: ${stage.conversion_rate || 0}%<br/>流失率: ${stage.drop_rate || 0}%`
     }},
     series: [{
       name: '阶段转化',

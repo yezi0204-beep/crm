@@ -6,12 +6,22 @@ from flask import request, jsonify, send_from_directory
 from extensions import (
     get_db, verify_token, record_operation_log,
     token_required, admin_required, user_can, UPLOAD_DIR,
+    auto_complete_if_paid_off,
 )
 
 from . import contracts_bp
 
 # 合同附件允许的扩展名白名单
 CONTRACT_FILE_EXTENSIONS = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png', 'zip', 'rar'}
+
+
+def _is_appcenter_director(username):
+    """是否应用中心主任（预计工时字段仅其可见/可编辑）。查库取部门，避免 token 内部门过期。"""
+    db = get_db()
+    row = db.execute(
+        "SELECT role, department FROM users WHERE username=?", (username,)
+    ).fetchone()
+    return bool(row and row['role'] == '主任' and row['department'] == '应用中心')
 
 
 @contracts_bp.route('/api/contracts', methods=['GET'])
@@ -84,8 +94,13 @@ def get_contracts():
 
     rows = cursor.fetchall()
     contracts = []
+    # 预计工时仅应用中心主任可见
+    show_est_hours = _is_appcenter_director(username)
     for row in rows:
-        contracts.append(dict(row))
+        item = dict(row)
+        if not show_est_hours:
+            item.pop('estimated_hours', None)
+        contracts.append(item)
 
     # —— 关键修复：income/待验收额/验收日期 与验收管理数据源对齐 ——
     # 不再信任 contracts.income 列（历史脏数据漏回填为 0），改为实时从
@@ -104,8 +119,11 @@ def get_contracts():
         for c in contracts:
             if c['id'] in acc_map:
                 acc_sum, acc_date = acc_map[c['id']]
-                c['income'] = acc_sum
-                c['pending_acceptance_amount'] = float(c.get('total_amt') or 0) - acc_sum
+                # 含税收入 = 累计验收额 + 税额
+                tax_amt = float(c.get('tax_amount') or 0)
+                income_with_tax = acc_sum + tax_amt
+                c['income'] = income_with_tax
+                c['pending_acceptance_amount'] = float(c.get('total_amt') or 0) - income_with_tax
                 if acc_date:
                     c['acceptance_date'] = acc_date
 
@@ -198,7 +216,8 @@ def create_contract():
             data.get('cost'), data.get('gross_profit'), data.get('acceptance_date'), data.get('expected_income_date'),
             data.get('expected_income_year'), data.get('business_type'), data.get('acceptance_nodes'), data.get('payment_nodes'),
             data.get('note'), 1 if data.get('is_framework') else 0,
-            data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction')
+            data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction'),
+            data.get('estimated_gross_profit', 0)
         ))
         db.commit()
         contract_id = cursor.lastrowid
@@ -268,8 +287,18 @@ def update_contract(contract_id):
             data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'),
             1 if data.get('is_framework') else 0,
             data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction'),
+            data.get('estimated_gross_profit', 0),
             contract_id
         ))
+        # 待回款归零联动：编辑合同额/回款额后自动完成
+        auto_complete_if_paid_off(cursor, contract_id)
+        # 预计工时：仅应用中心主任可更改
+        if 'estimated_hours' in data and _is_appcenter_director(username):
+            eh = data.get('estimated_hours')
+            eh = float(eh) if eh not in (None, '') else None
+            if eh is not None and eh < 0:
+                return jsonify({'code': 400, 'message': '预计工时不能为负数', 'data': None})
+            cursor.execute("UPDATE contracts SET estimated_hours=? WHERE id=?", (eh, contract_id))
         db.commit()
 
         record_operation_log(username, '编辑', '合同', f'编辑合同：{data.get("contract_name")}（ID:{contract_id}）')
@@ -409,8 +438,8 @@ def save_contract_commissions(contract_id):
 
 def _sync_contract_acceptance_fields(cur, contract_id):
     """根据验收记录同步合同的 income/待验收额/验收日期，确保合同管理与验收管理数据联动。
-    收入(累计验收额) = SUM(acceptance_amount)
-    待验收合同额 = 合同额 - 累计验收额
+    含税收入(累计验收额 + 税额) = SUM(acceptance_amount) + tax_amount
+    待验收合同额 = 合同额 - 含税收入
     验收日期 = 最近一次验收日期
     """
     cur.execute(
@@ -421,11 +450,14 @@ def _sync_contract_acceptance_fields(cur, contract_id):
     row = cur.fetchone()
     acc_total = float(row[0] or 0)
     latest_date = row[1]
-    cur.execute("SELECT COALESCE(total_amt, 0) FROM contracts WHERE id=?", (contract_id,))
-    total_amt = float(cur.fetchone()[0] or 0)
+    cur.execute("SELECT COALESCE(total_amt, 0), COALESCE(tax_amount, 0) FROM contracts WHERE id=?", (contract_id,))
+    crow = cur.fetchone()
+    total_amt = float(crow[0] or 0)
+    tax_amount = float(crow[1] or 0)
+    income_with_tax = acc_total + tax_amount
     cur.execute(
         "UPDATE contracts SET income=?, pending_acceptance_amount=?, acceptance_date=? WHERE id=?",
-        (acc_total, total_amt - acc_total, latest_date, contract_id)
+        (income_with_tax, total_amt - income_with_tax, latest_date, contract_id)
     )
 
 
@@ -565,6 +597,90 @@ def delete_acceptance(acc_id):
         except Exception:
             pass
         return jsonify({'code': 200, 'message': '删除成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+# ==================== 合同月度预计填报 ====================
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/forecast', methods=['GET'])
+@token_required
+def get_forecast(contract_id):
+    """获取合同某年各月预计验收/回款填报数据。"""
+    year = request.args.get('year', type=int) or datetime.now().year
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT month, expected_acceptance, expected_payment, note "
+        "FROM contract_monthly_forecast WHERE contract_id=? AND year=? ORDER BY month",
+        (contract_id, year)
+    )
+    rows = cur.fetchall()
+    return jsonify({'code': 200, 'data': [dict(r) for r in rows]})
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/forecast', methods=['POST'])
+@token_required
+def save_forecast(contract_id):
+    """批量保存合同月度预计验收/回款填报。
+    body: { year: 2026, items: [{ month: 9, expected_acceptance: 100000, expected_payment: 50000 }, ...] }
+    权限：管理员或合同负责人可填报。
+    """
+    payload = request.current_user
+    username = payload['username']
+    data = request.get_json(silent=True) or {}
+    year = data.get('year') or datetime.now().year
+    items = data.get('items') or []
+
+    db = get_db()
+    cur = db.cursor()
+
+    # 权限校验
+    cur.execute("SELECT owner_id FROM contracts WHERE id=?", (contract_id,))
+    row = cur.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    is_owner = row['owner_id'] == username
+    can_manage = user_can(username, 'data.view_all') or user_can(username, 'contracts.view_all')
+    if not (is_owner or can_manage):
+        return jsonify({'code': 403, 'message': '仅合同负责人或管理员可填报', 'data': None})
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        for item in items:
+            m = int(item.get('month', 0))
+            if m < 1 or m > 12:
+                continue
+            # 填报单位为万元，精确到分（6位小数，0.000001万=0.01元）
+            acc = round(float(item.get('expected_acceptance') or 0), 6)
+            pay = round(float(item.get('expected_payment') or 0), 6)
+            note = item.get('note', '')
+
+            cur.execute(
+                "SELECT id FROM contract_monthly_forecast WHERE contract_id=? AND year=? AND month=?",
+                (contract_id, year, m)
+            )
+            existing = cur.fetchone()
+            if existing:
+                cur.execute(
+                    "UPDATE contract_monthly_forecast SET expected_acceptance=?, expected_payment=?, note=?, updated_by=?, updated_at=? "
+                    "WHERE id=?",
+                    (acc, pay, note, username, now, existing['id'])
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO contract_monthly_forecast (contract_id, year, month, expected_acceptance, expected_payment, note, created_by, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (contract_id, year, m, acc, pay, note, username, now)
+                )
+        db.commit()
+        try:
+            record_operation_log(username, '填报月度预计', '合同管理',
+                                 f'合同ID={contract_id} 年度={year} {len(items)}条记录')
+        except Exception:
+            pass
+        return jsonify({'code': 200, 'message': '保存成功', 'data': None})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})

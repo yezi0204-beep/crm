@@ -33,7 +33,7 @@
       <el-table-column prop="industry" label="行业" width="100" show-overflow-tooltip />
       <el-table-column prop="appearance_count" label="出现次数" width="85" sortable />
       <el-table-column label="中标金额(万)" width="110" sortable :sort-by="'win_amount'">
-        <template #default="{row}">{{ row.win_amount?.toFixed(2) || '0.00' }}</template>
+        <template #default="{row}">{{ Number((row.win_amount || 0).toFixed(6)) }}</template>
       </el-table-column>
       <el-table-column label="主要客户" min-width="140">
         <template #default="{row}">
@@ -69,7 +69,7 @@
           <el-descriptions-item label="主营业务">{{ detail.main_business || '-' }}</el-descriptions-item>
           <el-descriptions-item label="行业">{{ detail.industry || '-' }}</el-descriptions-item>
           <el-descriptions-item label="出现次数">{{ detail.appearance_count }}</el-descriptions-item>
-          <el-descriptions-item label="涉及金额">{{ (detail.win_amount || 0).toFixed(2) }}万</el-descriptions-item>
+          <el-descriptions-item label="涉及金额">{{ Number((detail.win_amount || 0).toFixed(6)) }}万</el-descriptions-item>
           <el-descriptions-item label="首次出现">{{ detail.first_seen || '-' }}</el-descriptions-item>
           <el-descriptions-item label="最近出现">{{ detail.last_seen || '-' }}</el-descriptions-item>
         </el-descriptions>
@@ -171,7 +171,7 @@
         <el-row :gutter="12" style="margin-bottom:14px">
           <el-col :span="6"><el-card shadow="never"><div class="stat-num">{{ report.stats.total_projects }}</div><div class="stat-label">涉及项目</div></el-card></el-col>
           <el-col :span="6"><el-card shadow="never"><div class="stat-num">{{ report.stats.win_count }}</div><div class="stat-label">中标项目</div></el-card></el-col>
-          <el-col :span="6"><el-card shadow="never"><div class="stat-num">{{ report.stats.win_amount?.toFixed(2) }}</div><div class="stat-label">涉及金额(万)</div></el-card></el-col>
+          <el-col :span="6"><el-card shadow="never"><div class="stat-num">{{ Number((report.stats.win_amount || 0).toFixed(6)) }}</div><div class="stat-label">涉及金额(万)</div></el-card></el-col>
           <el-col :span="6"><el-card shadow="never"><div class="stat-num">{{ report.stats.growth_trend }}</div><div class="stat-label">增长趋势</div></el-card></el-col>
         </el-row>
 

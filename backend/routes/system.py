@@ -274,15 +274,15 @@ def get_operation_logs():
     params = []
 
     if keyword:
-        conditions.append("(username LIKE ? OR operation LIKE ? OR module LIKE ? OR detail LIKE ?)")
+        conditions.append("(ol.username LIKE ? OR ol.operation LIKE ? OR ol.module LIKE ? OR ol.detail LIKE ?)")
         params.extend([f'%{keyword}%', f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'])
 
     if start_date:
-        conditions.append("created_at >= ?")
+        conditions.append("ol.created_at >= ?")
         params.append(start_date)
 
     if end_date:
-        conditions.append("created_at <= ?")
+        conditions.append("ol.created_at <= ?")
         params.append(end_date + ' 23:59:59')
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""

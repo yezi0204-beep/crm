@@ -62,7 +62,7 @@
       <template #header>
         <div class="card-header">
           <span>🚀 AI商机驾驶舱</span>
-          <el-button size="small" type="primary" text @click="$router.push('/opportunity-radar')">进入商机雷达 →</el-button>
+          <el-button size="small" type="primary" text @click="$router.push({path:'/intelligence', query:{tab:'ai-leads'}})">查看AI商机 →</el-button>
         </div>
       </template>
       <div class="ai-stats-row">
@@ -97,6 +97,125 @@
         <el-col :span="12">
           <div class="ai-chart-title">竞争对手中标动态（近30天）</div>
           <div ref="aiCompChart" class="ai-chart" style="height:220px"></div>
+        </el-col>
+      </el-row>
+    </el-card>
+
+    <!-- 月度验收/回款统计 -->
+    <el-card class="chart-card">
+      <template #header>
+        <div class="card-header">
+          <span>💰 财务看板（{{ financeYear }}年）</span>
+          <el-select v-model="financeYear" size="small" style="width: 100px;" @change="fetchMonthlyFinance">
+            <el-option v-for="y in availableYears" :key="y" :label="y + '年'" :value="y" />
+          </el-select>
+        </div>
+      </template>
+
+      <!-- 关键财务指标 -->
+      <div class="finance-metrics">
+        <div class="fm-item">
+          <div class="fm-value">{{ formatWan(financeData.metrics?.total_contract_amt) }}</div>
+          <div class="fm-label">合同总额(万)</div>
+        </div>
+        <div class="fm-item">
+          <div class="fm-value blue">{{ formatWan(financeData.metrics?.cumulative_acceptance) }}</div>
+          <div class="fm-label">累计验收(万)</div>
+        </div>
+        <div class="fm-item">
+          <div class="fm-value orange">{{ formatWan(financeData.metrics?.pending_acceptance) }}</div>
+          <div class="fm-label">待验收(万)</div>
+        </div>
+        <div class="fm-item">
+          <div class="fm-value blue">{{ financeData.metrics?.acceptance_rate ?? 0 }}%</div>
+          <div class="fm-label">验收率</div>
+        </div>
+        <div class="fm-item">
+          <div class="fm-value green">{{ formatWan(financeData.metrics?.cumulative_payment) }}</div>
+          <div class="fm-label">累计回款(万)</div>
+        </div>
+        <div class="fm-item">
+          <div class="fm-value orange">{{ formatWan(financeData.metrics?.pending_payment) }}</div>
+          <div class="fm-label">待回款(万)</div>
+        </div>
+        <div class="fm-item">
+          <div class="fm-value green">{{ financeData.metrics?.payment_rate ?? 0 }}%</div>
+          <div class="fm-label">回款率</div>
+        </div>
+      </div>
+
+      <!-- 年度实际/预计汇总 -->
+      <div class="finance-summary">
+        <div class="finance-summary-item">
+          <span class="finance-label">本年已验收（实际）</span>
+          <span class="finance-value">{{ formatWan(financeData.summary?.actual_acceptance) }} 万</span>
+        </div>
+        <div class="finance-summary-item">
+          <span class="finance-label">本年已回款（实际）</span>
+          <span class="finance-value">{{ formatWan(financeData.summary?.actual_payment) }} 万</span>
+        </div>
+        <div class="finance-summary-item">
+          <span class="finance-label">本年待验收（预计）</span>
+          <span class="finance-value expected">{{ formatWan(financeData.summary?.expected_acceptance) }} 万</span>
+        </div>
+        <div class="finance-summary-item">
+          <span class="finance-label">本年待回款（预计）</span>
+          <span class="finance-value expected">{{ formatWan(financeData.summary?.expected_payment) }} 万</span>
+        </div>
+      </div>
+
+      <!-- 月度 + 季度图表 -->
+      <el-row :gutter="16">
+        <el-col :span="15">
+          <div class="finance-sub-title">月度验收与回款（深色=实际，浅色=预计）</div>
+          <div ref="financeChart" class="finance-chart-box"></div>
+        </el-col>
+        <el-col :span="9">
+          <div class="finance-sub-title">季度汇总</div>
+          <div ref="quarterChart" class="finance-chart-box"></div>
+        </el-col>
+      </el-row>
+
+      <!-- 负责人统计 + 月度填报明细 -->
+      <el-row :gutter="16" style="margin-top: 16px;">
+        <el-col :span="9">
+          <div class="finance-sub-title">按负责人统计（全量合同）</div>
+          <el-table :data="financeData.owners || []" border stripe size="small" max-height="320">
+            <el-table-column prop="owner_name" label="负责人" min-width="80" />
+            <el-table-column label="合同额(万)" align="right" width="90">
+              <template #default="{ row }">{{ formatWan(row.contract_amt) }}</template>
+            </el-table-column>
+            <el-table-column label="已回款(万)" align="right" width="90">
+              <template #default="{ row }">{{ formatWan(row.paid) }}</template>
+            </el-table-column>
+            <el-table-column label="待回款(万)" align="right" width="90">
+              <template #default="{ row }">{{ formatWan(row.pending_pay) }}</template>
+            </el-table-column>
+            <el-table-column label="回款率" align="right" width="70">
+              <template #default="{ row }">{{ row.contract_amt ? ((row.paid / row.contract_amt) * 100).toFixed(1) : 0 }}%</template>
+            </el-table-column>
+          </el-table>
+        </el-col>
+        <el-col :span="15">
+          <div class="finance-sub-title">
+            月度预计填报明细
+            <el-button size="small" text type="primary" @click="exportForecastDetails" style="margin-left: 8px;">导出</el-button>
+          </div>
+          <el-table :data="financeData.details || []" border stripe size="small" max-height="320" empty-text="暂无填报数据，请到合同管理点击「月度预计」填报">
+            <el-table-column label="月份" width="70" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.is_actual ? 'info' : 'warning'" size="small">{{ row.month_label }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="contract_name" label="合同名称" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="owner_name" label="负责人" width="80" />
+            <el-table-column label="预计验收(万)" align="right" width="100">
+              <template #default="{ row }">{{ formatWan(row.expected_acceptance) }}</template>
+            </el-table-column>
+            <el-table-column label="预计回款(万)" align="right" width="100">
+              <template #default="{ row }">{{ formatWan(row.expected_payment) }}</template>
+            </el-table-column>
+          </el-table>
         </el-col>
       </el-row>
     </el-card>
@@ -217,6 +336,14 @@ const salesRanking = ref([])
 
 const alerts = ref([])
 
+// 月度验收/回款统计
+const financeData = ref({})
+const financeYear = ref(new Date().getFullYear())
+const financeChart = ref(null)
+const quarterChart = ref(null)
+let chartFinance = null
+let chartQuarter = null
+
 const timeRange = ref('month')
 const currentYear = new Date().getFullYear()
 const selectedYear = ref(currentYear)
@@ -238,13 +365,50 @@ const aiRegionChart = ref(null)
 let chart1 = null
 let chart2 = null
 
+// 元 → 万元，精确到分：0.000001万元 = 0.01元，去尾零显示
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(4)
+  return Number(((value || 0) / 10000).toFixed(6))
+}
+
+const formatWan = (value) => {
+  return Number(((value || 0) / 10000).toFixed(6))
 }
 
 const formatDate = (dateStr) => {
   if (!dateStr) return ''
   return dateStr.substring(0, 10)
+}
+
+const exportForecastDetails = () => {
+  const details = financeData.value?.details || []
+  if (!details.length) {
+    ElMessage.info('暂无填报数据可导出')
+    return
+  }
+  const escapeCsv = (v) => {
+    if (v === null || v === undefined) return '""'
+    return '"' + String(v).replace(/"/g, '""') + '"'
+  }
+  const cols = [
+    { label: '月份', get: r => r.month_label || '' },
+    { label: '合同名称', get: r => r.contract_name || '' },
+    { label: '负责人', get: r => r.owner_name || '' },
+    { label: '预计验收(万)', get: r => Number(((r.expected_acceptance || 0) / 10000).toFixed(6)) },
+    { label: '预计回款(万)', get: r => Number(((r.expected_payment || 0) / 10000).toFixed(6)) }
+  ]
+  let csv = '\uFEFF' + cols.map(c => escapeCsv(c.label)).join(',') + '\n'
+  details.forEach(r => {
+    csv += cols.map(c => escapeCsv(c.get(r))).join(',') + '\n'
+  })
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const link = document.createElement('a')
+  const url = URL.createObjectURL(blob)
+  link.setAttribute('href', url)
+  link.setAttribute('download', `月度预计填报明细_${selectedYear.value}.csv`)
+  link.style.visibility = 'hidden'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
 }
 
 // 真实趋势百分比：基于后端 trends 字段的 growth_rate
@@ -364,6 +528,80 @@ const fetchRecentContracts = async () => {
   }
 }
 
+const fetchMonthlyFinance = async () => {
+  try {
+    const res = await api.get('/dashboard/monthly-finance', { year: financeYear.value })
+    if (res.code === 200) {
+      financeData.value = res.data
+      updateFinanceChart()
+    }
+  } catch (e) {
+    console.error('获取月度财务统计失败', e)
+  }
+}
+
+const updateFinanceChart = () => {
+  const d = financeData.value
+  if (!d || !d.months) return
+
+  // 实际/预计分别拆为两条，用不同色区分
+  const accActual = [], accExpected = [], payActual = [], payExpected = []
+  d.months.forEach((_, i) => {
+    const isAct = d.is_actual[i]
+    accActual.push(isAct ? d.acceptance_data[i] : 0)
+    accExpected.push(!isAct ? d.acceptance_data[i] : 0)
+    payActual.push(isAct ? d.payment_data[i] : 0)
+    payExpected.push(!isAct ? d.payment_data[i] : 0)
+  })
+
+  const tipFormatter = (params) => {
+    let html = `${params[0].axisValue}<br/>`
+    let total = 0
+    params.forEach(p => {
+      if (p.value > 0) {
+        html += `${p.marker} ${p.seriesName}: ${Number((p.value / 10000).toFixed(6))} 万<br/>`
+        total += p.value
+      }
+    })
+    html += `<b>合计: ${Number((total / 10000).toFixed(6))} 万</b>`
+    return html
+  }
+  const wanAxis = { type: 'value', axisLabel: { formatter: v => (v / 10000).toFixed(0) + '万' } }
+
+  if (chartFinance) {
+    chartFinance.setOption({
+      tooltip: { trigger: 'axis', formatter: tipFormatter },
+      legend: { data: ['实际验收', '预计验收', '实际回款', '预计回款'], bottom: 0, itemWidth: 12 },
+      grid: { left: '3%', right: '4%', top: 20, bottom: '18%', containLabel: true },
+      xAxis: { type: 'category', data: d.months },
+      yAxis: wanAxis,
+      series: [
+        { name: '实际验收', type: 'bar', stack: 'acc', data: accActual, itemStyle: { color: '#5470c6' } },
+        { name: '预计验收', type: 'bar', stack: 'acc', data: accExpected, itemStyle: { color: '#a8c5f0' } },
+        { name: '实际回款', type: 'bar', stack: 'pay', data: payActual, itemStyle: { color: '#ee6666' } },
+        { name: '预计回款', type: 'bar', stack: 'pay', data: payExpected, itemStyle: { color: '#f7b5b5' } },
+      ]
+    }, true)
+  }
+
+  // 季度汇总图
+  if (chartQuarter && d.quarters) {
+    chartQuarter.setOption({
+      tooltip: { trigger: 'axis', formatter: tipFormatter },
+      legend: { data: ['实际验收', '预计验收', '实际回款', '预计回款'], bottom: 0, itemWidth: 12 },
+      grid: { left: '3%', right: '4%', top: 20, bottom: '18%', containLabel: true },
+      xAxis: { type: 'category', data: d.quarters.map(q => q.label) },
+      yAxis: wanAxis,
+      series: [
+        { name: '实际验收', type: 'bar', stack: 'acc', data: d.quarters.map(q => q.acceptance_actual), itemStyle: { color: '#5470c6' } },
+        { name: '预计验收', type: 'bar', stack: 'acc', data: d.quarters.map(q => q.acceptance_expected), itemStyle: { color: '#a8c5f0' } },
+        { name: '实际回款', type: 'bar', stack: 'pay', data: d.quarters.map(q => q.payment_actual), itemStyle: { color: '#ee6666' } },
+        { name: '预计回款', type: 'bar', stack: 'pay', data: d.quarters.map(q => q.payment_expected), itemStyle: { color: '#f7b5b5' } },
+      ]
+    }, true)
+  }
+}
+
 const getStatusType = (status) => {
   const types = {
     '已签署': 'success',
@@ -460,6 +698,8 @@ const handleResize = () => {
   aiChart2?.resize()
   aiChart3?.resize()
   aiChart4?.resize()
+  chartFinance?.resize()
+  chartQuarter?.resize()
 }
 
 watch(timeRange, () => {
@@ -579,6 +819,11 @@ onMounted(async () => {
   fetchAiOverview()
   fetchAiTrend()
   fetchAiDist()
+  // 月度验收/回款统计
+  await nextTick()
+  if (financeChart.value) chartFinance = echarts.init(financeChart.value)
+  if (quarterChart.value) chartQuarter = echarts.init(quarterChart.value)
+  fetchMonthlyFinance()
   window.addEventListener('resize', handleResize)
 })
 
@@ -590,6 +835,8 @@ onUnmounted(() => {
   aiChart2?.dispose()
   aiChart3?.dispose()
   aiChart4?.dispose()
+  chartFinance?.dispose()
+  chartQuarter?.dispose()
 })
 </script>
 
@@ -739,6 +986,77 @@ onUnmounted(() => {
 
 .chart {
   height: 300px;
+}
+
+.finance-metrics {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.fm-item {
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 12px 8px;
+  text-align: center;
+}
+
+.fm-value {
+  font-size: 20px;
+  font-weight: bold;
+  color: #303133;
+}
+
+.fm-value.blue { color: #409eff; }
+.fm-value.green { color: #67c23a; }
+.fm-value.orange { color: #e6a23c; }
+
+.fm-label {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+
+.finance-summary {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 16px;
+  padding: 10px 16px;
+  background: #fafafa;
+  border-radius: 8px;
+}
+
+.finance-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.finance-label {
+  font-size: 13px;
+  color: #909399;
+}
+
+.finance-value {
+  font-size: 20px;
+  font-weight: bold;
+  color: #303133;
+}
+
+.finance-value.expected {
+  color: #e6a23c;
+}
+
+.finance-sub-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: #303133;
+  margin-bottom: 6px;
+}
+
+.finance-chart-box {
+  height: 280px;
 }
 
 .ranking-card {

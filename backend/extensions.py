@@ -58,6 +58,23 @@ def close_db(error=None):
             pass
 
 
+def auto_complete_if_paid_off(cursor, contract_id):
+    """待回款归零的执行中合同自动标记为已完成。
+
+    在回款新增/编辑/删除/导入及合同编辑（改合同额）后调用。
+    仅处理 total_amt > 0 的合同（未填合同额的无法判断，不联动）。
+    """
+    try:
+        cursor.execute("""
+            UPDATE contracts SET status='已完成'
+            WHERE id=? AND status='执行中'
+              AND COALESCE(total_amt, 0) > 0
+              AND COALESCE(total_amt, 0) - COALESCE(paid_amt, 0) <= 0
+        """, (contract_id,))
+    except Exception as e:
+        print(f"[auto_complete] 合同 {contract_id} 回款完成状态联动失败: {e}")
+
+
 def ensure_tables():
     """应用启动时预建所有表（请求上下文外，供调度器等提前使用）。
 
@@ -85,10 +102,12 @@ def _init_tables(db):
     _init_contract_acceptances_table(cursor)
     _init_acceptance_commissions_table(cursor)
     _init_contract_commissions_table(cursor)
+    _init_contract_monthly_forecast_table(cursor)
     _init_operation_logs_table(cursor)
     _init_monthly_targets_table(cursor)
     _init_visits_table(cursor)
     _init_user_roles_table(cursor)
+    _init_workcost_tables(cursor)
     # 兼容已部署环境：lead_sources 幂等补齐字段
     try:
         existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(lead_sources)")]
@@ -1397,13 +1416,17 @@ _RBAC_PERMISSIONS = [
     ('leads.view_all',   '线索库全局可见'),
     ('contracts.view_all', '合同全部可见（含应用中心只读）'),
     ('appraisal.view',   '月度考核查看'),
+    ('workhour.view',    '工时分摊查看（只读，含导出）'),
+    ('workhour.manage',  '工时成本分摊管理（录入月度成本、分配工时）'),
+    ('finance.view',     '财务看板（全量合同验收/回款统计，只读）'),
 ]
 
 # 角色 → 权限点默认映射（seed，INSERT OR IGNORE 幂等）
 _RBAC_ROLE_PERMISSIONS = {
     '主任': [p[0] for p in _RBAC_PERMISSIONS],
     '院长': [p[0] for p in _RBAC_PERMISSIONS if p[0] != 'system.logs'],
-    '人力': ['appraisal.view'],
+    '人力': ['appraisal.view', 'workhour.view', 'workhour.manage'],
+    '财务': ['workhour.view', 'finance.view'],
     'dept:应用中心': ['intel.view', 'intel.leads', 'intel.import', 'leads.view_all', 'contracts.view_all'],
 }
 
@@ -1439,6 +1462,56 @@ def _init_rbac_tables(cursor):
                     (role_code, perm))
     except Exception as e:
         print(f"[init_rbac] seed 默认权限映射失败: {e}")
+
+
+def _init_workcost_tables(cursor):
+    """部门月度人力成本 + 工时分配表（工时分摊功能）。
+
+    部门每月录入考勤总工时与10项人力成本（工资、五项社保/年金/公积金/劳务费/福利费/补充险），
+    中心主任把总工时分配到执行中的合同，分摊金额 = 分配工时 × 单工时成本（实时计算不落快照，
+    月度成本修正后历史分摊自动重算）。
+    """
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS dept_month_costs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dept TEXT NOT NULL,
+                month TEXT NOT NULL,
+                total_hours REAL NOT NULL DEFAULT 0,
+                salary REAL DEFAULT 0,
+                pension REAL DEFAULT 0,
+                medical REAL DEFAULT 0,
+                unemployment REAL DEFAULT 0,
+                injury REAL DEFAULT 0,
+                annuity REAL DEFAULT 0,
+                housing_fund REAL DEFAULT 0,
+                labor_fee REAL DEFAULT 0,
+                welfare REAL DEFAULT 0,
+                supplement REAL DEFAULT 0,
+                note TEXT,
+                created_by TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(dept, month)
+            )
+        """)
+    except Exception as e:
+        print(f"[init_workcost] 建表 dept_month_costs 失败: {e}")
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS dept_hour_allocations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cost_id INTEGER NOT NULL,
+                contract_id INTEGER NOT NULL,
+                hours REAL NOT NULL DEFAULT 0,
+                note TEXT,
+                created_by TEXT,
+                created_at TEXT,
+                UNIQUE(cost_id, contract_id)
+            )
+        """)
+    except Exception as e:
+        print(f"[init_workcost] 建表 dept_hour_allocations 失败: {e}")
 
 
 def _init_custom_fields_table(cursor):
@@ -1557,13 +1630,15 @@ def user_can(username, permission_code):
 
 
 def require_permission(permission_code):
-    """RBAC 权限装饰器：当前用户须持有指定权限点，否则 403。"""
+    """RBAC 权限装饰器：当前用户须持有指定权限点（传 list/tuple 时任一满足即可），否则 403。"""
+    codes = [permission_code] if isinstance(permission_code, str) else list(permission_code)
+
     def decorator(f):
         @wraps(f)
         @token_required
         def decorated(*args, **kwargs):
             payload = request.current_user
-            if not user_can(payload['username'], permission_code):
+            if not any(user_can(payload['username'], c) for c in codes):
                 return jsonify({'code': 403, 'message': '权限不足', 'data': None})
             return f(*args, **kwargs)
         return decorated
@@ -1661,6 +1736,16 @@ def _init_contracts_table(cursor):
         cursor.execute("ALTER TABLE contracts ADD COLUMN business_direction TEXT")
     except:
         pass
+    # 预计工时（仅应用中心主任可见、可编辑）
+    try:
+        cursor.execute("ALTER TABLE contracts ADD COLUMN estimated_hours REAL")
+    except:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE contracts ADD COLUMN estimated_gross_profit REAL DEFAULT 0")
+    except:
+        pass
 
 
 def _init_contract_acceptances_table(cursor):
@@ -1713,6 +1798,29 @@ def _init_contract_commissions_table(cursor):
                 updated_by TEXT,
                 updated_at TEXT,
                 UNIQUE(contract_id, username)
+            )
+        """)
+    except Exception:
+        pass
+
+
+def _init_contract_monthly_forecast_table(cursor):
+    """合同月度预计验收/回款填报表：由合同负责人按月填报。"""
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS contract_monthly_forecast (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_id INTEGER NOT NULL,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                expected_acceptance REAL NOT NULL DEFAULT 0,
+                expected_payment REAL NOT NULL DEFAULT 0,
+                note TEXT,
+                created_by TEXT,
+                created_at TEXT,
+                updated_by TEXT,
+                updated_at TEXT,
+                UNIQUE(contract_id, year, month)
             )
         """)
     except Exception:

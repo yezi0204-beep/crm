@@ -10,6 +10,15 @@
         </el-select>
         <el-button type="primary" @click="fetchList">查询</el-button>
         <div class="search-bar-right">
+          <el-button type="warning" :loading="syncing" @click="syncFromKnowledge">
+            <el-icon><Refresh /></el-icon> 从拜访纪要同步
+          </el-button>
+          <el-button @click="exportEnterprises">
+            <el-icon><Download /></el-icon> 导出
+          </el-button>
+          <el-button type="primary" @click="showRecommendations">
+            <el-icon><MagicStick /></el-icon> 智能拜访推荐
+          </el-button>
           <el-button type="success" @click="openDialog()">+ 新建企业</el-button>
         </div>
       </div>
@@ -179,11 +188,11 @@
             <div class="summary-label">拜访记录</div>
           </div>
           <div class="summary-card" v-if="detail.summary.business_total_amount > 0">
-            <div class="summary-num">{{ (detail.summary.business_total_amount / 10000).toFixed(4) }}</div>
+            <div class="summary-num">{{ Number((detail.summary.business_total_amount / 10000).toFixed(6)) }}</div>
             <div class="summary-label">商机总额(万)</div>
           </div>
           <div class="summary-card" v-if="detail.summary.contract_total_amount > 0">
-            <div class="summary-num">{{ (detail.summary.contract_total_amount / 10000).toFixed(4) }}</div>
+            <div class="summary-num">{{ Number((detail.summary.contract_total_amount / 10000).toFixed(6)) }}</div>
             <div class="summary-label">合同总额(万)</div>
           </div>
         </div>
@@ -245,7 +254,7 @@
               <el-table-column label="商机标题" prop="title" min-width="160" show-overflow-tooltip />
               <el-table-column label="客户" prop="customer_company" width="140" show-overflow-tooltip />
               <el-table-column label="金额(万)" width="110">
-                <template #default="{ row }">{{ ((row.amount || 0) / 10000).toFixed(4) }}</template>
+                <template #default="{ row }">{{ Number(((row.amount || 0) / 10000).toFixed(6)) }}</template>
               </el-table-column>
               <el-table-column label="阶段" prop="stage" width="90" />
               <el-table-column label="状态" prop="status" width="80">
@@ -268,10 +277,10 @@
               <el-table-column label="合同名称" prop="contract_name" min-width="160" show-overflow-tooltip />
               <el-table-column label="客户" prop="customer_company" width="130" show-overflow-tooltip />
               <el-table-column label="合同总额(万)" width="120">
-                <template #default="{ row }">{{ ((row.total_amt || 0) / 10000).toFixed(4) }}</template>
+                <template #default="{ row }">{{ Number(((row.total_amt || 0) / 10000).toFixed(6)) }}</template>
               </el-table-column>
               <el-table-column label="已回款(万)" width="110">
-                <template #default="{ row }">{{ ((row.paid_amt || 0) / 10000).toFixed(4) }}</template>
+                <template #default="{ row }">{{ Number(((row.paid_amt || 0) / 10000).toFixed(6)) }}</template>
               </el-table-column>
               <el-table-column label="状态" prop="status" width="80" />
             </el-table>
@@ -338,16 +347,69 @@
         <el-button type="primary" :loading="linking" @click="handleLinkVisit">确认关联</el-button>
       </template>
     </el-dialog>
+
+    <!-- 智能拜访推荐弹窗 -->
+    <el-dialog v-model="recVisible" title="智能拜访推荐" width="900px" top="5vh"
+      :close-on-click-modal="false">
+      <div style="margin-bottom: 12px; color: #67c23a; font-size: 13px;">
+        基于商机价值、合同价值、拜访间隔、关系状态、拜访频率5个维度综合评分（百分制），按推荐优先级排序
+      </div>
+      <el-table :data="recommendations" v-loading="recLoading" border stripe size="small" max-height="60vh">
+        <el-table-column label="排名" type="index" width="55" align="center" />
+        <el-table-column label="企业名称" prop="name" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-link type="primary" @click="openDetail({id: row.id}); recVisible = false">{{ row.name }}</el-link>
+          </template>
+        </el-table-column>
+        <el-table-column label="推荐分" prop="score" width="75" align="center" sortable>
+          <template #default="{ row }">
+            <el-tag :type="row.score >= 50 ? 'danger' : row.score >= 30 ? 'warning' : 'info'" size="small">
+              {{ row.score }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="关系状态" prop="relationship_status" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="statusTagType(row.relationship_status)">{{ row.relationship_status || '未接触' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="联系人" prop="contact_person" width="90" show-overflow-tooltip />
+        <el-table-column label="距上次拜访" width="100" align="center">
+          <template #default="{ row }">
+            <span v-if="row.days_since_last_visit !== null">{{ row.days_since_last_visit }} 天</span>
+            <span v-else style="color:#909399">未拜访</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="商机额(万)" width="100" align="right">
+          <template #default="{ row }">{{ Number((row.business_amount / 10000).toFixed(6)) }}</template>
+        </el-table-column>
+        <el-table-column label="合同额(万)" width="100" align="right">
+          <template #default="{ row }">{{ Number((row.contract_amount / 10000).toFixed(6)) }}</template>
+        </el-table-column>
+        <el-table-column label="推荐理由" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div v-for="(r, i) in row.reasons" :key="i" style="font-size: 12px; line-height: 1.5;">• {{ r }}</div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Refresh, Download, MagicStick } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 
 const router = useRouter()
+
+// 拜访推荐相关
+const recVisible = ref(false)
+const recLoading = ref(false)
+const recommendations = ref([])
+const syncing = ref(false)
 
 const statusOptions = ['未接触', '初步接触', '深入沟通', '合作中', '已合作', '暂停']
 
@@ -548,6 +610,75 @@ async function unlinkVisit(visit) {
     }
   } catch (e) {
     // cancelled
+  }
+}
+
+// ---------- 从拜访纪要同步企业 ----------
+async function syncFromKnowledge() {
+  try {
+    await ElMessageBox.confirm(
+      '将扫描知识库中所有拜访纪要，提取企业信息同步到企业信息库（已存在的企业会跳过）。是否继续？',
+      '确认同步',
+      { type: 'warning' }
+    )
+  } catch (e) {
+    return
+  }
+  syncing.value = true
+  try {
+    const res = await api.post('/enterprises/sync-from-knowledge')
+    if (res.code === 200) {
+      ElMessage.success(res.message)
+      fetchList()
+    } else {
+      ElMessage.error(res.message || '同步失败')
+    }
+  } catch (e) {
+    ElMessage.error('同步失败：' + (e.message || '网络错误'))
+  } finally {
+    syncing.value = false
+  }
+}
+
+// ---------- 导出企业信息库 ----------
+function exportEnterprises() {
+  const params = new URLSearchParams()
+  if (keyword.value) params.set('keyword', keyword.value)
+  if (filterStatus.value) params.set('relationship_status', filterStatus.value)
+  const token = localStorage.getItem('crm_token') || ''
+  const url = `/api/enterprises/export?${params.toString()}`
+  // 通过 fetch 下载（带 token）
+  fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
+    .then(resp => {
+      if (!resp.ok) throw new Error('导出失败')
+      return resp.blob()
+    })
+    .then(blob => {
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `企业信息库_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.xlsx`
+      a.click()
+      URL.revokeObjectURL(a.href)
+      ElMessage.success('导出成功')
+    })
+    .catch(e => ElMessage.error('导出失败：' + e.message))
+}
+
+// ---------- 智能拜访推荐 ----------
+async function showRecommendations() {
+  recVisible.value = true
+  recLoading.value = true
+  try {
+    const res = await api.get('/enterprises/visit-recommendations')
+    if (res.code === 200) {
+      recommendations.value = res.data || []
+    } else {
+      ElMessage.error(res.message || '获取推荐失败')
+    }
+  } catch (e) {
+    ElMessage.error('获取推荐失败：' + (e.message || '网络错误'))
+  } finally {
+    recLoading.value = false
   }
 }
 </script>

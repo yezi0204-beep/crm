@@ -38,7 +38,7 @@
       <el-table-column prop="region" label="地区" width="80" />
       <el-table-column prop="total_procurements" label="采购次数" width="80" sortable />
       <el-table-column label="总预算(万)" width="100" sortable :sort-by="'total_budget'">
-        <template #default="{row}">{{ row.total_budget?.toFixed(2) || '0.00' }}</template>
+        <template #default="{row}">{{ Number((row.total_budget || 0).toFixed(6)) }}</template>
       </el-table-column>
       <el-table-column prop="procurement_frequency" label="采购频率" width="120" show-overflow-tooltip />
       <el-table-column label="评分" width="80" align="center">
@@ -87,8 +87,8 @@
           <el-descriptions-item label="地区">{{ detail.region || '-' }}</el-descriptions-item>
           <el-descriptions-item label="行业">{{ detail.industry || '-' }}</el-descriptions-item>
           <el-descriptions-item label="采购次数">{{ detail.total_procurements }}</el-descriptions-item>
-          <el-descriptions-item label="总预算">{{ (detail.total_budget || 0).toFixed(2) }}万</el-descriptions-item>
-          <el-descriptions-item label="平均预算">{{ (detail.avg_budget || 0).toFixed(2) }}万</el-descriptions-item>
+          <el-descriptions-item label="总预算">{{ Number((detail.total_budget || 0).toFixed(6)) }}万</el-descriptions-item>
+          <el-descriptions-item label="平均预算">{{ Number((detail.avg_budget || 0).toFixed(6)) }}万</el-descriptions-item>
           <el-descriptions-item label="采购频率">{{ detail.procurement_frequency || '-' }}</el-descriptions-item>
           <el-descriptions-item label="平均评分">{{ (detail.avg_score || 0).toFixed(1) }}</el-descriptions-item>
           <el-descriptions-item label="最高评分">{{ detail.max_score }}</el-descriptions-item>

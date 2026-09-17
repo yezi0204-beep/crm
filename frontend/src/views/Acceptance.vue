@@ -370,7 +370,7 @@ const submitAdd = async () => {
 const deleteAcceptance = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `确认删除该验收记录？\n合同：${row.contract_name || row.contract_no}\n日期：${row.acceptance_date}\n收入：${formatAmount(row.acceptance_amount)} 万`,
+      `确认删除该验收记录？\n合同：${row.contract_name || row.contract_no}\n日期：${row.acceptance_date}\n收入：${formatAmount(row.acceptance_amount)} 元`,
       '删除确认',
       { type: 'warning' }
     )

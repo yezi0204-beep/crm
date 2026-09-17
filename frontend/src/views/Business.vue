@@ -53,16 +53,6 @@
             </template>
           </el-table-column>
           <el-table-column prop="customer_relation" label="客情关系" min-width="90" />
-          <el-table-column prop="weekly_plan" label="本周安排" min-width="130" show-overflow-tooltip>
-            <template #default="scope">
-              {{ scope.row.weekly_plan || '暂无' }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="next_week_plan" label="下周计划" min-width="130" show-overflow-tooltip>
-            <template #default="scope">
-              {{ scope.row.next_week_plan || '暂无' }}
-            </template>
-          </el-table-column>
           <el-table-column prop="probability" label="项目落实概率" min-width="140" sortable>
             <template #default="scope">
               <div class="probability-cell">
@@ -120,7 +110,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="金额(万)" prop="amount">
-          <el-input-number v-model="businessForm.amount" :min="0" :step="0.01" />
+          <el-input-number v-model="businessForm.amount" :min="0" :step="0.01" :precision="6" />
         </el-form-item>
         <el-form-item label="项目落实概率">
           <el-select v-model="businessForm.probability" @change="onProbabilityChange">
@@ -173,12 +163,6 @@
             <el-option label="紧密" value="紧密" />
             <el-option label="战略合作" value="战略合作" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="本周工作安排">
-          <el-input v-model="businessForm.weekly_plan" type="textarea" :rows="3" placeholder="本周工作安排（每周自动更新）" />
-        </el-form-item>
-        <el-form-item label="下周工作计划">
-          <el-input v-model="businessForm.next_week_plan" type="textarea" :rows="3" placeholder="下周工作计划（下周自动转为本周安排）" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="businessForm.note" type="textarea" :rows="3" placeholder="商机备注信息" />
@@ -648,7 +632,8 @@ const fetchUsers = async () => {
 }
 
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(4)
+  // 元 → 万元，精确到分：0.000001万元 = 0.01元，toFixed(6) 后去尾零
+  return Number(((value || 0) / 10000).toFixed(6))
 }
 
 const getProbabilityType = (probability) => {
@@ -938,8 +923,6 @@ const exportBusiness = () => {
     { prop: 'stakeholder', label: '干系人' },
     { prop: 'amount', label: '预算(万)' },
     { prop: 'customer_relation', label: '客情关系' },
-    { prop: 'weekly_plan', label: '本周安排' },
-    { prop: 'next_week_plan', label: '下周计划' },
     { prop: 'probability', label: '项目落实概率(%)' },
     { prop: 'stage', label: '阶段' },
     { prop: 'predict_date', label: '预计成交日期' },
@@ -963,7 +946,7 @@ const exportBusiness = () => {
     const rowData = exportColumns.map(col => {
       let value = row[col.prop]
       if (col.prop === 'amount') {
-        value = ((value || 0) / 10000).toFixed(4)
+        value = ((value || 0) / 10000).toFixed(6)
       }
       return escapeCsvValue(value)
     })

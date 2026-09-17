@@ -2,7 +2,7 @@ from io import BytesIO
 from datetime import datetime
 from flask import request, jsonify
 
-from extensions import get_db, record_operation_log, token_required, user_can
+from extensions import get_db, record_operation_log, token_required, user_can, auto_complete_if_paid_off
 
 from . import finance_bp
 
@@ -98,6 +98,7 @@ def create_payment_record():
         cursor.execute("SELECT SUM(amount) as total FROM payment_records WHERE contract_id = ?", (data.get('contract_id'),))
         total_paid = cursor.fetchone()['total'] or 0
         cursor.execute("UPDATE contracts SET paid_amt = ? WHERE id = ?", (total_paid, data.get('contract_id')))
+        auto_complete_if_paid_off(cursor, data.get('contract_id'))
         db.commit()
 
         record_operation_log(username, '创建', '回款', f'创建回款记录，合同ID:{data.get("contract_id")}，金额:{data.get("amount")}')
@@ -136,6 +137,7 @@ def update_payment_record(record_id):
         cursor.execute("SELECT SUM(amount) as total FROM payment_records WHERE contract_id = ?", (original_contract_id,))
         total_paid = cursor.fetchone()['total'] or 0
         cursor.execute("UPDATE contracts SET paid_amt = ? WHERE id = ?", (total_paid, original_contract_id))
+        auto_complete_if_paid_off(cursor, original_contract_id)
         db.commit()
 
         record_operation_log(username, '编辑', '回款', f'编辑回款记录，ID:{record_id}，金额:{data.get("amount")}')
@@ -167,6 +169,7 @@ def delete_payment_record(record_id):
             cursor.execute("SELECT SUM(amount) as total FROM payment_records WHERE contract_id = ?", (contract_id,))
             total_paid = cursor.fetchone()['total'] or 0
             cursor.execute("UPDATE contracts SET paid_amt = ? WHERE id = ?", (total_paid, contract_id))
+            auto_complete_if_paid_off(cursor, contract_id)
 
         db.commit()
 
@@ -442,6 +445,7 @@ def import_execute_payments():
             cursor.execute("SELECT SUM(amount) as total FROM payment_records WHERE contract_id = ?", (contract_id,))
             total_paid = cursor.fetchone()['total'] or 0
             cursor.execute("UPDATE contracts SET paid_amt = ? WHERE id = ?", (total_paid, contract_id))
+            auto_complete_if_paid_off(cursor, contract_id)
 
             success_count += 1
             results.append({

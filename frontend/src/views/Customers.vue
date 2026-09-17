@@ -477,7 +477,7 @@
                   <el-table-column prop="contract_count" label="合同数" width="70" sortable />
                   <el-table-column label="合同总额(万)" width="110" sortable :sort-method="(a,b)=>(a.total_amount||0)-(b.total_amount||0)">
                     <template #default="{ row }">
-                      ¥{{ ((row.total_amount || 0) / 10000).toFixed(2) }}
+                      ¥{{ Number(((row.total_amount || 0) / 10000).toFixed(6)) }}
                     </template>
                   </el-table-column>
                 </el-table>
@@ -871,9 +871,9 @@ const releaseToPool = async (row) => {
   }
 }
 
-// 金额格式化：元 → 万元，精确到分需保留4位小数（0.0001万元 = 0.01元）
+// 金额格式化：元 → 万元，精确到分需保留6位小数（0.000001万元 = 0.01元），去尾零显示
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(4)
+  return Number(((value || 0) / 10000).toFixed(6))
 }
 
 // 打开画像 Drawer

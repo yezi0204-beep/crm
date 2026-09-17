@@ -115,7 +115,7 @@
               sortable="custom"
             >
               <template #default="scope">
-                {{ formatYuan(scope.row[col.prop]) }}
+                {{ formatAmount(scope.row[col.prop]) }}
               </template>
             </el-table-column>
 
@@ -188,22 +188,36 @@
               </template>
             </el-table-column>
             
-            <el-table-column 
-              v-else 
-              :prop="col.prop" 
-              :label="col.label" 
-              :min-width="col.minWidth || (col.width || 100)" 
+            <el-table-column
+              v-else-if="col.prop === 'estimated_hours'"
+              :prop="col.prop"
+              :label="col.label"
+              :min-width="col.width || 100"
+              align="right"
+              sortable
+            >
+              <template #default="scope">
+                {{ scope.row.estimated_hours ?? '—' }}
+              </template>
+            </el-table-column>
+
+            <el-table-column
+              v-else
+              :prop="col.prop"
+              :label="col.label"
+              :min-width="col.minWidth || (col.width || 100)"
               :sortable="col.sortable !== false"
               show-overflow-tooltip
             />
           </template>
           
-          <el-table-column label="操作" width="190" fixed="right">
+          <el-table-column label="操作" width="250" fixed="right">
             <template #default="scope">
               <el-button v-if="canEdit(scope.row)" link type="primary" size="small" @click="editContract(scope.row)">编辑</el-button>
               <el-button v-if="isAdmin" link type="danger" size="small" @click="deleteContract(scope.row)">删除</el-button>
               <el-button v-if="isAdmin" link type="warning" size="small" @click="openCommission(scope.row)">分成</el-button>
               <el-button v-if="scope.row.is_framework && (isAdmin || scope.row.owner_id === authStore.username)" link type="success" size="small" @click="openAcceptance(scope.row)">验收</el-button>
+              <el-button v-if="canEdit(scope.row)" link type="info" size="small" @click="openForecast(scope.row)">月度预计</el-button>
               <el-button link type="info" size="small" @click="previewFiles(scope.row)">预览</el-button>
             </template>
           </el-table-column>
@@ -284,7 +298,7 @@
         <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="合同总额(万)" prop="total_amt">
-              <el-input-number v-model="contractForm.total_amt" :min="0" :step="0.01" />
+              <el-input-number v-model="contractForm.total_amt" :min="0" :step="0.01" :precision="6" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -294,20 +308,36 @@
           </el-col>
         </el-row>
 
+        <el-row :gutter="20" v-if="isAppCenterDirector && contractForm.id">
+          <el-col :span="12">
+            <el-form-item label="预计工时(小时)">
+              <el-input-number v-model="contractForm.estimated_hours" :min="0" :step="1" style="width: 100%;" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
         <el-row :gutter="20">
           <el-col :span="8">
-            <el-form-item label="收入(元)">
-              <el-input-number v-model="contractForm.income" :min="0" :step="0.01" />
+            <el-form-item label="含税收入(万)">
+              <el-input-number v-model="contractForm.income" :min="0" :step="0.01" :precision="6" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="税额(万)">
-              <el-input-number v-model="contractForm.tax_amount" :min="0" :step="0.01" />
+              <el-input-number v-model="contractForm.tax_amount" :min="0" :step="0.01" :precision="6" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="待验收合同额(元)">
-              <el-input-number v-model="contractForm.pending_acceptance_amount" :min="0" :step="0.01" />
+            <el-form-item label="待验收合同额(万)">
+              <el-input-number v-model="contractForm.pending_acceptance_amount" :min="0" :step="0.01" :precision="6" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="预计毛利(万)">
+              <el-input-number v-model="contractForm.estimated_gross_profit" :min="0" :step="0.01" :precision="6" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -494,7 +524,7 @@
             <el-table-column prop="data.party_a" label="甲方" width="120" />
             <el-table-column prop="data.total_amt" label="合同总额(万)" width="120">
               <template #default="scope">
-                {{ (scope.row.data.total_amt || 0) / 10000 }}
+                {{ Number(((scope.row.data.total_amt || 0) / 10000).toFixed(6)) }}
               </template>
             </el-table-column>
             <el-table-column prop="valid" label="状态" width="100">
@@ -698,6 +728,40 @@
         <el-button @click="showAcceptanceModal = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 月度预计验收/回款填报弹窗 -->
+    <el-dialog v-model="showForecastModal" title="月度预计验收/回款填报" width="700px" :close-on-click-modal="false">
+      <div v-if="forecastContract" style="margin-bottom: 12px; padding: 8px 16px; background: #f5f7fa; border-radius: 6px; font-weight: 600;">
+        {{ forecastContract.contract_name }}（{{ forecastContract.contract_no }}）
+      </div>
+      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
+        <span>年度：</span>
+        <el-select v-model="forecastYear" size="small" style="width: 120px;" @change="loadForecast">
+          <el-option v-for="y in [new Date().getFullYear(), new Date().getFullYear()+1]" :key="y" :label="y + '年'" :value="y" />
+        </el-select>
+        <el-button size="small" type="primary" @click="fillFromContract">从合同额填充</el-button>
+        <span style="font-size: 12px; color: #909399;">提示：从合同额填充会将未验收/未回款余额按月均分到剩余月份</span>
+      </div>
+      <el-table :data="forecastRows" border stripe size="small">
+        <el-table-column prop="month" label="月份" width="80" align="center">
+          <template #default="{ row }">{{ row.month }}月</template>
+        </el-table-column>
+        <el-table-column label="预计验收金额(万元)" align="center">
+          <template #default="{ row }">
+            <el-input-number v-model="row.expected_acceptance" :min="0" :step="1" :precision="6" controls-position="right" style="width: 100%;" />
+          </template>
+        </el-table-column>
+        <el-table-column label="预计回款金额(万元)" align="center">
+          <template #default="{ row }">
+            <el-input-number v-model="row.expected_payment" :min="0" :step="1" :precision="6" controls-position="right" style="width: 100%;" />
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="showForecastModal = false">取消</el-button>
+        <el-button type="primary" :loading="savingForecast" @click="saveForecast">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -713,6 +777,8 @@ const authStore = useAuthStore()
 const route = useRoute()
 const contracts = ref([])
 const isAdmin = computed(() => authStore.has('data.view_all'))
+// 预计工时字段仅应用中心主任可见/可编辑（后端强校验）
+const isAppCenterDirector = computed(() => authStore.role === '主任' && authStore.department === '应用中心')
 const canEdit = (row) => isAdmin.value || row.owner_id === authStore.username
 const users = ref([])
 const customers = ref([])
@@ -741,11 +807,12 @@ const allColumns = [
   { prop: 'project_order_no', label: '项目令号', width: 120 },
   { prop: 'party_a', label: '甲方', width: '', minWidth: 140 },
   { prop: 'total_amt', label: '合同总额(万)', width: 110 },
-  { prop: 'income', label: '收入(元)', width: 110 },
+  { prop: 'income', label: '含税收入(万)', width: 110 },
   { prop: 'tax_amount', label: '税额(万)', width: 110 },
-  { prop: 'pending_acceptance_amount', label: '待验收合同额(元)', width: 140 },
+  { prop: 'pending_acceptance_amount', label: '待验收合同额(万)', width: 140 },
   { prop: 'paid_amt', label: '已回款(万)', width: 110 },
   { prop: 'pending_amt', label: '待回款(万)', width: 110 },
+  ...(isAppCenterDirector.value ? [{ prop: 'estimated_hours', label: '预计工时', width: 100 }] : []),
   { prop: 'sign_date', label: '签约日期', width: 110 },
   { prop: 'business_type', label: '业态', width: 90 },
   { prop: 'business_direction', label: '业务方向', width: 120 },
@@ -759,7 +826,8 @@ const allColumns = [
 
 const visibleColumns = ref([
   'contract_name', 'contract_no', 'party_a', 'total_amt',
-  'paid_amt', 'pending_amt', 'sign_date', 'owner_name', 'status'
+  'paid_amt', 'pending_amt', 'sign_date', 'owner_name', 'status',
+  ...(isAppCenterDirector.value ? ['estimated_hours'] : [])
 ])
 
 const visibleColumnConfigs = computed(() => {
@@ -927,6 +995,103 @@ async function removeAcceptance(accId) {
   }
 }
 
+// ==================== 月度预计验收/回款填报 ====================
+const showForecastModal = ref(false)
+const forecastContract = ref(null)
+const forecastYear = ref(new Date().getFullYear())
+const forecastRows = ref([])
+const savingForecast = ref(false)
+
+async function openForecast(row) {
+  forecastContract.value = row
+  forecastYear.value = new Date().getFullYear()
+  forecastRows.value = Array.from({ length: 12 }, (_, i) => ({
+    month: i + 1,
+    expected_acceptance: 0,
+    expected_payment: 0
+  }))
+  showForecastModal.value = true
+  await loadForecast()
+}
+
+async function loadForecast() {
+  if (!forecastContract.value) return
+  try {
+    const res = await api.get(`/contracts/${forecastContract.value.id}/forecast`, { year: forecastYear.value })
+    if (res && res.code === 200 && res.data) {
+      const map = {}
+      res.data.forEach(r => { map[r.month] = r })
+      forecastRows.value = Array.from({ length: 12 }, (_, i) => {
+        const m = i + 1
+        const saved = map[m]
+        // 填报数据以万元存储，前端直接按万元展示
+        return {
+          month: m,
+          expected_acceptance: saved ? Number(saved.expected_acceptance) || 0 : 0,
+          expected_payment: saved ? Number(saved.expected_payment) || 0 : 0
+        }
+      })
+    }
+  } catch (e) { /* noop */ }
+}
+
+function fillFromContract() {
+  if (!forecastContract.value) return
+  const row = forecastContract.value
+  const totalAmt = Number(row.total_amt || 0)
+  const paidAmt = Number(row.paid_amt || 0)
+  // 待验收额：合同总额 - 已验收含税收入
+  const income = Number(row.income || 0)
+  const pendingAcc = Math.max(0, totalAmt - income)
+  // 待回款额
+  const pendingPay = Math.max(0, totalAmt - paidAmt)
+  // 从当前月起均分到年底（合同额单位为元，填报单位为万元，需 /10000）
+  const nowMonth = new Date().getMonth() + 1
+  const remainMonths = 13 - nowMonth
+  if (remainMonths > 0) {
+    const accPer = pendingAcc / remainMonths / 10000
+    const payPer = pendingPay / remainMonths / 10000
+    forecastRows.value.forEach(r => {
+      if (r.month >= nowMonth) {
+        r.expected_acceptance = Math.round(accPer * 1e6) / 1e6
+        r.expected_payment = Math.round(payPer * 1e6) / 1e6
+      } else {
+        r.expected_acceptance = 0
+        r.expected_payment = 0
+      }
+    })
+    ElMessage.success(`已将待验收 ${Number((pendingAcc / 10000).toFixed(6))} 万元、待回款 ${Number((pendingPay / 10000).toFixed(6))} 万元均分到 ${nowMonth}月-12月`)
+  } else {
+    ElMessage.warning('当前已是12月，无法均分')
+  }
+}
+
+async function saveForecast() {
+  if (!forecastContract.value) return
+  savingForecast.value = true
+  try {
+    // 前端按万元录入，后端同样以万元存储
+    const items = forecastRows.value.map(r => ({
+      month: r.month,
+      expected_acceptance: Math.round((Number(r.expected_acceptance) || 0) * 1e6) / 1e6,
+      expected_payment: Math.round((Number(r.expected_payment) || 0) * 1e6) / 1e6,
+      note: r.note || ''
+    }))
+    const res = await api.post(`/contracts/${forecastContract.value.id}/forecast`, {
+      year: forecastYear.value,
+      items
+    })
+    if (res && res.code === 200) {
+      ElMessage.success('月度预计填报保存成功')
+      showForecastModal.value = false
+    } else {
+      ElMessage.error((res && res.message) || '保存失败')
+    }
+  } finally {
+    savingForecast.value = false
+  }
+}
+
 // 按已选客户联动过滤的商机列表
 const filteredBusiness = computed(() => {
   if (!contractForm.cust_id) return []
@@ -956,7 +1121,8 @@ const contractForm = reactive({
   note: '',
   contract_file_path: '',
   tech_agreement_file_path: '',
-  is_framework: 0
+  is_framework: 0,
+  estimated_hours: null
 })
 
 const contractFileList = ref([])
@@ -1018,7 +1184,8 @@ const rules = {
 }
 
 const formatAmount = (value) => {
-  return ((value || 0) / 10000).toFixed(4)
+  // 元 → 万元，精确到分：0.000001万元 = 0.01元，去尾零显示
+  return Number(((value || 0) / 10000).toFixed(6))
 }
 
 // 按元格式化（千分位），用于分成/验收弹窗
@@ -1202,9 +1369,9 @@ const saveContract = async () => {
       const payload = {
         ...contractForm,
         total_amt: (contractForm.total_amt || 0) * 10000,
-        income: contractForm.income || 0,
+        income: (contractForm.income || 0) * 10000,
         tax_amount: (contractForm.tax_amount || 0) * 10000,
-        pending_acceptance_amount: contractForm.pending_acceptance_amount || 0
+        pending_acceptance_amount: (contractForm.pending_acceptance_amount || 0) * 10000
       }
       
       if (!contractForm.id) {
@@ -1238,9 +1405,10 @@ const saveContract = async () => {
 const editContract = (row) => {
   Object.assign(contractForm, row)
   contractForm.total_amt = (row.total_amt || 0) / 10000
-  contractForm.income = row.income || 0
+  contractForm.income = (row.income || 0) / 10000
   contractForm.tax_amount = (row.tax_amount || 0) / 10000
-  contractForm.pending_acceptance_amount = row.pending_acceptance_amount || 0
+  contractForm.pending_acceptance_amount = (row.pending_acceptance_amount || 0) / 10000
+  contractForm.estimated_gross_profit = (row.estimated_gross_profit || 0) / 10000
   contractFileList.value = []
   techFileList.value = []
   if (row.contract_file_path) {
@@ -1298,7 +1466,8 @@ const addContract = () => {
     payment_nodes: '',
     contract_file_path: '',
     tech_agreement_file_path: '',
-    is_framework: 0
+    is_framework: 0,
+    estimated_hours: null
   })
   contractFileList.value = []
   techFileList.value = []
@@ -1345,10 +1514,10 @@ const exportContracts = () => {
   contracts.value.forEach(row => {
     const rowData = exportColumns.map(col => {
       let value = row[col.prop]
-      if (col.prop === 'total_amt' || col.prop === 'paid_amt') {
-        value = ((value || 0) / 10000).toFixed(4)
+      if (col.prop === 'total_amt' || col.prop === 'paid_amt' || col.prop === 'income' || col.prop === 'pending_acceptance_amount') {
+        value = ((value || 0) / 10000).toFixed(6)
       } else if (col.prop === 'pending_amt') {
-        value = (((row.total_amt || 0) - (row.paid_amt || 0)) / 10000).toFixed(4)
+        value = (((row.total_amt || 0) - (row.paid_amt || 0)) / 10000).toFixed(6)
       }
       return escapeCsvValue(value)
     })

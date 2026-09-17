@@ -74,6 +74,7 @@
           </el-input>
           <el-button type="warning" size="small" @click="showSearchDialog">🔍 语义搜索</el-button>
           <el-button type="success" size="small" @click="handleBatchAnalyze" :loading="batchAnalyzing">🧠 批量AI分析</el-button>
+          <el-button type="primary" size="small" @click="handleOptimizeVisits" :loading="optimizing">✨ 优化拜访纪要</el-button>
         </div>
 
         <el-table :data="docList" v-loading="docLoading" stripe style="width:100%" @row-click="openDocDetail" max-height="70vh">
@@ -572,6 +573,7 @@ const editingDoc = ref(null)
 const submitting = ref(false)
 const analyzing = ref(false)
 const batchAnalyzing = ref(false)
+const optimizing = ref(false)
 const docForm = reactive({
   doc_type: 'visit_summary', title: '', content: '',
   cust_id: '', business_id: '', tags: '', summary: ''
@@ -691,6 +693,33 @@ async function handleBatchAnalyze() {
     ElMessage.error('批量分析请求失败')
   } finally {
     batchAnalyzing.value = false
+  }
+}
+
+async function handleOptimizeVisits() {
+  const confirm = await ElMessageBox.confirm(
+    '将对所有拜访纪要执行：清洗无效记录、自动关联客户、生成摘要标签、重建向量索引。是否继续？',
+    '优化拜访纪要',
+    { confirmButtonText: '开始优化', cancelButtonText: '取消', type: 'info' }
+  ).catch(() => false)
+  if (!confirm) return
+  optimizing.value = true
+  try {
+    const resp = await api.post('/knowledge/visit-summaries/optimize', {}, { timeout: 600000 })
+    if (resp.code === 200) {
+      const d = resp.data
+      ElMessage.success(
+        `优化完成：清洗${d.cleaned.deleted_short + d.cleaned.deleted_duplicate}条，` +
+        `丰富化${d.enriched_count}条，关联客户${d.customer_matched}条，向量索引${d.vector_indexed}条`
+      )
+      fetchDocuments()
+    } else {
+      ElMessage.error(resp.message || '优化失败')
+    }
+  } catch (e) {
+    ElMessage.error('优化请求失败')
+  } finally {
+    optimizing.value = false
   }
 }
 

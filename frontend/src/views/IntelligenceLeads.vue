@@ -58,6 +58,24 @@
           <el-radio-button label="created_at">按时间</el-radio-button>
         </el-radio-group>
         <el-button @click="loadData">搜索</el-button>
+        <el-button type="primary" text @click="showAdvanced = !showAdvanced">
+          {{ showAdvanced ? '收起高级筛选' : '高级筛选' }}{{ activeAdvancedCount ? `(${activeAdvancedCount})` : '' }}
+        </el-button>
+      </div>
+
+      <!-- 高级筛选（原商机雷达维度） -->
+      <div v-show="showAdvanced" class="filter-bar" style="margin-top:8px;padding:10px;background:#f8fafc;border-radius:6px">
+        <el-input v-model="radarFilters.industry" placeholder="行业" clearable style="width:110px" @keyup.enter="searchRadar" />
+        <el-input v-model="radarFilters.business" placeholder="业务/关键词" clearable style="width:120px" @keyup.enter="searchRadar" />
+        <el-input v-model="radarFilters.region" placeholder="地区" clearable style="width:100px" @keyup.enter="searchRadar" />
+        <el-input v-model="radarFilters.buyer" placeholder="客户单位" clearable style="width:140px" @keyup.enter="searchRadar" />
+        <el-input v-model="radarFilters.competitor" placeholder="竞争对手" clearable style="width:120px" @keyup.enter="searchRadar" />
+        <el-input v-model="radarFilters.budget_min" placeholder="预算≥(万)" clearable style="width:110px" />
+        <el-input v-model="radarFilters.budget_max" placeholder="预算≤(万)" clearable style="width:110px" />
+        <el-date-picker v-model="radarDateRange" type="daterange" start-placeholder="发布开始" end-placeholder="发布结束"
+                        value-format="YYYY-MM-DD" style="width:240px" />
+        <el-button type="primary" @click="searchRadar">筛选</el-button>
+        <el-button @click="resetRadarFilters">重置</el-button>
       </div>
 
       <el-table :data="list" v-loading="loading" border style="margin-top:12px" @selection-change="onSelectionChange">
@@ -103,6 +121,9 @@
               <el-icon style="color:#e6a23c;font-size:14px"><Warning /></el-icon>
             </el-badge>
           </template>
+        </el-table-column>
+        <el-table-column label="销售负责人" width="100" align="center">
+          <template #default="{row}">{{ row.owner_name || '待分配' }}</template>
         </el-table-column>
         <el-table-column label="操作" width="340">
           <template #default="{row}">
@@ -209,6 +230,48 @@
           <span v-if="!parseCompetitors(detail.competitors).length">-</span>
         </el-descriptions-item>
         <el-descriptions-item label="AI分析" :span="2">{{ detail.analysis_summary || '-' }}</el-descriptions-item>
+      </el-descriptions>
+
+      <!-- 我方能力匹配（原商机雷达） -->
+      <div v-if="capResult" style="margin-top:12px;padding:10px;background:#f0f9eb;border-radius:6px;border-left:4px solid #67c23a">
+        <strong>💪 我方能力匹配{{ capResult.capability_score != null ? `（${capResult.capability_score}分）` : '' }}</strong>
+        <div style="margin-top:6px">
+          <el-tag v-for="m in (capResult.matched || [])" :key="m.name" size="small" style="margin:2px" type="success">
+            {{ m.name }}({{ m.confidence }})
+          </el-tag>
+          <span v-if="!(capResult.matched || []).length" style="color:#909399;font-size:13px">未匹配到我方能力</span>
+        </div>
+      </div>
+
+      <!-- AI销售建议（原商机雷达） -->
+      <div v-if="salesAdvice" style="margin-top:8px;padding:10px;background:#fafafa;border-radius:6px;border-left:4px solid #909399">
+        <strong>📋 AI销售建议</strong>
+        <p style="margin:6px 0 0 0;white-space:pre-wrap">{{ salesAdvice }}</p>
+      </div>
+
+      <!-- 历史关联项目（同客户，原商机雷达） -->
+      <div v-if="relatedProjects.length" style="margin-top:12px">
+        <strong>📁 历史关联项目（{{ relatedProjects.length }}）</strong>
+        <el-table :data="relatedProjects" size="small" border style="margin-top:6px">
+          <el-table-column prop="title" label="项目" min-width="220" show-overflow-tooltip />
+          <el-table-column prop="buyer" label="客户" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="budget" label="预算" width="90" />
+          <el-table-column label="阶段" width="90">
+            <template #default="{row}">{{ lifecycleLabel(row.lifecycle_stage) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <!-- 相关情报（原商机雷达） -->
+      <div v-if="relatedIntel.length" style="margin-top:12px">
+        <strong>📰 相关情报（{{ relatedIntel.length }}）</strong>
+        <div v-for="ri in relatedIntel" :key="ri.id" style="padding:6px 0;border-bottom:1px solid #f0f0f0">
+          <div>{{ ri.title }}</div>
+          <div style="font-size:12px;color:#909399">{{ ri.source_name || '' }} {{ ri.publish_date || '' }}</div>
+        </div>
+      </div>
+
+      <el-descriptions :column="2" border style="margin-top:12px">
         <el-descriptions-item label="原文正文" :span="2">
           <div class="content-box">{{ detail.raw_content || detail.snippet || '-' }}</div>
         </el-descriptions-item>
@@ -483,8 +546,25 @@ const filterGrade = ref('')
 const filterLifecycle = ref('')
 const filterDedup = ref('')
 const sortBy = ref('score')
+// 高级筛选（原商机雷达维度）
+const showAdvanced = ref(false)
+const radarDateRange = ref(null)
+const radarFilters = ref({
+  industry: '', business: '', region: '', buyer: '',
+  competitor: '', budget_min: '', budget_max: '',
+})
+const activeAdvancedCount = computed(() => {
+  let n = Object.values(radarFilters.value).filter(v => v !== '' && v != null).length
+  if (radarDateRange.value?.length === 2) n += 1
+  return n
+})
 const showDetail = ref(false)
 const detail = ref(null)
+// 详情附加信息（原商机雷达）
+const capResult = ref(null)
+const salesAdvice = ref('')
+const relatedProjects = ref([])
+const relatedIntel = ref([])
 const scoringId = ref(null)
 
 // 生命周期流转状态
@@ -659,6 +739,14 @@ async function loadData() {
     if (filterGrade.value) params.grade = filterGrade.value
     if (filterLifecycle.value) params.lifecycle_stage = filterLifecycle.value
     if (filterDedup.value) params.dedup_status = filterDedup.value
+    // 雷达维度筛选
+    Object.entries(radarFilters.value).forEach(([k, v]) => {
+      if (v !== '' && v != null) params[k] = v
+    })
+    if (radarDateRange.value?.length === 2) {
+      params.date_from = radarDateRange.value[0]
+      params.date_to = radarDateRange.value[1]
+    }
     const res = await api.get('/intelligence/leads', params)
     list.value = res.data || []
     total.value = res.total || 0
@@ -667,6 +755,21 @@ async function loadData() {
   } finally {
     loading.value = false
   }
+}
+
+function searchRadar() {
+  page.value = 1
+  loadData()
+}
+
+function resetRadarFilters() {
+  radarFilters.value = {
+    industry: '', business: '', region: '', buyer: '',
+    competitor: '', budget_min: '', budget_max: '',
+  }
+  radarDateRange.value = null
+  page.value = 1
+  loadData()
 }
 
 async function analyzeBatch() {
@@ -687,6 +790,10 @@ async function convertOne(id) {
   convertingId.value = id
   try {
     const res = await api.post(`/intelligence/leads/${id}/convert`)
+    if (res.code !== 200) {
+      ElMessage.error(res.message || '转入失败')
+      return
+    }
     const d = res.data || {}
     if (d.duplicate) {
       ElMessage.info('该商机已在CRM中存在，已自动关联')
@@ -797,6 +904,10 @@ async function convertBatch() {
       only_relevant: true,
       min_score: filterScore.value || 0,
     })
+    if (res.code !== 200) {
+      ElMessage.error(res.message || '批量转入失败')
+      return
+    }
     const d = res.data || {}
     ElMessage.success(`批量转入完成：新增${d.converted||0}条，跳过${d.skipped||0}条`)
     loadData()
@@ -814,6 +925,34 @@ async function viewDetail(id) {
     showDetail.value = true
     // 加载生命周期日志
     loadLifecycleLogs(id)
+    // 雷达附加信息：能力匹配 / AI销售建议 / 历史关联项目 / 相关情报（失败均不阻塞）
+    capResult.value = null
+    salesAdvice.value = ''
+    relatedProjects.value = []
+    relatedIntel.value = []
+    const d = res.data || {}
+    try {
+      const capRes = await api.post('/capabilities/match', {
+        title: d.title, text: d.analysis_summary || '',
+      })
+      capResult.value = capRes.data
+    } catch { /* ignore */ }
+    try {
+      const advRes = await api.longPost('/cockpit/ai-search', {
+        query: `为商机「${d.title}」（客户${d.buyer || '未知'}，预算${d.budget || '未知'}）给出销售建议：为什么值得跟、建议动作`,
+      })
+      salesAdvice.value = advRes.data?.answer || ''
+    } catch { /* ignore */ }
+    try {
+      if (d.buyer) {
+        const projRes = await api.get('/intelligence/leads', { buyer: d.buyer, per_page: 6 })
+        relatedProjects.value = (projRes.data || []).filter(p => p.id !== id).slice(0, 5)
+      }
+    } catch { /* ignore */ }
+    try {
+      const intelRes = await api.get('/intelligence', { search: (d.title || '').slice(0, 15), per_page: 5 })
+      relatedIntel.value = intelRes.data || []
+    } catch { /* ignore */ }
   } catch (e) {
     ElMessage.error('加载详情失败')
   }

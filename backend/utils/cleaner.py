@@ -78,6 +78,26 @@ _JUNK_CONTENT_PATTERNS = [
     r'^(登录|注册|忘记密码|记住我)',
 ]
 
+# 结果类公告关键词（项目已定标/结束，不再是可跟进商机）
+# 注意：只匹配"结果类"公告，"招标公告/采购公告/询价公告"等采购前期公告不在此列
+_RESULT_TITLE_KEYWORDS = (
+    '中标公告', '中标结果', '中标公示', '中标通知书',
+    '成交公告', '成交结果', '成交公示', '成交通知书',
+    '结果公告', '结果公示',
+    '废标公告', '流标公告', '终止公告', '中止公告',
+    '合同公告', '合同公示',
+)
+
+
+def is_result_announcement(title: str) -> bool:
+    """判断标题是否为结果类公告（中标/成交/废标/合同等已定标信息）。
+
+    这类公告项目已名花有主，不作为可跟进商机采集。
+    """
+    if not title:
+        return False
+    return any(kw in title for kw in _RESULT_TITLE_KEYWORDS)
+
 # 最小正文长度（字符数）
 MIN_CONTENT_LENGTH = 50
 
