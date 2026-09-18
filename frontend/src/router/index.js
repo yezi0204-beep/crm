@@ -74,6 +74,11 @@ const routes = [
         component: () => import('../views/WorkCost.vue')
       },
       {
+        path: 'quarterly-assessment',
+        name: 'QuarterlyAssessment',
+        component: () => import('../views/QuarterlyAssessment.vue')
+      },
+      {
         path: 'projects',
         name: 'Projects',
         component: () => import('../views/Projects.vue')

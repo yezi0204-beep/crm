@@ -94,12 +94,8 @@ def get_contracts():
 
     rows = cursor.fetchall()
     contracts = []
-    # 预计工时仅应用中心主任可见
-    show_est_hours = _is_appcenter_director(username)
     for row in rows:
         item = dict(row)
-        if not show_est_hours:
-            item.pop('estimated_hours', None)
         contracts.append(item)
 
     # —— 关键修复：income/待验收额/验收日期 与验收管理数据源对齐 ——
@@ -180,6 +176,9 @@ def create_contract():
     db = get_db()
     cursor = db.cursor()
 
+    if not (data.get('contract_name') or '').strip():
+        return jsonify({'code': 400, 'message': '合同名称不能为空', 'data': None})
+
     try:
         contract_no = data.get('contract_no')
         if not contract_no or contract_no.strip() == '':
@@ -207,8 +206,9 @@ def create_contract():
              contract_name, classification, is_audit, pending_acceptance_amount,
              cost, gross_profit, acceptance_date, expected_income_date,
              expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes, note, is_framework,
-             income, tax_amount, business_direction)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+             income, tax_amount, business_direction, estimated_gross_profit,
+             cost_labor, cost_travel, cost_entertain, cost_outsource, cost_manage, cost_tax)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             b_id, cust_id, contract_no, data.get('party_a'), data.get('project_order_no'),
             data.get('total_amt'), 0, data.get('sign_date'), data.get('owner_id'), '执行中',
@@ -217,7 +217,9 @@ def create_contract():
             data.get('expected_income_year'), data.get('business_type'), data.get('acceptance_nodes'), data.get('payment_nodes'),
             data.get('note'), 1 if data.get('is_framework') else 0,
             data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction'),
-            data.get('estimated_gross_profit', 0)
+            data.get('estimated_gross_profit', 0),
+            data.get('cost_labor', 0), data.get('cost_travel', 0), data.get('cost_entertain', 0),
+            data.get('cost_outsource', 0), data.get('cost_manage', 0), data.get('cost_tax', 0)
         ))
         db.commit()
         contract_id = cursor.lastrowid
@@ -256,6 +258,14 @@ def update_contract(contract_id):
     # 负责人不能通过编辑修改合同负责人（强制保留原值）
     effective_owner_id = data.get('owner_id') if is_admin else contract_row['owner_id']
 
+    # 必填校验：防止缺字段/空名称的请求把整行覆盖为 NULL（编辑为全字段覆盖）
+    name = (data.get('contract_name') or '').strip() if data.get('contract_name') else ''
+    if not name:
+        return jsonify({'code': 400, 'message': '合同名称不能为空，已取消保存', 'data': None})
+    contract_no = (data.get('contract_no') or '').strip() if data.get('contract_no') else ''
+    if not contract_no:
+        return jsonify({'code': 400, 'message': '合同编号不能为空，已取消保存', 'data': None})
+
     try:
         # 关联客户/商机，并做一致性兜底：若传了 b_id，以商机的 cust_id 为准，防数据撕裂
         b_id = data.get('b_id')
@@ -275,7 +285,8 @@ def update_contract(contract_id):
                 expected_income_year=?, business_type=?, status=?, owner_id=?,
                 cust_id=?, b_id=?,
                 acceptance_nodes=?, payment_nodes=?, note=?, is_framework=?,
-                income=?, tax_amount=?, business_direction=?
+                income=?, tax_amount=?, business_direction=?, estimated_gross_profit=?,
+                cost_labor=?, cost_travel=?, cost_entertain=?, cost_outsource=?, cost_manage=?, cost_tax=?
             WHERE id=?
         """, (
             data.get('contract_name'), data.get('contract_no'), data.get('party_a'), data.get('project_order_no'),
@@ -288,12 +299,14 @@ def update_contract(contract_id):
             1 if data.get('is_framework') else 0,
             data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction'),
             data.get('estimated_gross_profit', 0),
+            data.get('cost_labor', 0), data.get('cost_travel', 0), data.get('cost_entertain', 0),
+            data.get('cost_outsource', 0), data.get('cost_manage', 0), data.get('cost_tax', 0),
             contract_id
         ))
         # 待回款归零联动：编辑合同额/回款额后自动完成
         auto_complete_if_paid_off(cursor, contract_id)
-        # 预计工时：仅应用中心主任可更改
-        if 'estimated_hours' in data and _is_appcenter_director(username):
+        # 预计工时：可编辑
+        if 'estimated_hours' in data:
             eh = data.get('estimated_hours')
             eh = float(eh) if eh not in (None, '') else None
             if eh is not None and eh < 0:

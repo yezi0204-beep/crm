@@ -165,6 +165,10 @@
             <span class="menu-icon">🧾</span>
             <span>{{ t('menuItem.appraisal') }}</span>
           </el-menu-item>
+          <el-menu-item index="/quarterly-assessment">
+            <span class="menu-icon">📊</span>
+            <span>季度考核</span>
+          </el-menu-item>
           <el-menu-item index="/work-cost" v-if="has('workhour.view') || has('workhour.manage') || has('data.view_all')">
             <span class="menu-icon">⏱️</span>
             <span>工时分摊</span>

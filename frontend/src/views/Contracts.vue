@@ -189,6 +189,21 @@
             </el-table-column>
             
             <el-table-column
+              v-else-if="col.prop === 'net_profit'"
+              :prop="col.prop"
+              :label="col.label"
+              :min-width="col.width || 130"
+              align="right"
+            >
+              <template #default="scope">
+                <span :style="{ color: rowNetProfitWan(scope.row) < 0 ? '#f56c6c' : '' }">
+                  {{ formatAmount(rowNetProfitWan(scope.row) * 10000) }}
+                </span>
+                <div style="font-size: 12px; color: #909399;">{{ rowNetMargin(scope.row) }}</div>
+              </template>
+            </el-table-column>
+
+            <el-table-column
               v-else-if="col.prop === 'estimated_hours'"
               :prop="col.prop"
               :label="col.label"
@@ -308,7 +323,7 @@
           </el-col>
         </el-row>
 
-        <el-row :gutter="20" v-if="isAppCenterDirector && contractForm.id">
+        <el-row :gutter="20" v-if="contractForm.id">
           <el-col :span="12">
             <el-form-item label="预计工时(小时)">
               <el-input-number v-model="contractForm.estimated_hours" :min="0" :step="1" style="width: 100%;" />
@@ -341,6 +356,61 @@
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-divider content-position="left">项目成本预估（万元）</el-divider>
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="人工费(万)">
+              <el-input-number v-model="contractForm.cost_labor" :min="0" :step="0.01" :precision="6" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="差旅费(万)">
+              <el-input-number v-model="contractForm.cost_travel" :min="0" :step="0.01" :precision="6" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="业务招待费(万)">
+              <el-input-number v-model="contractForm.cost_entertain" :min="0" :step="0.01" :precision="6" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="外协费(万)">
+              <el-input-number v-model="contractForm.cost_outsource" :min="0" :step="0.01" :precision="6" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="管理费(万)">
+              <el-input-number v-model="contractForm.cost_manage" :min="0" :step="0.01" :precision="6" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="税费(万)">
+              <el-input-number v-model="contractForm.cost_tax" :min="0" :step="0.01" :precision="6" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="成本合计(万)">
+              <el-input :model-value="costEstimate.totalCost" readonly />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="预估净利润(万)">
+              <el-input :model-value="costEstimate.netProfit" readonly>
+                <template #append>
+                  <span :style="{ color: costEstimate.netProfit < 0 ? '#f56c6c' : '#67c23a' }">
+                    净利润率 {{ costEstimate.netMargin }}%
+                  </span>
+                </template>
+              </el-input>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <div class="cost-tip">净利润 = 合同总额 − 成本合计（人工费+差旅费+业务招待费+外协费+管理费+税费）；净利润率 = 净利润 ÷ 合同总额</div>
 
         <el-row :gutter="20">
           <el-col :span="12">
@@ -812,6 +882,7 @@ const allColumns = [
   { prop: 'pending_acceptance_amount', label: '待验收合同额(万)', width: 140 },
   { prop: 'paid_amt', label: '已回款(万)', width: 110 },
   { prop: 'pending_amt', label: '待回款(万)', width: 110 },
+  { prop: 'net_profit', label: '预估净利润(万)', width: 130 },
   ...(isAppCenterDirector.value ? [{ prop: 'estimated_hours', label: '预计工时', width: 100 }] : []),
   { prop: 'sign_date', label: '签约日期', width: 110 },
   { prop: 'business_type', label: '业态', width: 90 },
@@ -826,7 +897,7 @@ const allColumns = [
 
 const visibleColumns = ref([
   'contract_name', 'contract_no', 'party_a', 'total_amt',
-  'paid_amt', 'pending_amt', 'sign_date', 'owner_name', 'status',
+  'paid_amt', 'pending_amt', 'net_profit', 'sign_date', 'owner_name', 'status',
   ...(isAppCenterDirector.value ? ['estimated_hours'] : [])
 ])
 
@@ -1122,11 +1193,47 @@ const contractForm = reactive({
   contract_file_path: '',
   tech_agreement_file_path: '',
   is_framework: 0,
-  estimated_hours: null
+  estimated_hours: null,
+  estimated_gross_profit: 0,
+  cost_labor: 0,
+  cost_travel: 0,
+  cost_entertain: 0,
+  cost_outsource: 0,
+  cost_manage: 0,
+  cost_tax: 0
 })
 
 const contractFileList = ref([])
 const techFileList = ref([])
+
+// 项目成本预估联动（表单口径均为万元）：净利润 = 合同总额 - 成本合计
+const costEstimate = computed(() => {
+  const totalCost = (Number(contractForm.cost_labor) || 0)
+    + (Number(contractForm.cost_travel) || 0)
+    + (Number(contractForm.cost_entertain) || 0)
+    + (Number(contractForm.cost_outsource) || 0)
+    + (Number(contractForm.cost_manage) || 0)
+    + (Number(contractForm.cost_tax) || 0)
+  const totalAmt = Number(contractForm.total_amt) || 0
+  const netProfit = totalAmt - totalCost
+  const netMargin = totalAmt > 0 ? (netProfit / totalAmt) * 100 : 0
+  return {
+    totalCost: Number(totalCost.toFixed(6)),
+    netProfit: Number(netProfit.toFixed(6)),
+    netMargin: Number(netMargin.toFixed(2))
+  }
+})
+
+// 列表行：预估净利润（元口径 → 万元）/ 净利润率
+const rowCostTotal = (row) =>
+  (Number(row.cost_labor) || 0) + (Number(row.cost_travel) || 0)
+  + (Number(row.cost_entertain) || 0) + (Number(row.cost_outsource) || 0)
+  + (Number(row.cost_manage) || 0) + (Number(row.cost_tax) || 0)
+const rowNetProfitWan = (row) => ((Number(row.total_amt) || 0) - rowCostTotal(row)) / 10000
+const rowNetMargin = (row) => {
+  const amt = Number(row.total_amt) || 0
+  return amt > 0 ? ((amt - rowCostTotal(row)) / amt * 100).toFixed(2) + '%' : '—'
+}
 
 const previewContractFile = ref('')
 const previewContractFileName = ref('')
@@ -1371,7 +1478,14 @@ const saveContract = async () => {
         total_amt: (contractForm.total_amt || 0) * 10000,
         income: (contractForm.income || 0) * 10000,
         tax_amount: (contractForm.tax_amount || 0) * 10000,
-        pending_acceptance_amount: (contractForm.pending_acceptance_amount || 0) * 10000
+        pending_acceptance_amount: (contractForm.pending_acceptance_amount || 0) * 10000,
+        estimated_gross_profit: (contractForm.estimated_gross_profit || 0) * 10000,
+        cost_labor: (contractForm.cost_labor || 0) * 10000,
+        cost_travel: (contractForm.cost_travel || 0) * 10000,
+        cost_entertain: (contractForm.cost_entertain || 0) * 10000,
+        cost_outsource: (contractForm.cost_outsource || 0) * 10000,
+        cost_manage: (contractForm.cost_manage || 0) * 10000,
+        cost_tax: (contractForm.cost_tax || 0) * 10000
       }
       
       if (!contractForm.id) {
@@ -1404,11 +1518,24 @@ const saveContract = async () => {
 
 const editContract = (row) => {
   Object.assign(contractForm, row)
+  // 数值字段：元→万元
   contractForm.total_amt = (row.total_amt || 0) / 10000
   contractForm.income = (row.income || 0) / 10000
   contractForm.tax_amount = (row.tax_amount || 0) / 10000
   contractForm.pending_acceptance_amount = (row.pending_acceptance_amount || 0) / 10000
   contractForm.estimated_gross_profit = (row.estimated_gross_profit || 0) / 10000
+  contractForm.cost_labor = (row.cost_labor || 0) / 10000
+  contractForm.cost_travel = (row.cost_travel || 0) / 10000
+  contractForm.cost_entertain = (row.cost_entertain || 0) / 10000
+  contractForm.cost_outsource = (row.cost_outsource || 0) / 10000
+  contractForm.cost_manage = (row.cost_manage || 0) / 10000
+  contractForm.cost_tax = (row.cost_tax || 0) / 10000
+  // 文本字段：null/undefined 统一为空串，避免把 NULL 回写覆盖原数据
+  const textFields = ['contract_name', 'contract_no', 'party_a', 'project_order_no', 'sign_date',
+    'business_type', 'business_direction', 'classification', 'status', 'owner_id', 'cust_id', 'b_id',
+    'acceptance_nodes', 'payment_nodes', 'note', 'contract_file_path', 'tech_agreement_file_path']
+  textFields.forEach(f => { if (contractForm[f] == null) contractForm[f] = '' })
+  contractForm.is_framework = row.is_framework ? 1 : 0
   contractFileList.value = []
   techFileList.value = []
   if (row.contract_file_path) {
@@ -1467,7 +1594,14 @@ const addContract = () => {
     contract_file_path: '',
     tech_agreement_file_path: '',
     is_framework: 0,
-    estimated_hours: null
+    estimated_hours: null,
+    estimated_gross_profit: 0,
+    cost_labor: 0,
+    cost_travel: 0,
+    cost_entertain: 0,
+    cost_outsource: 0,
+    cost_manage: 0,
+    cost_tax: 0
   })
   contractFileList.value = []
   techFileList.value = []
@@ -1680,7 +1814,13 @@ watch(showAddModal, (newVal) => {
         acceptance_nodes: '',
         payment_nodes: '',
         cust_id: '',
-        b_id: ''
+        b_id: '',
+        cost_labor: 0,
+        cost_travel: 0,
+        cost_entertain: 0,
+        cost_outsource: 0,
+        cost_manage: 0,
+        cost_tax: 0
       })
     }
   }
@@ -1701,6 +1841,13 @@ watch(showImportModal, (newVal) => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.cost-tip {
+  margin: -8px 0 12px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
 }
 
 .header-row {

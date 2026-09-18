@@ -59,8 +59,8 @@ def _log_ai_operation(operation_type, data_source, model_name, token_usage,
                 error_message, result_summary
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            operator.get('id') if operator else None,
-            operator.get('username') if operator else 'system',
+            operator.get('id') if isinstance(operator, dict) else None,
+            operator.get('username') if isinstance(operator, dict) else (operator or 'system'),
             operation_type, data_source, model_name, PROMPT_VERSION,
             token_usage, latency_ms, status,
             (error_message or '')[:500], (result_summary or '')[:200],

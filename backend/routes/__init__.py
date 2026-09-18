@@ -71,6 +71,7 @@ def register_blueprints(app):
     from .tasks import register_routes as register_tasks
     from .capabilities import register_routes as register_capabilities
     from .workcost import register_routes as register_workcost
+    from .quarterly_assessment import register_routes as register_quarterly_assessment
 
     # Phase9: LLM Gateway（/api/ai/*）
     from llm_gateway import register_routes as register_ai_gateway
@@ -108,6 +109,7 @@ def register_blueprints(app):
     register_tasks(app)
     register_capabilities(app)
     register_workcost(app)
+    register_quarterly_assessment(app)
     register_ai_gateway(app)
 
     from .smart_import import smart_import_bp

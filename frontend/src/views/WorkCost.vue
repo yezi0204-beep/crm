@@ -232,6 +232,20 @@
         <el-table-column prop="total_amt" label="合同额(元)" width="120" align="right">
           <template #default="{ row }">{{ fmt2(row.total_amt) }}</template>
         </el-table-column>
+        <el-table-column prop="estimated_hours" label="预计工时" width="100" align="center">
+          <template #default="{ row }">{{ row.estimated_hours != null ? fmt2(row.estimated_hours) : '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="total_allocated_hours" label="已分配工时" width="110" align="center">
+          <template #default="{ row }">{{ fmt2(row.total_allocated_hours) }}</template>
+        </el-table-column>
+        <el-table-column label="剩余可分配" width="110" align="center">
+          <template #default="{ row }">
+            <span v-if="row.estimated_hours != null" :class="{ 'over-hours': row.estimated_hours - row.total_allocated_hours < 0 }">
+              {{ fmt2(row.estimated_hours - row.total_allocated_hours) }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="本月分配工时" width="150" align="center">
           <template #default="{ row }">
             <el-input-number v-model="row.edit_hours" :min="0" :precision="2" :step="8" size="small"

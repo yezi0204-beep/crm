@@ -1747,6 +1747,14 @@ def _init_contracts_table(cursor):
     except:
         pass
 
+    # 项目成本预估（元）：人工费/差旅费/业务招待费/外协费/管理费/税费
+    for col in ('cost_labor', 'cost_travel', 'cost_entertain',
+                'cost_outsource', 'cost_manage', 'cost_tax'):
+        try:
+            cursor.execute(f"ALTER TABLE contracts ADD COLUMN {col} REAL DEFAULT 0")
+        except:
+            pass
+
 
 def _init_contract_acceptances_table(cursor):
     """框架合同月度验收记录表：每次验收记录金额和日期，用于考核计算。"""

@@ -231,7 +231,9 @@ def alloc_contracts(cost_id):
 
     contracts = db.execute("""
         SELECT c.id, c.contract_name, c.contract_no, c.total_amt, c.status,
-               c.sign_date, u.name as owner_name, cu.company as customer_name
+               c.sign_date, c.estimated_hours,
+               u.name as owner_name, cu.company as customer_name,
+               (SELECT COALESCE(SUM(a2.hours),0) FROM dept_hour_allocations a2 WHERE a2.contract_id=c.id) as total_allocated_hours
         FROM contracts c
         LEFT JOIN users u ON c.owner_id = u.username
         LEFT JOIN customers cu ON c.cust_id = cu.id
