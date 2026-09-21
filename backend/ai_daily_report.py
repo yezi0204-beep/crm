@@ -12,7 +12,6 @@ Phase5: 汇总当日数据（采集→AI识别→转入CRM→分配），用 LLM
 LLM 参数：max_tokens=4000, timeout=60, enable_thinking=False
 """
 import json
-import sqlite3
 import logging
 from datetime import datetime, date
 
@@ -174,9 +173,8 @@ def generate_daily_report(report_date=None, db=None):
 
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
 
     try:

@@ -4,12 +4,21 @@ import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# 自动加载项目根目录的 .env（这样直接 python app.py 也能读到 MySQL 等配置）
+try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+    if os.path.exists(_env_path):
+        load_dotenv(_env_path)
+except ImportError:
+    pass
+
 from flask import Flask, send_from_directory, jsonify, request
 import logging
 
 from config import SERVER_HOST, SERVER_PORT
 from extensions import (
-    SECRET_KEY, DB_PATH, BASE_DIR, UPLOAD_DIR,
+    SECRET_KEY, BASE_DIR, UPLOAD_DIR,
     setup_extensions, get_db, record_operation_log, ensure_tables, user_can
 )
 from routes import register_blueprints
@@ -60,9 +69,16 @@ def serve_uploads(filename):
 
 @app.route('/health')
 def health_check():
+    db_ok = False
+    try:
+        conn = get_db()
+        conn.execute('SELECT 1').fetchone()
+        db_ok = True
+    except Exception:
+        pass
     return jsonify({
         'status': 'ok',
-        'database': os.path.exists(DB_PATH),
+        'database': db_ok,
         'llm_enabled': USE_LLM,
         'scheduler': 'running' if scheduler_running else 'stopped'
     })
@@ -108,7 +124,8 @@ if __name__ == '__main__':
         start_scheduler()
 
     logger.info(f"Starting CRM server on {args.host}:{args.port}")
-    logger.info(f"Database: {DB_PATH}")
+    logger.info(f"Database: MySQL {os.environ.get('MYSQL_DATABASE', 'crm')}@"
+                f"{os.environ.get('MYSQL_HOST', '127.0.0.1')}:{os.environ.get('MYSQL_PORT', '3306')}")
     # threaded=True：开发服务器多线程，确保即使有耗时的同步请求（如 LLM 调用）
     # 也不会阻塞登录等其他短请求
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

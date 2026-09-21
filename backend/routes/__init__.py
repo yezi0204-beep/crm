@@ -32,6 +32,7 @@ workcost_bp = Blueprint('workcost', __name__)
 # Phase1: 关键词管理 + 原始情报
 keywords_bp = Blueprint('keywords', __name__)
 intelligence_bp = Blueprint('intelligence', __name__)
+capabilities_bp = Blueprint('capabilities', __name__)
 
 # Phase6: AI驾驶舱
 cockpit_bp = Blueprint('cockpit', __name__)

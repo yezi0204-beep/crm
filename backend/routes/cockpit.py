@@ -3,7 +3,6 @@
 Phase6: 提供全局指标汇总、趋势分析、商机雷达数据、AI搜索。
 """
 import json
-import sqlite3
 import logging
 from datetime import date, timedelta
 
@@ -218,7 +217,7 @@ def distribution():
         FROM intelligence_leads
         WHERE status NOT IN ('rejected', 'merged')
           AND competitors IS NOT NULL AND competitors != ''
-          AND created_at >= date('now', '-30 days')
+          AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
         GROUP BY competitors
     """).fetchall()
     comp_counter = {}
@@ -383,7 +382,7 @@ def radar_list():
     if budget_min is not None or budget_max is not None:
         rows = db.execute(sql, params).fetchall()
     else:
-        total = db.execute(f"SELECT COUNT(*) as c FROM ({sql})", params).fetchone()['c']
+        total = db.execute(f"SELECT COUNT(*) as c FROM ({sql}) AS sub", params).fetchone()['c']
         sql += " ORDER BY il.score DESC, il.created_at DESC LIMIT ? OFFSET ?"
         params2 = params + [per_page, offset]
         rows = db.execute(sql, params2).fetchall()
@@ -501,8 +500,8 @@ def ai_search():
         cond_parts.append('(il.buyer LIKE ? OR il.competitors LIKE ? OR il.title LIKE ?)')
         sparams.extend([f"%{structured['company']}%"] * 3)
     if structured.get('days_back'):
-        cond_parts.append("date(il.created_at) >= date('now', ?)")
-        sparams.append(f'-{int(structured["days_back"])} days')
+        cond_parts.append("DATE(il.created_at) >= DATE_SUB(CURDATE(), INTERVAL ? DAY)")
+        sparams.append(int(structured["days_back"]))
     # 金额条件在内存中过滤（预算为文本）
     if len(cond_parts) > 1:
         try:
@@ -704,7 +703,7 @@ def operation_logs():
         sql += " AND action = ?"
         params.append(action)
 
-    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql})", params).fetchone()['c']
+    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql}) AS sub", params).fetchone()['c']
     sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()
@@ -837,7 +836,7 @@ def customer_list():
         sql += " AND ai_status=?"
         params.append(ai_status)
 
-    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql})", params).fetchone()['c']
+    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql}) AS sub", params).fetchone()['c']
     sql += " ORDER BY CASE customer_tier WHEN 'strategic' THEN 0 WHEN 'key' THEN 1 WHEN 'normal' THEN 2 WHEN 'potential' THEN 3 ELSE 4 END, total_procurements DESC, max_score DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()
@@ -1042,7 +1041,7 @@ def competitor_list():
         sql += " AND risk_level=?"
         params.append(risk_level)
 
-    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql})", params).fetchone()['c']
+    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql}) AS sub", params).fetchone()['c']
     sql += " ORDER BY CASE risk_level WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, appearance_count DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()
@@ -1230,7 +1229,7 @@ def alert_list():
         sql += " AND status=?"
         params.append(status)
 
-    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql})", params).fetchone()['c']
+    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql}) AS sub", params).fetchone()['c']
     sql += " ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, created_at DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()

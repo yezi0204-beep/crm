@@ -21,7 +21,7 @@ AI画像内容：
 """
 import json
 import logging
-import sqlite3
+
 from datetime import datetime, date
 
 logger = logging.getLogger(__name__)

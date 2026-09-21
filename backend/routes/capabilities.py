@@ -1,21 +1,23 @@
-"""我方能力模型 API。
+# -*- coding: utf-8 -*-
+"""能力模型 API（兼容层）。
 
-公司能力条目：遥感/GIS/农业/林业/水利/生态环境/AI/智能体/大数据/
-软件开发/无人机/仿真/雷达等。
+三模块合并后能力数据存储在 business_tags 表（capability_level 非空的标签节点）。
+本模块保留旧 API 路由以兼容前端已有调用，内部代理到 business_tags。
 
-GET    /api/capabilities        列表
-POST   /api/capabilities        新增
-PUT    /api/capabilities/<id>   编辑
-DELETE /api/capabilities/<id>   删除
-POST   /api/capabilities/match  能力匹配（给定项目需求→匹配能力）
+GET    /api/capabilities        列表（从 business_tags 按 capability_level 非空过滤）
+POST   /api/capabilities        新增（代理到 business_tags）
+PUT    /api/capabilities/<id>   编辑（代理到 business_tags）
+DELETE /api/capabilities/<id>   删除（代理到 business_tags）
+POST   /api/capabilities/match  能力匹配（不变，capability_matcher 已改读 business_tags）
+POST   /api/capabilities/seed   初始化默认能力（幂等，迁入 business_tags）
 """
 from flask import Blueprint, request, jsonify
 from extensions import get_db, token_required, admin_required, record_operation_log
+from . import capabilities_bp
 import json
 import logging
 
 logger = logging.getLogger(__name__)
-capabilities_bp = Blueprint('capabilities', __name__)
 
 DEFAULT_CAPABILITIES = [
     ('遥感', 'mature', '卫星遥感数据处理与应用', '多光谱/高光谱/SAR影像处理', '资源监测/灾害评估解决方案', '自然资源监测平台', '遥感,卫星,影像,监测'),
@@ -38,34 +40,42 @@ def register_routes(app):
     app.register_blueprint(capabilities_bp, url_prefix='/api/capabilities')
 
 
+def _parse(val):
+    if not val:
+        return []
+    try:
+        if isinstance(val, str) and val.startswith('['):
+            return json.loads(val)
+        if isinstance(val, str):
+            return [x.strip() for x in val.split(',') if x.strip()]
+        return list(val) if isinstance(val, (list, tuple)) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 @capabilities_bp.route('', methods=['GET'])
 @token_required
 def list_capabilities():
     db = get_db()
     search = request.args.get('search', '').strip()
-    enabled = request.args.get('enabled', type=int)
-
-    sql = "SELECT * FROM capabilities WHERE 1=1"
-    params = []
-    if search:
-        sql += " AND (name LIKE ? OR description LIKE ? OR keywords LIKE ?)"
-        params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
-    if enabled is not None:
-        sql += " AND enabled=?"
-        params.append(enabled)
-
-    rows = db.execute(sql + " ORDER BY id", params).fetchall()
+    rows = db.execute(
+        "SELECT id, name, capability_level, capability_desc, products, solutions, cases, "
+        "synonyms, related_words, is_active "
+        "FROM business_tags WHERE capability_level IS NOT NULL ORDER BY id"
+    ).fetchall()
     data = []
     for r in rows:
-        d = dict(r)
-        for f in ('products', 'solutions', 'cases', 'keywords', 'synonyms', 'related_industries'):
-            if d.get(f):
-                try:
-                    d[f] = json.loads(d[f]) if d[f].startswith('[') else [x.strip() for x in d[f].split(',') if x.strip()]
-                except (json.JSONDecodeError, TypeError):
-                    d[f] = []
-            else:
-                d[f] = []
+        d = {
+            'id': r['id'], 'name': r['name'], 'level': r['capability_level'],
+            'description': r['capability_desc'] or '',
+            'products': _parse(r['products']), 'solutions': _parse(r['solutions']),
+            'cases': _parse(r['cases']), 'keywords': [], 'synonyms': _parse(r['synonyms']),
+            'related_industries': _parse(r['related_words']),
+            'enabled': bool(r['is_active']),
+        }
+        if search and search.lower() not in (r['name'] or '').lower() \
+                and search.lower() not in (r['capability_desc'] or '').lower():
+            continue
         data.append(d)
     return jsonify({'code': 200, 'data': data, 'total': len(data)})
 
@@ -78,22 +88,25 @@ def create_capability():
     if not name:
         return jsonify({'code': 400, 'message': '能力名称必填'})
     db = get_db()
-    existing = db.execute("SELECT id FROM capabilities WHERE name=?", (name,)).fetchone()
+    existing = db.execute(
+        "SELECT id FROM business_tags WHERE name=? AND parent_id IS NULL", (name,)
+    ).fetchone()
     if existing:
         return jsonify({'code': 400, 'message': f'能力「{name}」已存在'})
 
-    def _arr(key):
-        val = data.get(key) or []
-        return json.dumps(val, ensure_ascii=False) if isinstance(val, list) else val
-
-    cursor = db.execute("""
-        INSERT INTO capabilities (name, level, description, products, solutions,
-            cases, keywords, synonyms, related_industries, enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (name, data.get('level', 'mature'), data.get('description', ''),
-          _arr('products'), _arr('solutions'), _arr('cases'),
-          _arr('keywords'), _arr('synonyms'), _arr('related_industries'),
-          data.get('enabled', 1)))
+    cursor = db.execute(
+        "INSERT INTO business_tags (parent_id, name, level, synonyms, related_words, exclude_words, "
+        "sort_order, is_active, capability_level, capability_desc, products, solutions, cases) "
+        "VALUES (NULL, ?, 1, ?, ?, '[]', 0, ?, ?, ?, ?, ?, ?)",
+        (name,
+         json.dumps(data.get('synonyms', []), ensure_ascii=False),
+         json.dumps(data.get('related_industries', []), ensure_ascii=False),
+         1 if data.get('enabled', True) else 0,
+         data.get('level', 'mature'), data.get('description', ''),
+         json.dumps(data.get('products', []), ensure_ascii=False),
+         json.dumps(data.get('solutions', []), ensure_ascii=False),
+         json.dumps(data.get('cases', []), ensure_ascii=False))
+    )
     db.commit()
     record_operation_log(request.current_user, 'create', 'capability', f'新增能力:{name}')
     return jsonify({'code': 200, 'message': '已新增', 'data': {'id': cursor.lastrowid}})
@@ -102,21 +115,34 @@ def create_capability():
 @capabilities_bp.route('/seed', methods=['POST'])
 @admin_required
 def seed_capabilities():
-    """初始化默认能力（13项，不覆盖已有）。"""
+    """初始化默认能力（13项，幂等不覆盖已有）。"""
     db = get_db()
     created = 0
     for name, level, desc, products, solutions, cases, keywords in DEFAULT_CAPABILITIES:
-        existing = db.execute("SELECT id FROM capabilities WHERE name=?", (name,)).fetchone()
+        existing = db.execute(
+            "SELECT id FROM business_tags WHERE name=? AND parent_id IS NULL", (name,)
+        ).fetchone()
         if existing:
+            # 已存在但无能力等级，补上
+            row = db.execute("SELECT capability_level FROM business_tags WHERE id=?", (existing['id'],)).fetchone()
+            if not row['capability_level']:
+                db.execute(
+                    "UPDATE business_tags SET capability_level=?, capability_desc=?, products=?, solutions=?, cases=? WHERE id=?",
+                    (level, desc, json.dumps([products], ensure_ascii=False),
+                     json.dumps([solutions], ensure_ascii=False), json.dumps([cases], ensure_ascii=False),
+                     existing['id'])
+                )
             continue
-        db.execute("""
-            INSERT INTO capabilities (name, level, description, products, solutions,
-                cases, keywords, synonyms, related_industries)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (name, level, desc, json.dumps([products], ensure_ascii=False),
-              json.dumps([solutions], ensure_ascii=False),
-              json.dumps([cases], ensure_ascii=False),
-              json.dumps(keywords.split(','), ensure_ascii=False), '[]', '[]'))
+        db.execute(
+            "INSERT INTO business_tags (parent_id, name, level, synonyms, related_words, exclude_words, "
+            "sort_order, is_active, capability_level, capability_desc, products, solutions, cases) "
+            "VALUES (NULL, ?, 1, ?, '[]', '[]', 0, 1, ?, ?, ?, ?, ?)",
+            (name, json.dumps(keywords.split(','), ensure_ascii=False),
+             level, desc,
+             json.dumps([products], ensure_ascii=False),
+             json.dumps([solutions], ensure_ascii=False),
+             json.dumps([cases], ensure_ascii=False))
+        )
         created += 1
     db.commit()
     record_operation_log(request.current_user, 'seed', 'capability', f'初始化{created}项默认能力')
@@ -128,33 +154,28 @@ def seed_capabilities():
 def update_capability(cid):
     data = request.get_json(silent=True) or {}
     db = get_db()
-    row = db.execute("SELECT id FROM capabilities WHERE id=?", (cid,)).fetchone()
+    row = db.execute("SELECT id FROM business_tags WHERE id=? AND capability_level IS NOT NULL", (cid,)).fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '能力不存在'})
 
-    def _arr(key):
-        if key not in data:
-            return None
-        val = data[key]
-        return json.dumps(val, ensure_ascii=False) if isinstance(val, list) else val
-
     updates, params = [], []
-    for f in ('name', 'level', 'description'):
+    if 'name' in data:
+        updates.append('name=?'); params.append(data['name'])
+    if 'level' in data:
+        updates.append('capability_level=?'); params.append(data['level'])
+    if 'description' in data:
+        updates.append('capability_desc=?'); params.append(data['description'])
+    for f, col in (('products', 'products'), ('solutions', 'solutions'), ('cases', 'cases'),
+                   ('synonyms', 'synonyms'), ('related_industries', 'related_words')):
         if f in data:
-            updates.append(f'{f}=?')
-            params.append(data[f])
-    for f in ('products', 'solutions', 'cases', 'keywords', 'synonyms', 'related_industries'):
-        v = _arr(f)
-        if v is not None:
-            updates.append(f'{f}=?')
-            params.append(v)
+            updates.append(f'{col}=?')
+            params.append(json.dumps(data[f], ensure_ascii=False) if isinstance(data[f], list) else data[f])
     if 'enabled' in data:
-        updates.append('enabled=?')
-        params.append(data['enabled'])
+        updates.append('is_active=?'); params.append(1 if data['enabled'] else 0)
     if updates:
         updates.append('updated_at=CURRENT_TIMESTAMP')
         params.append(cid)
-        db.execute(f"UPDATE capabilities SET {', '.join(updates)} WHERE id=?", params)
+        db.execute(f"UPDATE business_tags SET {', '.join(updates)} WHERE id=?", params)
         db.commit()
         record_operation_log(request.current_user, 'update', 'capability', f'编辑能力#{cid}')
     return jsonify({'code': 200, 'message': '已保存'})
@@ -164,10 +185,10 @@ def update_capability(cid):
 @admin_required
 def delete_capability(cid):
     db = get_db()
-    row = db.execute("SELECT name FROM capabilities WHERE id=?", (cid,)).fetchone()
+    row = db.execute("SELECT name FROM business_tags WHERE id=? AND capability_level IS NOT NULL", (cid,)).fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '能力不存在'})
-    db.execute("DELETE FROM capabilities WHERE id=?", (cid,))
+    db.execute("DELETE FROM business_tags WHERE id=?", (cid,))
     db.commit()
     record_operation_log(request.current_user, 'delete', 'capability', f'删除能力:{row["name"]}')
     return jsonify({'code': 200, 'message': '已删除'})
@@ -176,11 +197,9 @@ def delete_capability(cid):
 @capabilities_bp.route('/match', methods=['POST'])
 @token_required
 def match_capabilities():
-    """能力匹配：给定项目需求文本，匹配我方能力。
-
-    Body: {"text": "项目需求描述", "title": "项目名称（可选）"}
-    """
-    from capability_matcher import match_project_capabilities
+    """能力匹配：给定项目需求文本，匹配我方能力。"""
+    from capability_matcher import match_project_capabilities, invalidate_cache
+    invalidate_cache()  # 确保读最新
     data = request.get_json(silent=True) or {}
     text = (data.get('text') or '').strip()
     title = (data.get('title') or '').strip()

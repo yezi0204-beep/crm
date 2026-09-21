@@ -2,7 +2,6 @@
 import json
 import math
 import hashlib
-import sqlite3
 import os
 import re
 from datetime import datetime
@@ -10,12 +9,8 @@ from config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL, USE_LLM
 
 
 def _get_db():
-    from extensions import DB_PATH
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    from db import open_db
+    return open_db()
 
 
 def _simple_hash_vector(text, dim=384):

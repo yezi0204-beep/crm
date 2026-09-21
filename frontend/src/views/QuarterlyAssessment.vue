@@ -78,9 +78,10 @@
           </el-button>
           <el-button type="primary" plain :icon="Download" @click="exportCsv">导出CSV</el-button>
           <el-button plain :icon="Aim" @click="openDeptTargets">部门年度指标</el-button>
+          <el-button type="success" plain :icon="Comment" @click="openDirectorDlg">部门主任评价</el-button>
           <el-button type="warning" plain :icon="RefreshRight" :loading="reanalyzing"
             :disabled="!hasImported" @click="confirmReanalyze">重新分析</el-button>
-          <span class="import-tip">支持 xlsx / docx / csv；导入后大模型结合系统数据与部门指标生成初步考核建议</span>
+          <span class="import-tip">支持 xlsx / docx / csv；导入后大模型结合系统数据、部门指标与主任评价生成初步考核建议</span>
         </div>
         <el-table :data="overviewRows" size="small" border>
           <el-table-column prop="name" label="姓名" width="90" />
@@ -114,6 +115,12 @@
           </el-table-column>
           <el-table-column label="考核系数" width="90" align="center">
             <template #default="{ row }">{{ row.coefficient != null ? row.coefficient : '—' }}</template>
+          </el-table-column>
+          <el-table-column label="主任评价" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span v-if="row.director_comment">{{ row.director_comment }}</span>
+              <el-button v-else link type="primary" size="small" @click="openDirectorDlg">填写</el-button>
+            </template>
           </el-table-column>
           <el-table-column prop="review_comment" label="核定意见" min-width="140" show-overflow-tooltip />
           <el-table-column label="原表" width="70" align="center">
@@ -166,6 +173,26 @@
       </template>
     </el-dialog>
 
+    <!-- ===== 部门主任工作评价弹窗 ===== -->
+    <el-dialog v-model="directorDlg.visible" :title="`部门主任工作评价（${year} 年 Q${quarter}）`" width="780px">
+      <el-alert type="success" :closable="false" show-icon style="margin-bottom: 12px;"
+        title="主任评价将作为大模型综合评估的重要依据：主任肯定的贡献与指出的问题都会体现在评分建议中；但市场指标完成情况仍为硬性约束（个人指标未完成，系数不得≥1）。填写后请对已导入的考核表执行一次「重新分析」使其生效。" />
+      <el-table :data="directorDlg.rows" size="small" border max-height="520">
+        <el-table-column prop="name" label="姓名" width="90" />
+        <el-table-column prop="role" label="角色" width="90" />
+        <el-table-column label="主任工作评价（本季度主要贡献、不足、担当与协同、工作量饱和度等）" min-width="420">
+          <template #default="{ row }">
+            <el-input v-model="row.comment" type="textarea" :rows="2" :autosize="{ minRows: 2, maxRows: 6 }"
+              placeholder="如：重点任务完成情况、突出贡献、存在不足、协同担当、工作态度等" />
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="directorDlg.visible = false">取消</el-button>
+        <el-button type="primary" :loading="directorDlg.saving" @click="saveDirectorComments">保存全部评价</el-button>
+      </template>
+    </el-dialog>
+
     <!-- ===== 导入结果弹窗 ===== -->
     <el-dialog v-model="resultDlg.visible" title="导入分析结果" width="760px">
       <div v-for="(fr, fi) in resultDlg.files" :key="fi" class="file-result">
@@ -201,6 +228,10 @@
 
     <!-- ===== 核定弹窗 ===== -->
     <el-dialog v-model="reviewDlg.visible" :title="`综合核定 — ${reviewDlg.name}（${year} 年 Q${quarter}）`" width="920px">
+      <div v-if="reviewDlg.director_comment" class="director-box">
+        <div class="director-title">部门主任工作评价</div>
+        <div class="director-text">{{ reviewDlg.director_comment }}</div>
+      </div>
       <div v-if="reviewDlg.suggestion" class="suggest-box">
         <div class="suggest-title">大模型初步考核建议</div>
         <div class="suggest-line">
@@ -267,7 +298,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Download, FolderOpened, Document, Aim, RefreshRight } from '@element-plus/icons-vue'
+import { Upload, Download, FolderOpened, Document, Aim, RefreshRight, Comment } from '@element-plus/icons-vue'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 
@@ -415,11 +446,41 @@ const saveDeptTargets = async () => {
   }
 }
 
+// ---------- 部门主任工作评价 ----------
+const directorDlg = reactive({ visible: false, rows: [], saving: false })
+
+const openDirectorDlg = async () => {
+  const res = await api.get('/quarterly-assessment/director-comments', { year: year.value, quarter: quarter.value })
+  directorDlg.rows = (res.data.rows || []).map(r => ({
+    username: r.username, name: r.name, role: r.role, comment: r.comment || '',
+  }))
+  directorDlg.visible = true
+}
+
+const saveDirectorComments = async () => {
+  directorDlg.saving = true
+  try {
+    const res = await api.put('/quarterly-assessment/director-comments', {
+      year: year.value, quarter: quarter.value,
+      rows: directorDlg.rows.map(r => ({ username: r.username, comment: r.comment || '' })),
+    })
+    if (res.code === 200) {
+      ElMessage.success('主任评价已保存，对已导入考核表点「重新分析」后将纳入大模型综合评估')
+      directorDlg.visible = false
+      await loadOverview()
+    } else {
+      ElMessage.error(res.message || '保存失败')
+    }
+  } finally {
+    directorDlg.saving = false
+  }
+}
+
 // ---------- 重新分析 ----------
 const reanalyzing = ref(false)
 const confirmReanalyze = () => {
   ElMessageBox.confirm(
-    '将用已导入的原始考核表按最新部门指标与校准规则重跑大模型分析，覆盖当前季度全部初步建议（已核定结果不受影响）。继续？',
+    '将用已导入的原始考核表按最新部门指标、部门主任评价与校准规则重跑大模型分析，覆盖当前季度全部初步建议（已核定结果不受影响）。继续？',
     '重新分析', { confirmButtonText: '开始', cancelButtonText: '取消', type: 'warning' }
   ).then(runReanalyze).catch(() => {})
 }
@@ -451,7 +512,8 @@ const runReanalyze = async () => {
 // ---------- 核定 ----------
 const reviewDlg = reactive({
   visible: false, username: '', name: '', status: '', saving: false,
-  items: [], flags: {}, coefficient: 1.0, review_comment: '', suggestion: null
+  items: [], flags: {}, coefficient: 1.0, review_comment: '', suggestion: null,
+  director_comment: ''
 })
 const finalTotal = computed(() => reviewDlg.items.reduce((s, r) => s + (Number(r.final_score) || 0), 0))
 const finalGrade = computed(() => finalTotal.value > 0 ? gradeOf(finalTotal.value) : '')
@@ -468,6 +530,7 @@ const openReview = async (row) => {
   }))
   reviewDlg.coefficient = a.coefficient ?? a.suggestion_coefficient ?? 1.0
   reviewDlg.review_comment = a.review_comment || ''
+  reviewDlg.director_comment = a.director_comment || ''
   reviewDlg.suggestion = {
     total: a.suggestion_total, grade: a.suggestion_grade,
     coefficient: a.suggestion_coefficient, reason: a.suggestion_reason
@@ -530,6 +593,9 @@ onMounted(loadAll)
 .header-actions { display: flex; align-items: center; }
 .import-tip { margin-left: 12px; color: #909399; font-size: 12px; }
 .suggest-box { background: #f4f8ff; border: 1px solid #d9e6ff; border-radius: 6px; padding: 10px 14px; }
+.director-box { background: #f0f9eb; border: 1px solid #c2e7b0; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
+.director-title { font-weight: 600; font-size: 13px; color: #529b2e; margin-bottom: 6px; }
+.director-text { font-size: 13px; color: #606266; white-space: pre-wrap; line-height: 1.6; }
 .suggest-title { font-weight: 600; font-size: 13px; color: #3a6bd6; margin-bottom: 6px; }
 .suggest-line { font-size: 14px; }
 .suggest-reason { margin-top: 6px; font-size: 13px; color: #606266; white-space: pre-wrap; }

@@ -53,7 +53,7 @@ def list_intelligence():
         sql += " AND (ri.title LIKE ? OR ri.content LIKE ?)"
         params.extend([f'%{search}%', f'%{search}%'])
 
-    total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql})", params).fetchone()['cnt']
+    total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql}) AS sub", params).fetchone()['cnt']
     sql += " ORDER BY ri.collected_at DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()
@@ -183,7 +183,7 @@ def _match_business_keywords(title, content, snippet, match_list, exclude_list):
 def _load_content_matcher(db):
     """构建内容匹配器：业务标签（三级树）优先，无启用标签时回退旧关键词表。"""
     from .business_tags import load_tag_matcher
-    tag_map, exclude_list, has_tags = load_tag_matcher(db)
+    tag_map, exclude_list, has_tags, _caps = load_tag_matcher(db)
     if has_tags:
         return {'mode': 'tags', 'tag_map': tag_map, 'exclude': exclude_list}
     match_list, exclude_list = _load_active_keywords(db)
@@ -722,7 +722,7 @@ def list_leads():
         return 0
 
     if not need_budget_filter:
-        total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql})", params).fetchone()['cnt']
+        total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql}) AS sub", params).fetchone()['cnt']
 
     if sort == 'created_at':
         sql += " ORDER BY il.created_at DESC"
@@ -1203,7 +1203,7 @@ def list_projects():
         sql += " AND lifecycle_stage=?"
         params.append(lifecycle_stage)
 
-    total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql})", params).fetchone()['cnt']
+    total = db.execute(f"SELECT COUNT(*) as cnt FROM ({sql}) AS sub", params).fetchone()['cnt']
     sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()

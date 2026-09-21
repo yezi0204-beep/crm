@@ -39,7 +39,7 @@ def list_tasks():
         sql += " AND task_type=?"
         params.append(task_type)
 
-    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql})", params).fetchone()['c']
+    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql}) AS sub", params).fetchone()['c']
     sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()
@@ -153,7 +153,7 @@ def ai_logs():
         sql += " AND status=?"
         params.append(status)
 
-    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql})", params).fetchone()['c']
+    total = db.execute(f"SELECT COUNT(*) as c FROM ({sql}) AS sub", params).fetchone()['c']
     sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()

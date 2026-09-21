@@ -8,14 +8,13 @@
 """
 import json
 import re
-import sqlite3
 import threading
 import uuid
 from datetime import datetime
 
 from flask import request, jsonify, current_app
 
-from extensions import get_db, token_required, record_operation_log, DB_PATH
+from extensions import get_db, token_required, record_operation_log, open_db
 from config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL, USE_LLM
 
 from . import knowledge_graph_bp
@@ -680,9 +679,7 @@ def build_graph():
         with app_obj.app_context():
             try:
                 # 阶段1：读取
-                read_conn = sqlite3.connect(DB_PATH, timeout=10)
-                read_conn.row_factory = sqlite3.Row
-                read_conn.execute("PRAGMA journal_mode=WAL")
+                read_conn = open_db()
                 read_cursor = read_conn.cursor()
                 if doc_ids:
                     placeholders = ','.join(['?'] * len(doc_ids))
@@ -734,10 +731,7 @@ def build_graph():
                     task['progress'] = int((idx + 1) / len(documents) * 80)  # LLM 占 80% 进度
 
                 # 阶段3：写入（每文档即 commit）
-                write_conn = sqlite3.connect(DB_PATH, timeout=30)
-                write_conn.row_factory = sqlite3.Row
-                write_conn.execute("PRAGMA journal_mode=WAL")
-                write_conn.execute("PRAGMA busy_timeout=30000")
+                write_conn = open_db()
                 write_cursor = write_conn.cursor()
                 try:
                     for item in doc_results:
@@ -782,7 +776,7 @@ def build_graph():
                                 continue
                             try:
                                 write_cursor.execute("""
-                                    INSERT OR IGNORE INTO knowledge_relations
+                                    INSERT IGNORE INTO knowledge_relations
                                     (source_id, target_id, relation_type, description, doc_id, confidence)
                                     VALUES (?, ?, ?, ?, ?, 0.8)
                                 """, (source_id, target_id, relation_type, rel_desc, doc_id))

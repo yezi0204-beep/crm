@@ -71,7 +71,7 @@ def create_user():
         """, (data.get('username'), hashed_pwd, data.get('name'), primary_role, data.get('department', '')))
 
         for r in roles:
-            cursor.execute("INSERT OR IGNORE INTO user_roles (username, role) VALUES (?, ?)",
+            cursor.execute("INSERT IGNORE INTO user_roles (username, role) VALUES (?, ?)",
                            (data.get('username'), r))
 
         # ---- 7.1.2 完整性 + 7.1.4 不可抵赖性：写入摘要与签名 ----
@@ -135,7 +135,7 @@ def update_user(username):
             cursor.execute("UPDATE users SET role = ? WHERE username = ?", (primary_role, username))
             cursor.execute("DELETE FROM user_roles WHERE username = ?", (username,))
             for r in roles:
-                cursor.execute("INSERT OR IGNORE INTO user_roles (username, role) VALUES (?, ?)",
+                cursor.execute("INSERT IGNORE INTO user_roles (username, role) VALUES (?, ?)",
                                (username, r))
 
         if data.get('password'):
@@ -493,13 +493,13 @@ def _ensure_preferences_table(cursor):
     """确保用户偏好表存在。"""
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_preferences (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            language TEXT DEFAULT 'zh-CN',
-            timezone TEXT DEFAULT 'Asia/Shanghai',
-            theme TEXT DEFAULT 'light',
-            font_size TEXT DEFAULT 'medium',
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(191) UNIQUE NOT NULL,
+            language VARCHAR(20) DEFAULT 'zh-CN',
+            timezone VARCHAR(64) DEFAULT 'Asia/Shanghai',
+            theme VARCHAR(20) DEFAULT 'light',
+            font_size VARCHAR(20) DEFAULT 'medium',
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -569,11 +569,11 @@ def update_preferences():
         cursor.execute("""
             INSERT INTO user_preferences (username, language, timezone, theme, font_size, updated_at)
             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(username) DO UPDATE SET
-                language=COALESCE(excluded.language, language),
-                timezone=COALESCE(excluded.timezone, timezone),
-                theme=COALESCE(excluded.theme, theme),
-                font_size=COALESCE(excluded.font_size, font_size),
+            ON DUPLICATE KEY UPDATE
+                language=COALESCE(VALUES(language), language),
+                timezone=COALESCE(VALUES(timezone), timezone),
+                theme=COALESCE(VALUES(theme), theme),
+                font_size=COALESCE(VALUES(font_size), font_size),
                 updated_at=CURRENT_TIMESTAMP
         """, (
             username,

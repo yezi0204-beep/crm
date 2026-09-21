@@ -113,10 +113,6 @@
             <span class="menu-icon">⚔️</span>
             <span>竞争对手分析</span>
           </el-menu-item>
-          <el-menu-item index="/capabilities" v-if="has('system.admin') || has('intel.keywords')">
-            <span class="menu-icon">💪</span>
-            <span>能力模型</span>
-          </el-menu-item>
           <el-menu-item index="/task-monitor" v-if="has('system.admin')">
             <span class="menu-icon">🧵</span>
             <span>任务监控</span>
@@ -125,13 +121,9 @@
             <span class="menu-icon">📰</span>
             <span>AI日报</span>
           </el-menu-item>
-          <el-menu-item index="/keywords" v-if="has('intel.keywords')">
-            <span class="menu-icon">🏷️</span>
-            <span>关键词管理</span>
-          </el-menu-item>
           <el-menu-item index="/business-tags" v-if="has('intel.keywords')">
             <span class="menu-icon">🧬</span>
-            <span>业务标签</span>
+            <span>标签与能力</span>
           </el-menu-item>
           <el-menu-item index="/enterprises">
             <span class="menu-icon">🗄️</span>
@@ -156,6 +148,10 @@
           <el-menu-item index="/projects">
             <span class="menu-icon">📋</span>
             <span>{{ t('menuItem.projects') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/project-cost" v-if="has('workhour.view') || has('workhour.manage') || has('data.view_all') || has('cost.view') || has('cost.actual.manage')">
+            <span class="menu-icon">💰</span>
+            <span>项目成本核算</span>
           </el-menu-item>
         </div>
 
@@ -392,6 +388,7 @@ const pageTitleMap = computed(() => ({
   '/leads': t('menuItem.leads'),
   '/workhours': t('menuItem.workhours'),
   '/work-cost': '工时分摊',
+  '/project-cost': '项目成本核算',
   '/projects': t('menuItem.projects'),
   '/users': t('menuItem.users'),
   '/alerts': t('menuItem.alerts'),

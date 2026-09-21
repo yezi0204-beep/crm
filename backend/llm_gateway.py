@@ -49,9 +49,8 @@ def _log_ai_operation(operation_type, data_source, model_name, token_usage,
                       operator=None):
     """记录 AI 操作日志（独立连接，毫秒级提交）。"""
     try:
-        from extensions import DB_PATH
-        import sqlite3
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        from extensions import open_db
+        conn = open_db()
         conn.execute("""
             INSERT INTO ai_operation_logs (
                 operator_id, operator_name, operation_type, data_source,

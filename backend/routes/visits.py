@@ -142,7 +142,7 @@ def create_visit():
         if enterprise_id:
             try:
                 cursor.execute(
-                    "INSERT OR IGNORE INTO enterprise_visits (enterprise_id, visit_id) VALUES (?, ?)",
+                    "INSERT IGNORE INTO enterprise_visits (enterprise_id, visit_id) VALUES (?, ?)",
                     (enterprise_id, visit_id)
                 )
                 db.commit()
@@ -217,7 +217,7 @@ def update_visit(visit_id):
             if enterprise_id:
                 try:
                     cursor.execute(
-                        "INSERT OR IGNORE INTO enterprise_visits (enterprise_id, visit_id) VALUES (?, ?)",
+                        "INSERT IGNORE INTO enterprise_visits (enterprise_id, visit_id) VALUES (?, ?)",
                         (enterprise_id, visit_id)
                     )
                 except Exception:

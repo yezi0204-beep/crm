@@ -14,12 +14,11 @@ import io
 import json
 import os
 import re
-import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from flask import Blueprint, request, jsonify, send_file
-from extensions import get_db, token_required, record_operation_log, user_can, UPLOAD_DIR, DB_PATH
+from extensions import get_db, token_required, record_operation_log, user_can, UPLOAD_DIR, open_db
 from llm_gateway import gateway_chat
 
 quarterly_assessment_bp = Blueprint('quarterly_assessment', __name__)
@@ -57,11 +56,11 @@ def _ensure_tables():
     db = get_db()
     db.executescript("""
         CREATE TABLE IF NOT EXISTS quarterly_assessments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(191) NOT NULL,
             year INTEGER NOT NULL,
             quarter INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'draft',
+            status VARCHAR(20) NOT NULL DEFAULT 'draft',
             self_total REAL DEFAULT 0,
             final_total REAL,
             grade TEXT,
@@ -70,25 +69,29 @@ def _ensure_tables():
             review_comment TEXT,
             reviewed_by TEXT,
             reviewed_at TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_qa_user_period
-            ON quarterly_assessments(username, year, quarter);
         CREATE TABLE IF NOT EXISTS quarterly_assessment_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
             assessment_id INTEGER NOT NULL,
             dimension INTEGER NOT NULL,
-            task_name TEXT DEFAULT '',
+            task_name VARCHAR(255) DEFAULT '',
             difficulty REAL DEFAULT 1.0,
-            target TEXT DEFAULT '',
+            target VARCHAR(255) DEFAULT '',
             self_score REAL DEFAULT 0,
-            self_note TEXT DEFAULT '',
-            evidence TEXT DEFAULT '',
+            self_note VARCHAR(255) DEFAULT '',
+            evidence VARCHAR(255) DEFAULT '',
             final_score REAL,
             sort_order INTEGER DEFAULT 0
         );
     """)
+    # MySQL 不支持 CREATE INDEX IF NOT EXISTS；索引已存在时忽略报错即可
+    try:
+        db.execute(
+            "CREATE UNIQUE INDEX idx_qa_user_period ON quarterly_assessments(username, year, quarter)")
+    except Exception:
+        pass
     # 导入制扩展字段
     for col, decl in [
         ('suggestion_total', 'REAL'),
@@ -104,14 +107,28 @@ def _ensure_tables():
             pass
     db.execute("""
         CREATE TABLE IF NOT EXISTS dept_annual_targets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
             year INTEGER NOT NULL,
-            name TEXT NOT NULL,
+            name VARCHAR(255) NOT NULL,
             target_value REAL,
             actual_value REAL,
             sort_order INTEGER DEFAULT 0,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(year, name)
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS quarterly_director_comments (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(191) NOT NULL,
+            year INTEGER NOT NULL,
+            quarter INTEGER NOT NULL,
+            comment TEXT,
+            created_by VARCHAR(191),
+            updated_by VARCHAR(191),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(username, year, quarter)
         )
     """)
     db.commit()
@@ -266,8 +283,8 @@ def _collect_system_data(cur, members, year, quarter):
             cur.execute("""
                 SELECT COALESCE(SUM(p.amount),0) amt
                 FROM payment_records p JOIN contracts c ON p.contract_id=c.id
-                WHERE c.owner_id=? AND substr(p.payment_date,1,7) <= ?
-            """, (uname, f'{year:04d}-{q_end_month:02d}'))
+                WHERE c.owner_id=? AND substr(p.payment_date,1,7) BETWEEN ? AND ?
+            """, (uname, f'{year:04d}-01', f'{year:04d}-{q_end_month:02d}'))
             cum = float(cur.fetchone()['amt'] or 0)
             rate = cum / tgt * 100 if tgt else 0
             s += (f'；{year}年累计回款目标（截至{q_end_month}月）{tgt/10000:.2f} 万元，'
@@ -315,14 +332,14 @@ def _collect_system_data(cur, members, year, quarter):
         if stage_list:
             s += f'；本季度有跟进的商机阶段分布：{"、".join(stage_list)}'
         out[uname] = s
-        # 个人回款完成率（结构化，供服务端校准）
+        # 个人回款完成率（结构化，供服务端校准；仅统计当年回款，历史年度回款不计入）
         if tr and tr['target_amount']:
             tgt = float(tr['target_amount'])
             cur.execute("""
                 SELECT COALESCE(SUM(p.amount),0) amt
                 FROM payment_records p JOIN contracts c ON p.contract_id=c.id
-                WHERE c.owner_id=? AND substr(p.payment_date,1,7) <= ?
-            """, (uname, f'{year:04d}-{q_end_month:02d}'))
+                WHERE c.owner_id=? AND substr(p.payment_date,1,7) BETWEEN ? AND ?
+            """, (uname, f'{year:04d}-01', f'{year:04d}-{q_end_month:02d}'))
             cum = float(cur.fetchone()['amt'] or 0)
             rates[uname] = round(cum / tgt * 100, 1) if tgt else None
         else:
@@ -353,6 +370,14 @@ def _dept_min_rate(rows):
     rates = [float(r['actual_value']) / float(r['target_value']) * 100
              for r in rows if r.get('target_value') and r.get('actual_value') is not None]
     return min(rates) if rates else None
+
+
+def _load_director_comments(cur, year, quarter):
+    """读取某季度全员部门主任评价，返回 {username: comment}。"""
+    cur.execute("SELECT username, comment FROM quarterly_director_comments WHERE year=? AND quarter=?",
+                (year, quarter))
+    return {r['username']: (r['comment'] or '').strip()
+            for r in cur.fetchall() if (r['comment'] or '').strip()}
 
 
 # ==================== 接口 ====================
@@ -394,8 +419,10 @@ def import_assessments():
     sys_data, personal_rates = _collect_system_data(cur, members, year, quarter)
     dept_text, dept_rows = _load_dept_targets(cur, year)
     dept_min_rate = _dept_min_rate(dept_rows)
+    director_comments = _load_director_comments(cur, year, quarter)
 
-    suggestion = _run_llm_analysis(payload['username'], text, year, quarter, members, sys_data, dept_text)
+    suggestion = _run_llm_analysis(payload['username'], text, year, quarter, members, sys_data, dept_text,
+                                   director_comments=director_comments)
     if not suggestion or not isinstance(suggestion.get('members'), list) or not suggestion['members']:
         return jsonify({'code': 422, 'message':
                         '文档解析成功，但大模型分析失败（服务不可用或返回异常）。请检查LLM配置后重试。',
@@ -412,9 +439,16 @@ def import_assessments():
     }})
 
 
-def _run_llm_analysis(operator, text, year, quarter, members, sys_data, dept_text):
+def _run_llm_analysis(operator, text, year, quarter, members, sys_data, dept_text,
+                      director_comments=None):
     """构建 prompt 并调用 LLM，返回解析后的建议 dict 或 None。"""
+    director_comments = director_comments or {}
     sys_summary = '\n'.join(f"- {m['name']}({m['role']})：{sys_data[m['username']]}" for m in members)
+    comment_lines = []
+    for m in members:
+        c = director_comments.get(m['username'], '').strip()
+        comment_lines.append(f"- {m['name']}：{c}" if c else f"- {m['name']}：（主任未填写评价）")
+    director_text = '\n'.join(comment_lines)
     rule_text = (
         '考核维度及分值：重点任务完成情况50分、日常工作完成情况30分、责任担当与协同贡献10分、工作量与任务饱和度10分。\n'
         '等级：96-100为S(系数1.0~1.5]、86-95为A(系数1.0)、76-85为B(系数0.8~1.0)、60-75为C(系数0.6~0.8]、0-59为D(系数0~0.6]。\n'
@@ -446,9 +480,21 @@ def _run_llm_analysis(operator, text, year, quarter, members, sys_data, dept_tex
         '3. 部门完成率60%~100%时：整体从严评分，不得评S级，A级仅限个人指标达成且业绩贡献特别显著者，系数上限0.9。\n'
         '4. 部门完成率≥100%时：个人对应时间节点市场指标达成者考核系数方可≥1；未达成者系数应<1。\n'
         '5. 个人回款指标完成率<60%者：总分原则上不得进入S/A档，建议系数≤0.8。\n'
-        '6. 若下方未列出部门指标（未配置），以个人回款指标完成率为主要校准依据（完成率<100%者系数应<1）。'
+        '6. 等级与系数必须一致：A级系数固定为1.0、S级系数>1.0；凡系数<1.0者，等级最高只能为B（总分≤85），'
+        '严禁出现A级/S级却给0.9及以下系数的矛盾结果。\n'
+        '7. 若下方未列出部门指标（未配置），以个人回款指标完成率为主要校准依据（完成率<100%者系数应<1、等级不得高于B）。'
     )
-    prompt = f"""你是应用中心绩效考核小组的助理分析师。以下是员工填写的{year}年第{quarter}季度（1-3月/4-6月/7-9月）电子版个人季度绩效考核表内容，以及CRM系统中各成员的业绩数据和部门年度指标完成情况。
+    director_rule_text = (
+        '【部门主任工作评价的使用原则（必须结合，不得忽略）】\n'
+        '1. 部门主任评价来自直接上级对成员本季度实际表现的观察，是重要评分依据：主任明确肯定的重点贡献、'
+        '急难险重担当、跨部门协同、工作态度与饱和度，应在对应维度得分和评分理由中体现；'
+        '主任指出的不足、失误、推诿、工作量不饱满等问题，应在对应维度如实扣分并在理由中回应。\n'
+        '2. 须将主任评价与系统数据、个人自评交叉验证：三者一致时可加大评分把握；主任评价与系统数据冲突时，'
+        '以系统中的合同/验收/回款等客观数据为准（例如主任评价很高但个人市场指标未完成，系数仍不得≥1.0），'
+        '但可在非业绩维度（责任担当、工作量饱和度）酌情体现主任的肯定。\n'
+        '3. 主任评价不能替代市场指标完成情况：个人指标未完成者，即便主任高度肯定，系数也必须<1.0、等级不得高于B。'
+    )
+    prompt = f"""你是应用中心绩效考核小组的助理分析师。以下是员工填写的{year}年第{quarter}季度（1-3月/4-6月/7-9月）电子版个人季度绩效考核表内容、部门主任对各成员的工作评价，以及CRM系统中各成员的业绩数据和部门年度指标完成情况。
 
 【考核规则】
 {rule_text}
@@ -457,23 +503,29 @@ def _run_llm_analysis(operator, text, year, quarter, members, sys_data, dept_tex
 
 {calibration_text}
 
+{director_rule_text}
+
 【部门年度指标完成度】
 {dept_text}
 
 【系统数据】（含本季度新签合同/验收/回款、拜访排班次数与客户数、商机跟进记录数与阶段分布；供交叉校验，文档自评与系统数据明显不符时应提示）
 {sys_summary}
 
+【部门主任工作评价】
+{director_text}
+
 【考核表内容】
 {text[:20000]}
 
 请为考核表中出现的每一位成员生成初步考核建议，严格按以下JSON格式输出，不要输出其他内容：
-{{"members":[{{"name":"成员姓名","items":[{{"dimension":1,"task_name":"任务名","target":"目标/交付物","difficulty":1.0,"self_score":48,"self_note":"完成情况","evidence":"佐证"}}],"dim_scores":{{"1":48,"2":28,"3":9,"4":9}},"total":94,"grade":"A","coefficient":1.0,"reason":"评分理由（必须结合系统数据中的合同/回款/验收、拜访排班、商机跟进进展，以及部门指标完成度说明评分依据，200字内）"}}]}}
+{{"members":[{{"name":"成员姓名","items":[{{"dimension":1,"task_name":"任务名","target":"目标/交付物","difficulty":1.0,"self_score":48,"self_note":"完成情况","evidence":"佐证"}}],"dim_scores":{{"1":48,"2":28,"3":9,"4":9}},"total":94,"grade":"A","coefficient":1.0,"reason":"评分理由（必须结合系统数据中的合同/回款/验收、拜访排班、商机跟进进展、部门指标完成度以及部门主任评价说明评分依据，200字内）"}}]}}
 要求：
 1. items 中的 dimension 取值 1/2/3/4 对应上述四个维度；difficulty 为难度系数(0.5~3)；self_score 为该项建议得分。
 2. dim_scores 为四个维度的建议得分合计（不得超过维度上限：1→50、2→30、3→10、4→10）。
-3. total=四维度合计，grade 与 total 对应，coefficient 符合该等级区间与约束，并符合上方校准规则。
+3. total=四维度合计，grade 与 total 对应，coefficient 符合该等级区间与约束，并符合上方校准规则；系数<1.0时等级不得高于B。
 4. 仅分析文档中实际出现的成员；成员姓名须能对应系统数据中的姓名。
-5. 评分必须结合系统数据中的拜访排班和商机跟进记录，不得以"完成了自填任务"作为高分依据；同岗位成员间须横向比较业绩产出。"""
+5. 评分必须结合系统数据中的拜访排班和商机跟进记录，不得以"完成了自填任务"作为高分依据；同岗位成员间须横向比较业绩产出。
+6. 评分必须结合部门主任工作评价：主任指出的贡献与问题均须在对应维度得分及理由中回应；但主任好评不得凌驾于市场指标硬约束之上。"""
 
     resp_text = gateway_chat(
         [{'role': 'user', 'content': prompt}],
@@ -530,6 +582,11 @@ def _calibrate(total, grade, coeff, dept_min_rate, personal_rate):
         if coeff is None or coeff > 0.8:
             coeff = 0.8
             notes.append('系数强制≤0.8')
+    # 等级与系数一致性收口：系数<1.0 时等级最高只能为B（总分≤85）。
+    # A级系数固定1.0、S级系数>1.0，不允许出现"未达指标却评A/S、系数却<1"的矛盾结果。
+    if coeff is not None and coeff < 1.0 and total > 85:
+        total = 85.0
+        notes.append('考核系数<1.0（个人/部门指标未全部达成），等级不得高于B，总分强制降至85分')
     new_grade = grade_of(total)
     if grade and new_grade != grade:
         notes.append(f'等级由 {grade} 校正为 {new_grade}')
@@ -537,8 +594,12 @@ def _calibrate(total, grade, coeff, dept_min_rate, personal_rate):
 
 
 def _apply_suggestion(conn, suggestion, name2user, year, quarter, rel_path, text, sys_data,
-                      dept_min_rate=None, personal_rates=None):
-    """把 LLM 建议落库（同季度覆盖），返回 (results, skipped)。"""
+                      dept_min_rate=None, personal_rates=None, limit_username=None):
+    """把 LLM 建议落库（同季度覆盖），返回 (results, skipped)。
+
+    limit_username: 重跑场景下每份考核表有明确归属人，仅更新其本人建议，
+    避免 LLM 对单份表输出全员评价时跨文件互相覆盖。
+    """
     cur = conn.cursor()
     results, skipped = [], []
     for mem in suggestion.get('members') or []:
@@ -551,6 +612,8 @@ def _apply_suggestion(conn, suggestion, name2user, year, quarter, rel_path, text
                     break
         if not user:
             skipped.append(name)
+            continue
+        if limit_username and user['username'] != limit_username:
             continue
         items = []
         for i, it in enumerate(mem.get('items') or []):
@@ -679,6 +742,75 @@ def save_dept_targets():
     return jsonify({'code': 200, 'message': '已保存部门年度指标', 'data': None})
 
 
+@quarterly_assessment_bp.route('/director-comments', methods=['GET'])
+@token_required
+def get_director_comments():
+    """某季度全体成员的部门主任工作评价（供录入回显与LLM综合评估）。"""
+    payload = request.current_user
+    if not _can_review(payload['username']):
+        return jsonify({'code': 403, 'message': '权限不足', 'data': None})
+    year = int(request.args.get('year') or datetime.now().year)
+    quarter = int(request.args.get('quarter') or 0)
+    if quarter not in VALID_QUARTERS:
+        return jsonify({'code': 400, 'message': '无效季度', 'data': None})
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT username, name, role FROM users WHERE department=? AND status='在职' AND role!='主任' "
+                "ORDER BY role DESC, username", (APP_DEPT,))
+    members = [dict(r) for r in cur.fetchall()]
+    comments = _load_director_comments(cur, year, quarter)
+    rows = [{'username': m['username'], 'name': m['name'], 'role': m['role'],
+             'comment': comments.get(m['username'], '')} for m in members]
+    return jsonify({'code': 200, 'message': 'success', 'data': {'rows': rows}})
+
+
+@quarterly_assessment_bp.route('/director-comments', methods=['PUT'])
+@token_required
+def save_director_comments():
+    """批量保存某季度部门主任工作评价。body: {year, quarter, rows:[{username, comment}]}"""
+    payload = request.current_user
+    if not _can_review(payload['username']):
+        return jsonify({'code': 403, 'message': '权限不足', 'data': None})
+    body = request.get_json(silent=True) or {}
+    year = int(body.get('year') or datetime.now().year)
+    quarter = int(body.get('quarter') or 0)
+    if quarter not in VALID_QUARTERS:
+        return jsonify({'code': 400, 'message': '考核周期仅限前三季度', 'data': None})
+    rows = body.get('rows') or []
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT username FROM users WHERE department=? AND status='在职' AND role!='主任'", (APP_DEPT,))
+    valid_users = {r['username'] for r in cur.fetchall()}
+    saved = 0
+    for r in rows:
+        uname = (r.get('username') or '').strip()
+        if uname not in valid_users:
+            continue
+        comment = (r.get('comment') or '').strip()
+        if not comment:
+            # 清空评价：删除该行，保持表中只留存有效评价
+            cur.execute("DELETE FROM quarterly_director_comments WHERE username=? AND year=? AND quarter=?",
+                        (uname, year, quarter))
+            continue
+        cur.execute("SELECT id FROM quarterly_director_comments WHERE username=? AND year=? AND quarter=?",
+                    (uname, year, quarter))
+        exist = cur.fetchone()
+        if exist:
+            cur.execute("""UPDATE quarterly_director_comments
+                           SET comment=?, updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+                        (comment, payload['username'], exist['id']))
+        else:
+            cur.execute("""INSERT INTO quarterly_director_comments
+                           (username, year, quarter, comment, created_by, updated_by)
+                           VALUES (?,?,?,?,?,?)""",
+                        (uname, year, quarter, comment, payload['username'], payload['username']))
+        saved += 1
+    db.commit()
+    record_operation_log(payload['username'], '配置', '季度考核',
+                         f'保存{year}年第{quarter}季度部门主任工作评价 {saved} 人')
+    return jsonify({'code': 200, 'message': f'已保存{saved}人的部门主任评价', 'data': None})
+
+
 @quarterly_assessment_bp.route('/reanalyze', methods=['POST'])
 @token_required
 def reanalyze():
@@ -705,6 +837,7 @@ def reanalyze():
     sys_data, personal_rates = _collect_system_data(cur, members, year, quarter)
     dept_text, dept_rows = _load_dept_targets(cur, year)
     dept_min_rate = _dept_min_rate(dept_rows)
+    director_comments = _load_director_comments(cur, year, quarter)
     name2user = {m['name']: m for m in members}
 
     def work(rec):
@@ -719,18 +852,17 @@ def reanalyze():
             return {'assessment_id': rec['id'], 'ok': False, 'error': f'文件解析失败：{fname}'}
         try:
             # 线程内独立连接（WAL 允许并发写，各自提交）
-            conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=30000")
-            suggestion = _run_llm_analysis(payload['username'], text, year, quarter, members, sys_data, dept_text)
+            conn = open_db()
+            suggestion = _run_llm_analysis(payload['username'], text, year, quarter, members, sys_data, dept_text,
+                                           director_comments=director_comments)
             if not suggestion or not isinstance(suggestion.get('members'), list) or not suggestion['members']:
                 conn.close()
                 return {'assessment_id': rec['id'], 'ok': False, 'error': f'LLM分析失败：{fname}'}
             results, skipped = _apply_suggestion(conn, suggestion, name2user, year, quarter,
                                                  rec['import_file'], text, sys_data,
                                                  dept_min_rate=dept_min_rate,
-                                                 personal_rates=personal_rates)
+                                                 personal_rates=personal_rates,
+                                                 limit_username=rec['username'])
             conn.close()
             return {'assessment_id': rec['id'], 'ok': True, 'results': results, 'skipped': skipped}
         except Exception as e:
@@ -788,13 +920,16 @@ def overview():
         SELECT u.username, u.name, u.role,
                a.id AS assessment_id, a.status AS a_status, a.self_total,
                a.final_total, a.grade, a.coefficient, a.review_comment,
-               a.suggestion_total, a.suggestion_grade, a.suggestion_coefficient, a.import_file
+               a.suggestion_total, a.suggestion_grade, a.suggestion_coefficient, a.import_file,
+               d.comment AS director_comment
         FROM users u
         LEFT JOIN quarterly_assessments a
           ON a.username = u.username AND a.year = ? AND a.quarter = ?
+        LEFT JOIN quarterly_director_comments d
+          ON d.username = u.username AND d.year = ? AND d.quarter = ?
         WHERE u.department = ? AND u.status = '在职' AND u.role != '主任'
         ORDER BY u.role DESC, u.username
-    """, (year, quarter, APP_DEPT))
+    """, (year, quarter, year, quarter, APP_DEPT))
     rows = [dict(r) for r in cur.fetchall()]
     return jsonify({'code': 200, 'message': 'success', 'data': {'rows': rows}})
 
@@ -811,7 +946,11 @@ def detail(username):
         return jsonify({'code': 400, 'message': '无效季度', 'data': None})
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT * FROM quarterly_assessments WHERE username=? AND year=? AND quarter=?",
+    cur.execute("""SELECT a.*, d.comment AS director_comment
+                   FROM quarterly_assessments a
+                   LEFT JOIN quarterly_director_comments d
+                     ON d.username = a.username AND d.year = a.year AND d.quarter = a.quarter
+                   WHERE a.username=? AND a.year=? AND a.quarter=?""",
                 (username, year, quarter))
     a = cur.fetchone()
     if not a:
@@ -903,25 +1042,29 @@ def export_csv():
     cur.execute("""
         SELECT u.name, u.role, u.username,
                a.status, a.self_total, a.suggestion_total, a.suggestion_grade, a.suggestion_coefficient,
-               a.final_total, a.grade, a.coefficient, a.review_comment
+               a.final_total, a.grade, a.coefficient, a.review_comment,
+               d.comment AS director_comment
         FROM users u
         LEFT JOIN quarterly_assessments a
           ON a.username = u.username AND a.year = ? AND a.quarter = ?
+        LEFT JOIN quarterly_director_comments d
+          ON d.username = u.username AND d.year = ? AND d.quarter = ?
         WHERE u.department = ? AND u.status = '在职' AND u.role != '主任'
         ORDER BY u.role DESC, u.username
-    """, (year, quarter, APP_DEPT))
+    """, (year, quarter, year, quarter, APP_DEPT))
     rows = cur.fetchall()
 
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(['姓名', '角色', '账号', '状态', '建议总分', '建议等级', '建议系数',
-                     '核定总分', '等级', '考核系数', '核定意见'])
+                     '核定总分', '等级', '考核系数', '部门主任评价', '核定意见'])
     for r in rows:
         st = {'draft': '待核定', 'reviewed': '已核定'}.get(r['status'], '未导入')
         fmt = lambda v, suf='': '' if v is None else f'{v:g}{suf}'
         writer.writerow([r['name'], r['role'], r['username'], st,
                          fmt(r['suggestion_total']), r['suggestion_grade'] or '', fmt(r['suggestion_coefficient']),
                          fmt(r['final_total']), r['grade'] or '', fmt(r['coefficient']),
+                         (r['director_comment'] or '').replace('\n', ' '),
                          (r['review_comment'] or '').replace('\n', ' ')])
     out = io.BytesIO()
     out.write('\ufeff'.encode('utf-8'))

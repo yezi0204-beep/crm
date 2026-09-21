@@ -18,25 +18,25 @@ def _ensure_erp_tables(cursor):
     """确保 ERP 集成相关表存在。"""
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS erp_connections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
             system_type TEXT,
             base_url TEXT,
             api_key TEXT,
-            auth_type TEXT DEFAULT 'api_key',
-            status TEXT DEFAULT 'inactive',
+            auth_type VARCHAR(50) DEFAULT 'api_key',
+            status VARCHAR(20) DEFAULT 'inactive',
             last_sync_at TEXT,
             last_sync_status TEXT,
             last_sync_count INTEGER DEFAULT 0,
             config TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             remark TEXT
         )
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS erp_sync_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
             connection_id INTEGER NOT NULL,
             direction TEXT,
             module TEXT,

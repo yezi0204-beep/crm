@@ -74,6 +74,11 @@ const routes = [
         component: () => import('../views/WorkCost.vue')
       },
       {
+        path: 'project-cost',
+        name: 'ProjectCost',
+        component: () => import('../views/ProjectCost.vue')
+      },
+      {
         path: 'quarterly-assessment',
         name: 'QuarterlyAssessment',
         component: () => import('../views/QuarterlyAssessment.vue')
@@ -159,8 +164,7 @@ const routes = [
       },
       {
         path: 'keywords',
-        name: 'Keywords',
-        component: () => import('../views/Keywords.vue')
+        redirect: { path: '/business-tags' }
       },
       {
         path: 'business-tags',
@@ -202,8 +206,7 @@ const routes = [
       },
       {
         path: 'capabilities',
-        name: 'Capabilities',
-        component: () => import('../views/Capabilities.vue')
+        redirect: { path: '/business-tags' }
       },
       {
         path: 'task-monitor',

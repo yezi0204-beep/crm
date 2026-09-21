@@ -1,9 +1,21 @@
-"""关键词管理 API：三级分类（民品/军品 → 业务领域 → 具体关键词）。
+# -*- coding: utf-8 -*-
+"""关键词管理 API（兼容层）。
 
-支持关键词、同义词、关联词、排除词和业务标签，后台可配置。
+三模块合并后关键词数据已迁入 business_tags 表。
+本模块保留旧 API 路由兼容前端已有调用，内部代理到 business_tags。
+
+GET    /api/keywords            列表（从 business_tags 读取，返回兼容格式）
+POST   /api/keywords            新增（代理到 business_tags）
+PUT    /api/keywords/<id>       编辑（代理到 business_tags）
+DELETE /api/keywords/<id>       删除（代理到 business_tags）
+GET    /api/keywords/groups     分组树（从 business_tags 树构建）
+POST   /api/keywords/groups     新建分组（代理到 business_tags）
+GET    /api/keywords/export     导出（从 business_tags 读取）
+POST   /api/keywords/batch      批量导入（代理到 business_tags）
 """
 from flask import Blueprint, request, jsonify
 from extensions import get_db, token_required, admin_required, record_operation_log
+from . import keywords_bp
 import json
 
 keywords_bp = Blueprint('keywords', __name__)
@@ -13,15 +25,36 @@ def register_routes(app):
     app.register_blueprint(keywords_bp, url_prefix='/api/keywords')
 
 
+def _parse(val):
+    if not val:
+        return []
+    try:
+        if isinstance(val, str) and val.startswith('['):
+            return json.loads(val)
+        if isinstance(val, str):
+            return [x.strip() for x in val.split(',') if x.strip()]
+        return list(val) if isinstance(val, (list, tuple)) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _parse_str_field(val):
+    """兼容旧 keywords 表的逗号分隔字符串字段。"""
+    items = _parse(val)
+    return ','.join(items) if items else ''
+
+
+# ==================== 分组（树） ====================
+
 @keywords_bp.route('/groups', methods=['GET'])
 @token_required
 def list_groups():
-    """获取关键词分组树（三级分类）。"""
+    """获取分组树（从 business_tags 树构建兼容格式）。"""
     db = get_db()
-    rows = db.execute("""
-        SELECT id, name, parent_id, level, sort_order
-        FROM keyword_groups ORDER BY level, sort_order, id
-    """).fetchall()
+    rows = db.execute(
+        "SELECT id, name, parent_id, level, sort_order, is_active "
+        "FROM business_tags ORDER BY level, sort_order, id"
+    ).fetchall()
     tree = _build_tree(rows)
     return jsonify({'code': 200, 'data': tree})
 
@@ -45,7 +78,7 @@ def _build_tree(rows):
 @keywords_bp.route('/groups', methods=['POST'])
 @admin_required
 def create_group():
-    """新建关键词分组。"""
+    """新建分组（代理到 business_tags）。"""
     data = request.get_json(force=True)
     name = (data.get('name') or '').strip()
     if not name:
@@ -55,8 +88,9 @@ def create_group():
     sort_order = data.get('sort_order', 0)
     db = get_db()
     cursor = db.execute(
-        "INSERT INTO keyword_groups (name, parent_id, level, sort_order) VALUES (?, ?, ?, ?)",
-        (name, parent_id, level, sort_order)
+        "INSERT INTO business_tags (parent_id, name, level, synonyms, related_words, exclude_words, sort_order, is_active) "
+        "VALUES (?, ?, ?, '[]', '[]', '[]', ?, 1)",
+        (parent_id, name, level, sort_order)
     )
     db.commit()
     gid = cursor.lastrowid
@@ -70,8 +104,15 @@ def update_group(gid):
     """编辑关键词分组。"""
     data = request.get_json(force=True)
     name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'code': 400, 'message': '分组名称不能为空'})
+    sort_order = data.get('sort_order', 0)
+    parent_id = data.get('parent_id')
     db = get_db()
-    db.execute("UPDATE keyword_groups SET name=? WHERE id=?", (name, gid))
+    db.execute(
+        "UPDATE business_tags SET name=?, sort_order=?, parent_id=? WHERE id=?",
+        (name, sort_order, parent_id, gid)
+    )
     db.commit()
     record_operation_log(request.current_user, 'update', 'keyword_groups', f'编辑分组:{gid}')
     return jsonify({'code': 200, 'message': '已更新'})
@@ -80,92 +121,90 @@ def update_group(gid):
 @keywords_bp.route('/groups/<int:gid>', methods=['DELETE'])
 @admin_required
 def delete_group(gid):
-    """删除关键词分组（级联删除子分组和关键词）。"""
+    """删除分组（级联删除子节点）。"""
     db = get_db()
-    # 递归找所有子分组
-    all_ids = {gid}
-    changed = True
-    while changed:
-        changed = False
-        rows = db.execute("SELECT id FROM keyword_groups WHERE parent_id IN ({})".format(
-            ','.join('?' * len(all_ids))
-        ), list(all_ids)).fetchall()
-        for r in rows:
-            if r['id'] not in all_ids:
-                all_ids.add(r['id'])
-                changed = True
+    all_ids = [gid]
+    queue = [gid]
+    while queue:
+        current = queue.pop(0)
+        children = db.execute("SELECT id FROM business_tags WHERE parent_id=?", (current,)).fetchall()
+        for c in children:
+            all_ids.append(c['id'])
+            queue.append(c['id'])
     placeholders = ','.join('?' * len(all_ids))
-    db.execute("DELETE FROM keywords WHERE group_id IN ({})".format(placeholders), list(all_ids))
-    db.execute("DELETE FROM keyword_groups WHERE id IN ({})".format(placeholders), list(all_ids))
+    db.execute(f"DELETE FROM business_tags WHERE id IN ({placeholders})", all_ids)
     db.commit()
     record_operation_log(request.current_user, 'delete', 'keyword_groups', f'删除分组:{gid}')
     return jsonify({'code': 200, 'message': '已删除'})
 
 
+# ==================== 关键词 ====================
+
 @keywords_bp.route('', methods=['GET'])
 @token_required
 def list_keywords():
-    """关键词列表，支持按分组/搜索过滤。"""
+    """关键词列表（从 business_tags 读取，返回兼容格式）。"""
     db = get_db()
-    group_id = request.args.get('group_id', type=int)
     search = request.args.get('search', '').strip()
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     offset = (page - 1) * per_page
 
     sql = """
-        SELECT k.id, k.group_id, k.keyword, k.synonyms, k.related,
-               k.exclude_words, k.business_tag, k.enabled,
-               g.name as group_name, p.name as parent_name
-        FROM keywords k
-        LEFT JOIN keyword_groups g ON k.group_id = g.id
-        LEFT JOIN keyword_groups p ON g.parent_id = p.id
-        WHERE 1=1
+        SELECT t.id, t.parent_id as group_id, t.name as keyword, t.synonyms, t.related_words as related,
+               t.exclude_words, '' as business_tag, t.is_active as enabled,
+               p.name as group_name
+        FROM business_tags t
+        LEFT JOIN business_tags p ON t.parent_id = p.id
+        WHERE t.capability_level IS NULL
     """
     params = []
-    if group_id:
-        sql += " AND k.group_id = ?"
-        params.append(group_id)
     if search:
-        sql += " AND (k.keyword LIKE ? OR k.synonyms LIKE ? OR k.business_tag LIKE ?)"
-        params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
+        sql += " AND (t.name LIKE ? OR t.synonyms LIKE ?)"
+        params.extend([f'%{search}%', f'%{search}%'])
 
-    # 先取总数
-    count_sql = f"SELECT COUNT(*) as cnt FROM ({sql})"
+    count_sql = f"SELECT COUNT(*) as cnt FROM ({sql}) AS sub"
     total = db.execute(count_sql, params).fetchone()['cnt']
 
-    sql += " ORDER BY k.id DESC LIMIT ? OFFSET ?"
+    sql += " ORDER BY t.id DESC LIMIT ? OFFSET ?"
     params.extend([per_page, offset])
     rows = db.execute(sql, params).fetchall()
+    data = []
+    for r in rows:
+        d = dict(r)
+        d['synonyms'] = _parse_str_field(r['synonyms'])
+        d['related'] = _parse_str_field(r['related'])
+        d['exclude_words'] = _parse_str_field(r['exclude_words'])
+        d['enabled'] = bool(r['enabled'])
+        data.append(d)
     return jsonify({
-        'code': 200,
-        'data': [dict(r) for r in rows],
-        'total': total,
-        'page': page,
-        'per_page': per_page
+        'code': 200, 'data': data, 'total': total,
+        'page': page, 'per_page': per_page
     })
 
 
 @keywords_bp.route('', methods=['POST'])
 @admin_required
 def create_keyword():
-    """新建关键词。"""
+    """新建关键词（代理到 business_tags 叶子节点）。"""
     data = request.get_json(force=True)
     kw = (data.get('keyword') or '').strip()
     if not kw:
         return jsonify({'code': 400, 'message': '关键词不能为空'})
     db = get_db()
-    cursor = db.execute("""
-        INSERT INTO keywords (group_id, keyword, synonyms, related, exclude_words, business_tag, enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        data.get('group_id'), kw,
-        data.get('synonyms', ''),
-        data.get('related', ''),
-        data.get('exclude_words', ''),
-        data.get('business_tag', ''),
-        1 if data.get('enabled', True) else 0
-    ))
+    group_id = data.get('group_id')
+    level = 1
+    if group_id:
+        parent = db.execute("SELECT level FROM business_tags WHERE id=?", (group_id,)).fetchone()
+        level = (parent['level'] + 1) if parent else 1
+    cursor = db.execute(
+        "INSERT INTO business_tags (parent_id, name, level, synonyms, related_words, exclude_words, sort_order, is_active) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0, 1)",
+        (group_id, kw, level,
+         json.dumps(_parse(data.get('synonyms', '')), ensure_ascii=False),
+         json.dumps(_parse(data.get('related', '')), ensure_ascii=False),
+         json.dumps(_parse(data.get('exclude_words', '')), ensure_ascii=False))
+    )
     db.commit()
     record_operation_log(request.current_user, 'create', 'keywords', f'新建关键词:{kw}')
     return jsonify({'code': 200, 'data': {'id': cursor.lastrowid}})
@@ -181,14 +220,13 @@ def update_keyword(kid):
         return jsonify({'code': 400, 'message': '关键词不能为空'})
     db = get_db()
     db.execute("""
-        UPDATE keywords SET group_id=?, keyword=?, synonyms=?, related=?, exclude_words=?, business_tag=?, enabled=?
+        UPDATE business_tags SET name=?, parent_id=?, synonyms=?, related_words=?, exclude_words=?, is_active=?
         WHERE id=?
     """, (
-        data.get('group_id'), kw,
-        data.get('synonyms', ''),
-        data.get('related', ''),
-        data.get('exclude_words', ''),
-        data.get('business_tag', ''),
+        kw, data.get('group_id'),
+        json.dumps(_parse(data.get('synonyms', '')), ensure_ascii=False),
+        json.dumps(_parse(data.get('related', '')), ensure_ascii=False),
+        json.dumps(_parse(data.get('exclude_words', '')), ensure_ascii=False),
         1 if data.get('enabled', True) else 0,
         kid
     ))
@@ -202,7 +240,7 @@ def update_keyword(kid):
 def delete_keyword(kid):
     """删除关键词。"""
     db = get_db()
-    db.execute("DELETE FROM keywords WHERE id=?", (kid,))
+    db.execute("DELETE FROM business_tags WHERE id=?", (kid,))
     db.commit()
     record_operation_log(request.current_user, 'delete', 'keywords', f'删除关键词:{kid}')
     return jsonify({'code': 200, 'message': '已删除'})
@@ -211,7 +249,7 @@ def delete_keyword(kid):
 @keywords_bp.route('/batch', methods=['POST'])
 @admin_required
 def batch_import():
-    """批量导入关键词。格式: [{group_id, keyword, synonyms, related, exclude_words, business_tag}]"""
+    """批量导入关键词。"""
     data = request.get_json(force=True)
     items = data.get('items', [])
     if not items:
@@ -222,16 +260,19 @@ def batch_import():
         kw = (item.get('keyword') or '').strip()
         if not kw:
             continue
-        db.execute("""
-            INSERT INTO keywords (group_id, keyword, synonyms, related, exclude_words, business_tag, enabled)
-            VALUES (?, ?, ?, ?, ?, ?, 1)
-        """, (
-            item.get('group_id'), kw,
-            item.get('synonyms', ''),
-            item.get('related', ''),
-            item.get('exclude_words', ''),
-            item.get('business_tag', '')
-        ))
+        group_id = item.get('group_id')
+        level = 1
+        if group_id:
+            parent = db.execute("SELECT level FROM business_tags WHERE id=?", (group_id,)).fetchone()
+            level = (parent['level'] + 1) if parent else 1
+        db.execute(
+            "INSERT INTO business_tags (parent_id, name, level, synonyms, related_words, exclude_words, sort_order, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, 1)",
+            (group_id, kw, level,
+             json.dumps(_parse(item.get('synonyms', '')), ensure_ascii=False),
+             json.dumps(_parse(item.get('related', '')), ensure_ascii=False),
+             json.dumps(_parse(item.get('exclude_words', '')), ensure_ascii=False))
+        )
         count += 1
     db.commit()
     record_operation_log(request.current_user, 'import', 'keywords', f'批量导入{count}个关键词')
@@ -241,25 +282,24 @@ def batch_import():
 @keywords_bp.route('/export', methods=['GET'])
 @token_required
 def export_keywords():
-    """导出所有关键词（用于前端生成搜索查询）。"""
+    """导出所有关键词（从 business_tags 读取）。"""
     db = get_db()
     rows = db.execute("""
-        SELECT k.keyword, k.synonyms, k.related, k.exclude_words, k.business_tag,
-               g.name as group_name, p.name as category_name
-        FROM keywords k
-        LEFT JOIN keyword_groups g ON k.group_id = g.id
-        LEFT JOIN keyword_groups p ON g.parent_id = p.id
-        WHERE k.enabled = 1
+        SELECT t.name as keyword, t.synonyms, t.related_words as related, t.exclude_words,
+               p.name as group_name
+        FROM business_tags t
+        LEFT JOIN business_tags p ON t.parent_id = p.id
+        WHERE t.capability_level IS NULL AND t.is_active = 1
     """).fetchall()
     result = []
     for r in rows:
         result.append({
             'keyword': r['keyword'],
-            'synonyms': [s.strip() for s in (r['synonyms'] or '').split(',') if s.strip()],
-            'related': [s.strip() for s in (r['related'] or '').split(',') if s.strip()],
-            'exclude_words': [s.strip() for s in (r['exclude_words'] or '').split(',') if s.strip()],
-            'business_tag': r['business_tag'],
+            'synonyms': _parse(r['synonyms']),
+            'related': _parse(r['related']),
+            'exclude_words': _parse(r['exclude_words']),
+            'business_tag': '',
             'group': r['group_name'],
-            'category': r['category_name']
+            'category': ''
         })
     return jsonify({'code': 200, 'data': result})

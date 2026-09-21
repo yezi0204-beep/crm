@@ -1,7 +1,6 @@
 import threading
 import time
 import logging
-import sqlite3
 from datetime import datetime, timedelta
 from extensions import DB_PATH
 
@@ -15,12 +14,8 @@ _last_analysis_date = None  # 上次执行客户/竞争对手分析的日期
 
 
 def _open_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
+    from db import open_db
+    return open_db()
 
 
 def collect_due_intelligence():
@@ -156,7 +151,7 @@ def collect_due_intelligence():
 
 
 def run_scheduler():
-    global scheduler_running, _last_cleanup
+    global scheduler_running, _last_cleanup, _last_report_date, _last_analysis_date
     logger.info("定时任务调度器已启动")
 
     # 调度循环：每 1 小时检查一次情报采集；客户清理每 24 小时一次

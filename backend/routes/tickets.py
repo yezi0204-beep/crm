@@ -507,14 +507,14 @@ def submit_survey(ticket_id):
             INSERT INTO ticket_surveys (ticket_id, overall_score, response_speed,
                 attitude_score, quality_score, comment, suggestion, submitted_by, submitted_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(ticket_id) DO UPDATE SET
-                overall_score=excluded.overall_score,
-                response_speed=excluded.response_speed,
-                attitude_score=excluded.attitude_score,
-                quality_score=excluded.quality_score,
-                comment=excluded.comment,
-                suggestion=excluded.suggestion,
-                submitted_by=excluded.submitted_by,
+            ON DUPLICATE KEY UPDATE
+                overall_score=VALUES(overall_score),
+                response_speed=VALUES(response_speed),
+                attitude_score=VALUES(attitude_score),
+                quality_score=VALUES(quality_score),
+                comment=VALUES(comment),
+                suggestion=VALUES(suggestion),
+                submitted_by=VALUES(submitted_by),
                 submitted_at=CURRENT_TIMESTAMP
         """, (
             ticket_id,
@@ -648,7 +648,7 @@ def get_ticket_statistics():
     cursor.execute(f"""
         SELECT COUNT(*) as total,
                SUM(CASE WHEN status NOT IN ('resolved','closed')
-                    AND julianday('now') - julianday(created_at) > 7 THEN 1 ELSE 0 END) as overdue
+                    AND DATEDIFF(NOW(), created_at) > 7 THEN 1 ELSE 0 END) as overdue
         FROM tickets WHERE 1=1 {owner_where2}
     """, params)
     agg = cursor.fetchone()

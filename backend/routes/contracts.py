@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 from io import BytesIO
 from datetime import datetime
@@ -317,6 +318,125 @@ def update_contract(contract_id):
         record_operation_log(username, '编辑', '合同', f'编辑合同：{data.get("contract_name")}（ID:{contract_id}）')
 
         return jsonify({'code': 200, 'message': '合同更新成功', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+COST_FIELDS = ('cost_labor', 'cost_travel', 'cost_entertain',
+               'cost_outsource', 'cost_manage', 'cost_tax')
+ACTUAL_COST_FIELDS = ('actual_cost_labor', 'actual_cost_travel', 'actual_cost_entertain',
+                      'actual_cost_outsource', 'actual_cost_manage', 'actual_cost_tax')
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/cost', methods=['PUT'])
+@token_required
+def update_contract_cost(contract_id):
+    """项目成本核算：更新计划成本和/或实际成本（元）与各项备注（JSON），不触碰合同其他字段。
+
+    权限分流：
+    - 计划列（COST_FIELDS/cost_remark）需 workhour.manage 或 data.view_all
+    - 实际列（ACTUAL_COST_FIELDS/actual_cost_remark）需 cost.actual.manage 或 workhour.manage 或 data.view_all
+    - payload 只含哪些字段就只校验和写入哪些（动态 SET），避免越权覆盖
+    """
+    payload = request.current_user
+    username = payload['username']
+    data = request.get_json(silent=True) or {}
+
+    # 判断 payload 含哪些类型的字段
+    has_plan = any(f in data for f in COST_FIELDS) or 'cost_remark' in data
+    has_actual = any(f in data for f in ACTUAL_COST_FIELDS) or 'actual_cost_remark' in data
+
+    if not has_plan and not has_actual:
+        return jsonify({'code': 400, 'message': '无成本字段需要更新', 'data': None})
+
+    # 权限分流
+    can_plan = user_can(username, 'workhour.manage') or user_can(username, 'data.view_all')
+    can_actual = can_plan or user_can(username, 'cost.actual.manage')
+
+    if has_plan and not can_plan:
+        return jsonify({'code': 403, 'message': '无权编辑计划成本', 'data': None})
+    if has_actual and not can_actual:
+        return jsonify({'code': 403, 'message': '无权编辑实际成本', 'data': None})
+
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("SELECT id, contract_name, contract_no FROM contracts WHERE id=?", (contract_id,))
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+
+    set_clauses = []
+    set_values = []
+    log_parts = []
+
+    # 计划列
+    if has_plan:
+        for f in COST_FIELDS:
+            if f not in data:
+                continue
+            try:
+                v = round(float(data.get(f) if data.get(f) is not None else 0), 2)
+            except (TypeError, ValueError):
+                return jsonify({'code': 400, 'message': '计划成本金额必须为数字', 'data': None})
+            if v < 0:
+                return jsonify({'code': 400, 'message': '成本金额不能为负数', 'data': None})
+            set_clauses.append(f"{f}=?")
+            set_values.append(v)
+        if 'cost_remark' in data:
+            remark = data['cost_remark']
+            if remark is not None and not isinstance(remark, str):
+                remark = json.dumps(remark, ensure_ascii=False)
+            set_clauses.append("cost_remark=?")
+            set_values.append(remark)
+        log_parts.append('计划成本')
+
+    # 实际列
+    if has_actual:
+        for f in ACTUAL_COST_FIELDS:
+            if f not in data:
+                continue
+            try:
+                v = round(float(data.get(f) if data.get(f) is not None else 0), 2)
+            except (TypeError, ValueError):
+                return jsonify({'code': 400, 'message': '实际成本金额必须为数字', 'data': None})
+            if v < 0:
+                return jsonify({'code': 400, 'message': '成本金额不能为负数', 'data': None})
+            set_clauses.append(f"{f}=?")
+            set_values.append(v)
+        if 'actual_cost_remark' in data:
+            a_remark = data['actual_cost_remark']
+            if a_remark is not None and not isinstance(a_remark, str):
+                a_remark = json.dumps(a_remark, ensure_ascii=False)
+            # 工时强校验：人工实际成本 > 0 时，备注中的 labor.hours 必须 > 0
+            if a_remark:
+                try:
+                    rk = json.loads(a_remark) if isinstance(a_remark, str) else a_remark
+                    labor_actual = float(data.get('actual_cost_labor') or 0)
+                    labor_rk = rk.get('labor') if isinstance(rk, dict) else None
+                    labor_hours = 0
+                    if isinstance(labor_rk, dict):
+                        labor_hours = float(labor_rk.get('hours') or 0)
+                    elif isinstance(labor_rk, (int, float)):
+                        labor_hours = float(labor_rk)
+                    if labor_actual > 0 and labor_hours <= 0:
+                        return jsonify({'code': 400, 'message': '人工实际成本需备注工时（在备注中填写 labor.hours）', 'data': None})
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass  # 备注格式不规范时不阻断保存
+            set_clauses.append("actual_cost_remark=?")
+            set_values.append(a_remark)
+        log_parts.append('实际成本')
+
+    if not set_clauses:
+        return jsonify({'code': 200, 'message': '无字段需要更新', 'data': None})
+
+    try:
+        set_values.append(contract_id)
+        cursor.execute(f"UPDATE contracts SET {', '.join(set_clauses)} WHERE id=?", set_values)
+        db.commit()
+        record_operation_log(username, '编辑', '项目成本核算',
+                             f'保存{"+".join(log_parts)}：{row["contract_name"]}（{row["contract_no"]}）')
+        return jsonify({'code': 200, 'message': '成本核算保存成功', 'data': None})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})

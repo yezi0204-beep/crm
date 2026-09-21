@@ -8,23 +8,40 @@ LLM 参数：max_tokens=4000, timeout=60, enable_thinking=False（快速响应�
 import json
 import re
 import logging
-import sqlite3
 
 logger = logging.getLogger(__name__)
 
 
 def _load_keywords(db):
-    """从数据库加载启用的关键词列表（主词+同义词）。"""
-    rows = db.execute("SELECT keyword, synonyms, business_tag FROM keywords WHERE enabled=1").fetchall()
+    """从 business_tags 加载启用的匹配词（标签名+同义词+关联词）。
+
+    合并后关键词表已废弃，统一从业务标签读取。
+    """
+    try:
+        from routes.business_tags import load_tag_matcher
+        tag_map, _, has_tags, _ = load_tag_matcher(db)
+        if has_tags:
+            return list(tag_map.keys())
+    except Exception:
+        pass
+    # 回退：直接从 business_tags 表读
+    rows = db.execute(
+        "SELECT name, synonyms, related_words FROM business_tags WHERE is_active=1"
+    ).fetchall()
     keywords = []
     for r in rows:
-        kw = r['keyword']
-        keywords.append(kw)
-        if r['synonyms']:
-            for s in r['synonyms'].split(','):
-                s = s.strip()
-                if s:
-                    keywords.append(s)
+        if r['name']:
+            keywords.append(r['name'])
+        import json as _json
+        for field in ('synonyms', 'related_words'):
+            val = r[field] if r[field] else '[]'
+            try:
+                for s in _json.loads(val) if isinstance(val, str) else val:
+                    s = (s or '').strip()
+                    if s:
+                        keywords.append(s)
+            except Exception:
+                pass
     return keywords
 
 
@@ -125,9 +142,8 @@ def analyze_intelligence(raw_intel_id, db=None):
     from config import USE_LLM
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
 
     try:
@@ -345,9 +361,8 @@ def batch_analyze(source_id=None, limit=20, db=None):
     """
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
 
     try:

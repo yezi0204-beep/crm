@@ -21,7 +21,6 @@
 """
 import json
 import os
-import sqlite3
 from datetime import datetime
 from flask import request, jsonify, Response
 
@@ -430,10 +429,8 @@ def ai_agent_stream():
 
     def generate():
         # 创建独立的数据库连接（SSE 流式响应会释放请求上下文，不能用 get_db）
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        from extensions import open_db
+        conn = open_db()
         cursor = conn.cursor()
 
         try:

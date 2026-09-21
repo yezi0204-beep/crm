@@ -82,17 +82,17 @@ def _compute_trend_comparison(db, cursor, role, username, time_range, year=None)
     elif time_range == 'year':
         # 本年 vs 去年
         chart_year = year if year else now.year
-        cur_cond = "AND strftime('%Y', created_at) = ?"
+        cur_cond = "AND DATE_FORMAT(created_at, '%Y') = ?"
         cur_params_start = str(chart_year)
-        prev_cond = "AND strftime('%Y', created_at) = ?"
+        prev_cond = "AND DATE_FORMAT(created_at, '%Y') = ?"
         prev_params_start = str(chart_year - 1)
         prev_params_end = None
     else:
         # all：本年 vs 去年（兜底）
         chart_year = now.year
-        cur_cond = "AND strftime('%Y', created_at) = ?"
+        cur_cond = "AND DATE_FORMAT(created_at, '%Y') = ?"
         cur_params_start = str(chart_year)
-        prev_cond = "AND strftime('%Y', created_at) = ?"
+        prev_cond = "AND DATE_FORMAT(created_at, '%Y') = ?"
         prev_params_start = str(chart_year - 1)
         prev_params_end = None
 
@@ -136,16 +136,16 @@ def _compute_trend_comparison(db, cursor, role, username, time_range, year=None)
 
     # 简化：直接用 strftime 比较 year，或 >= 比较 month/quarter
     if time_range == 'year' or time_range == 'all':
-        cur_cond_customers = f"AND strftime('%Y', created_at) = ?"
-        prev_cond_customers = f"AND strftime('%Y', created_at) = ?"
+        cur_cond_customers = f"AND DATE_FORMAT(created_at, '%Y') = ?"
+        prev_cond_customers = f"AND DATE_FORMAT(created_at, '%Y') = ?"
         cur_params_c = [cur_params_start]
         prev_params_c = [prev_params_start]
 
-        cur_cond_contracts = f"AND strftime('%Y', sign_date) = ?"
-        prev_cond_contracts = f"AND strftime('%Y', sign_date) = ?"
+        cur_cond_contracts = f"AND DATE_FORMAT(sign_date, '%Y') = ?"
+        prev_cond_contracts = f"AND DATE_FORMAT(sign_date, '%Y') = ?"
 
-        cur_cond_payments = f"AND strftime('%Y', pr.payment_date) = ?"
-        prev_cond_payments = f"AND strftime('%Y', pr.payment_date) = ?"
+        cur_cond_payments = f"AND DATE_FORMAT(pr.payment_date, '%Y') = ?"
+        prev_cond_payments = f"AND DATE_FORMAT(pr.payment_date, '%Y') = ?"
     else:
         # month/quarter：用 >= 比较
         if time_range == 'month':
@@ -526,7 +526,7 @@ def get_insights():
                    COUNT(c.id) as contract_count
             FROM users u
             LEFT JOIN contracts c ON u.username = c.owner_id
-            WHERE u.status = '在职' AND strftime('%Y', c.sign_date) = ?
+            WHERE u.status = '在职' AND DATE_FORMAT(c.sign_date, '%Y') = ?
             GROUP BY u.username, u.name
             ORDER BY contract_amount DESC
             LIMIT 1
@@ -848,7 +848,7 @@ def _generate_insights(cursor, role, username, is_admin, owner_filter, owner_par
                    COUNT(c.id) as contract_count
             FROM users u
             LEFT JOIN contracts c ON u.username = c.owner_id
-            WHERE u.status = '在职' AND strftime('%Y', c.sign_date) = ?
+            WHERE u.status = '在职' AND DATE_FORMAT(c.sign_date, '%Y') = ?
             GROUP BY u.username, u.name
             ORDER BY contract_amount DESC
             LIMIT 1
@@ -988,12 +988,12 @@ def get_customer_satisfaction():
 
     # 4. 月度趋势（最近 12 个月）
     cursor.execute(f"""
-        SELECT strftime('%Y-%m', s.submitted_at) as month,
+        SELECT DATE_FORMAT(s.submitted_at, '%Y-%m') as month,
                COUNT(*) as count,
                COALESCE(AVG(s.overall_score), 0) as avg_score
         FROM ticket_surveys s
         JOIN tickets t ON s.ticket_id = t.id
-        WHERE s.submitted_at >= date('now', '-12 months')
+        WHERE s.submitted_at >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
               {owner_filter}
         GROUP BY month
         ORDER BY month

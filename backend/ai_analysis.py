@@ -5,7 +5,6 @@ Phase8: 从 intelligence_leads 聚合数据，构建客户画像和竞争对手�
 """
 import json
 import re
-import sqlite3
 import logging
 from datetime import date, datetime, timedelta
 
@@ -41,9 +40,8 @@ def build_customer_profiles(db=None):
     """
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
 
     try:
@@ -183,9 +181,8 @@ def build_competitor_profiles(db=None):
     """
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
 
     try:
@@ -290,9 +287,8 @@ def generate_sales_alerts(db=None):
     """
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
 
     try:

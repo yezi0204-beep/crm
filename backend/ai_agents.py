@@ -15,7 +15,6 @@
 import json
 import re
 import logging
-import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -478,9 +477,8 @@ def analyze_with_agents(raw_intel_id, db=None, force=False):
     """
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
 
     try:
@@ -552,7 +550,7 @@ def _save_agent_result(db, raw_intel_id, result):
     try:
         db.execute("""
             CREATE TABLE IF NOT EXISTS intelligence_agent_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 raw_intelligence_id INTEGER,
                 agent1_classification TEXT,
                 agent2_business TEXT,
@@ -563,7 +561,7 @@ def _save_agent_result(db, raw_intel_id, result):
                 agent7_suggestion TEXT,
                 final_score INTEGER DEFAULT 0,
                 final_summary TEXT,
-                analyzed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                analyzed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(raw_intelligence_id)
             )
         """)
@@ -577,16 +575,16 @@ def _save_agent_result(db, raw_intel_id, result):
             agent3_entities, agent4_project, agent5_capability,
             agent6_scoring, agent7_suggestion, final_score, final_summary
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(raw_intelligence_id) DO UPDATE SET
-            agent1_classification=excluded.agent1_classification,
-            agent2_business=excluded.agent2_business,
-            agent3_entities=excluded.agent3_entities,
-            agent4_project=excluded.agent4_project,
-            agent5_capability=excluded.agent5_capability,
-            agent6_scoring=excluded.agent6_scoring,
-            agent7_suggestion=excluded.agent7_suggestion,
-            final_score=excluded.final_score,
-            final_summary=excluded.final_summary,
+        ON DUPLICATE KEY UPDATE
+            agent1_classification=VALUES(agent1_classification),
+            agent2_business=VALUES(agent2_business),
+            agent3_entities=VALUES(agent3_entities),
+            agent4_project=VALUES(agent4_project),
+            agent5_capability=VALUES(agent5_capability),
+            agent6_scoring=VALUES(agent6_scoring),
+            agent7_suggestion=VALUES(agent7_suggestion),
+            final_score=VALUES(final_score),
+            final_summary=VALUES(final_summary),
             analyzed_at=CURRENT_TIMESTAMP
     """, (
         raw_intel_id,
@@ -710,9 +708,8 @@ def get_agent_result(raw_intel_id, db=None):
     """读取已保存的 7-Agent 分析结果。"""
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
     try:
         row = db.execute(
@@ -742,9 +739,8 @@ def batch_analyze_with_agents(source_id=None, limit=20, db=None):
     """
     own_conn = False
     if db is None:
-        from extensions import DB_PATH
-        db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-        db.row_factory = sqlite3.Row
+        from extensions import open_db
+        db = open_db()
         own_conn = True
     try:
         sql = "SELECT id FROM raw_intelligence WHERE status='pending'"

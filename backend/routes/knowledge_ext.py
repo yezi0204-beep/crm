@@ -604,7 +604,7 @@ def sync_crm_data():
             for cust in customers:
                 cust_dict = dict(cust)
                 cursor.execute("""
-                    INSERT OR IGNORE INTO knowledge_documents
+                    INSERT IGNORE INTO knowledge_documents
                     (doc_type, title, content, cust_id, owner_id, tags, processed)
                     VALUES (?, ?, ?, ?, ?, ?, 1)
                 """, (
@@ -636,7 +636,7 @@ def sync_crm_data():
             for biz in business_list:
                 biz_dict = dict(biz)
                 cursor.execute("""
-                    INSERT OR IGNORE INTO knowledge_documents
+                    INSERT IGNORE INTO knowledge_documents
                     (doc_type, title, content, cust_id, business_id, owner_id, tags, processed)
                     VALUES (?, ?, ?, ?, ?, ?, ?, 1)
                 """, (
@@ -668,7 +668,7 @@ def sync_crm_data():
             for contract in contracts:
                 contract_dict = dict(contract)
                 cursor.execute("""
-                    INSERT OR IGNORE INTO knowledge_documents
+                    INSERT IGNORE INTO knowledge_documents
                     (doc_type, title, content, cust_id, contract_id, owner_id, tags, processed)
                     VALUES (?, ?, ?, ?, ?, ?, ?, 1)
                 """, (
@@ -706,7 +706,7 @@ def sync_crm_data():
                 content = '\n'.join(content_parts) if content_parts else ''
 
                 cursor.execute("""
-                    INSERT OR IGNORE INTO knowledge_documents
+                    INSERT IGNORE INTO knowledge_documents
                     (doc_type, title, content, cust_id, owner_id, tags, processed)
                     VALUES (?, ?, ?, ?, ?, ?, 1)
                 """, (
@@ -731,7 +731,7 @@ def sync_crm_data():
         cursor.execute("""
             INSERT INTO crm_sync_config (module, last_sync_at, sync_interval_hours)
             VALUES (?, ?, ?)
-            ON CONFLICT(module) DO UPDATE SET last_sync_at = excluded.last_sync_at
+            ON DUPLICATE KEY UPDATE last_sync_at = VALUES(last_sync_at)
         """, (
             ','.join(modules),
             datetime.now().strftime('%Y-%m-%d %H:%M:%S'),

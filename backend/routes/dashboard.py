@@ -24,9 +24,9 @@ def build_date_filter(time_range, year=None):
                 [start_date], [start_date], [start_date])
     elif time_range == 'year':
         year_str = str(year if year else now.year)
-        return ("AND strftime('%Y', created_at) = ?",
-                "AND strftime('%Y', sign_date) = ?",
-                "AND strftime('%Y', payment_date) = ?",
+        return ("AND DATE_FORMAT(created_at, '%Y') = ?",
+                "AND DATE_FORMAT(sign_date, '%Y') = ?",
+                "AND DATE_FORMAT(payment_date, '%Y') = ?",
                 [year_str], [year_str], [year_str])
     else:
         return ("", "", "", [], [], [])
@@ -92,28 +92,28 @@ def get_dashboard():
 
     if time_range == 'month':
         cursor.execute("""
-            SELECT strftime('%d', created_at) as day, COUNT(*) as count
+            SELECT DATE_FORMAT(created_at, '%d') as day, COUNT(*) as count
             FROM customers
-            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-            GROUP BY strftime('%d', created_at)
+            WHERE DATE_FORMAT(created_at, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')
+            GROUP BY DATE_FORMAT(created_at, '%d')
             ORDER BY day
         """)
         customer_monthly = {row['day']: row['count'] for row in cursor.fetchall()}
 
         cursor.execute("""
-            SELECT strftime('%d', created_at) as day, COUNT(*) as count
+            SELECT DATE_FORMAT(created_at, '%d') as day, COUNT(*) as count
             FROM business
-            WHERE status = 'active' AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-            GROUP BY strftime('%d', created_at)
+            WHERE status = 'active' AND DATE_FORMAT(created_at, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')
+            GROUP BY DATE_FORMAT(created_at, '%d')
             ORDER BY day
         """)
         business_monthly = {row['day']: row['count'] for row in cursor.fetchall()}
 
         cursor.execute("""
-            SELECT strftime('%d', sign_date) as day, COUNT(*) as count
+            SELECT DATE_FORMAT(sign_date, '%d') as day, COUNT(*) as count
             FROM contracts
-            WHERE strftime('%Y-%m', sign_date) = strftime('%Y-%m', 'now')
-            GROUP BY strftime('%d', sign_date)
+            WHERE DATE_FORMAT(sign_date, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')
+            GROUP BY DATE_FORMAT(sign_date, '%d')
             ORDER BY day
         """)
         contract_monthly = {row['day']: row['count'] for row in cursor.fetchall()}
@@ -129,28 +129,28 @@ def get_dashboard():
         start_date = f"{now.year}-{str(start_month).zfill(2)}-01"
 
         cursor.execute("""
-            SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
+            SELECT DATE_FORMAT(created_at, '%Y-%m') as month, COUNT(*) as count
             FROM customers
             WHERE created_at >= ?
-            GROUP BY strftime('%Y-%m', created_at)
+            GROUP BY DATE_FORMAT(created_at, '%Y-%m')
             ORDER BY month
         """, (start_date,))
         customer_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
 
         cursor.execute("""
-            SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
+            SELECT DATE_FORMAT(created_at, '%Y-%m') as month, COUNT(*) as count
             FROM business
             WHERE status = 'active' AND created_at >= ?
-            GROUP BY strftime('%Y-%m', created_at)
+            GROUP BY DATE_FORMAT(created_at, '%Y-%m')
             ORDER BY month
         """, (start_date,))
         business_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
 
         cursor.execute("""
-            SELECT strftime('%Y-%m', sign_date) as month, COUNT(*) as count
+            SELECT DATE_FORMAT(sign_date, '%Y-%m') as month, COUNT(*) as count
             FROM contracts
             WHERE sign_date >= ?
-            GROUP BY strftime('%Y-%m', sign_date)
+            GROUP BY DATE_FORMAT(sign_date, '%Y-%m')
             ORDER BY month
         """, (start_date,))
         contract_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
@@ -169,28 +169,28 @@ def get_dashboard():
         chart_year = year if year else now.year
 
         cursor.execute("""
-            SELECT strftime('%m', created_at) as month, COUNT(*) as count
+            SELECT DATE_FORMAT(created_at, '%m') as month, COUNT(*) as count
             FROM customers
-            WHERE strftime('%Y', created_at) = ?
-            GROUP BY strftime('%m', created_at)
+            WHERE DATE_FORMAT(created_at, '%Y') = ?
+            GROUP BY DATE_FORMAT(created_at, '%m')
             ORDER BY month
         """, (str(chart_year),))
         customer_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
 
         cursor.execute("""
-            SELECT strftime('%m', created_at) as month, COUNT(*) as count
+            SELECT DATE_FORMAT(created_at, '%m') as month, COUNT(*) as count
             FROM business
-            WHERE status = 'active' AND strftime('%Y', created_at) = ?
-            GROUP BY strftime('%m', created_at)
+            WHERE status = 'active' AND DATE_FORMAT(created_at, '%Y') = ?
+            GROUP BY DATE_FORMAT(created_at, '%m')
             ORDER BY month
         """, (str(chart_year),))
         business_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
 
         cursor.execute("""
-            SELECT strftime('%m', sign_date) as month, COUNT(*) as count
+            SELECT DATE_FORMAT(sign_date, '%m') as month, COUNT(*) as count
             FROM contracts
-            WHERE strftime('%Y', sign_date) = ?
-            GROUP BY strftime('%m', sign_date)
+            WHERE DATE_FORMAT(sign_date, '%Y') = ?
+            GROUP BY DATE_FORMAT(sign_date, '%m')
             ORDER BY month
         """, (str(chart_year),))
         contract_monthly = {row['month']: row['count'] for row in cursor.fetchall()}
@@ -279,7 +279,7 @@ def get_monthly_finance():
                 cursor.execute(
                     "SELECT COALESCE(SUM(acceptance_amount), 0) as total "
                     "FROM contract_acceptances "
-                    "WHERE strftime('%Y-%m', acceptance_date) = ?",
+                    "WHERE DATE_FORMAT(acceptance_date, '%Y-%m') = ?",
                     (month_str,)
                 )
             else:
@@ -287,7 +287,7 @@ def get_monthly_finance():
                     "SELECT COALESCE(SUM(ca.acceptance_amount), 0) as total "
                     "FROM contract_acceptances ca "
                     "JOIN contracts c ON ca.contract_id = c.id "
-                    "WHERE strftime('%Y-%m', ca.acceptance_date) = ? AND c.owner_id = ?",
+                    "WHERE DATE_FORMAT(ca.acceptance_date, '%Y-%m') = ? AND c.owner_id = ?",
                     (month_str, username)
                 )
             acceptance_data.append(cursor.fetchone()['total'] or 0)
@@ -296,7 +296,7 @@ def get_monthly_finance():
                 cursor.execute(
                     "SELECT COALESCE(SUM(amount), 0) as total "
                     "FROM payment_records "
-                    "WHERE strftime('%Y-%m', payment_date) = ?",
+                    "WHERE DATE_FORMAT(payment_date, '%Y-%m') = ?",
                     (month_str,)
                 )
             else:
@@ -304,7 +304,7 @@ def get_monthly_finance():
                     "SELECT COALESCE(SUM(pr.amount), 0) as total "
                     "FROM payment_records pr "
                     "JOIN contracts c ON pr.contract_id = c.id "
-                    "WHERE strftime('%Y-%m', pr.payment_date) = ? AND c.owner_id = ?",
+                    "WHERE DATE_FORMAT(pr.payment_date, '%Y-%m') = ? AND c.owner_id = ?",
                     (month_str, username)
                 )
             payment_data.append(cursor.fetchone()['total'] or 0)

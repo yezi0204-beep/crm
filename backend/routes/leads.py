@@ -2470,7 +2470,7 @@ def _load_eval_context(cursor):
         JOIN user_roles ur ON u.username = ur.username AND ur.role='销售'
         LEFT JOIN business b ON b.owner_id = u.username AND b.status='active'
         WHERE u.status='在职' AND u.role NOT IN ('主任', '院长')
-        GROUP BY u.username ORDER BY biz_count ASC, RANDOM()
+        GROUP BY u.username ORDER BY biz_count ASC, RAND()
     """)
     salespeople = [dict(r) for r in cursor.fetchall()]
     if not salespeople:
@@ -2580,18 +2580,18 @@ def _load_eval_context(cursor):
     # 组装销售画像
     for s in salespeople:
         u = s['username']
-        s['cust_count'] = cust_counts.get(u, 0)
+        s['cust_count'] = int(cust_counts.get(u, 0) or 0)
         s['industries_served'] = cust_industries.get(u, {})
         vs = visit_stats.get(u, {})
-        s['visit_total'] = vs.get('visit_total', 0)
-        s['visit_done'] = vs.get('visit_done', 0)
+        s['visit_total'] = int(vs.get('visit_total', 0) or 0)
+        s['visit_done'] = int(vs.get('visit_done', 0) or 0)
         s['visit_by_industry'] = visit_by_industry.get(u, {})
         bs = biz_stats.get(u, {})
         s['biz_amount'] = float(bs.get('biz_amount', 0) or 0)
-        s['biz_advanced'] = bs.get('biz_advanced', 0) or 0
+        s['biz_advanced'] = int(bs.get('biz_advanced', 0) or 0)
         s['biz_by_industry'] = biz_by_industry.get(u, {})
         cs = contract_stats.get(u, {})
-        s['contract_total'] = cs.get('contract_total', 0)
+        s['contract_total'] = int(cs.get('contract_total', 0) or 0)
         s['contract_amount'] = float(cs.get('contract_amount', 0) or 0)
         s['paid_amount'] = float(cs.get('paid_amount', 0) or 0)
         s['contract_by_industry'] = contract_by_industry.get(u, {})

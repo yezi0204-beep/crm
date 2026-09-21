@@ -173,7 +173,7 @@ def save_month():
             f"VALUES ({ph}, ?, ?)",
             list(values.values()) + [payload['username'], now]
         )
-        cost_id = db.execute("SELECT last_insert_rowid() as id").fetchone()['id']
+        cost_id = db.execute("SELECT LAST_INSERT_ID() AS id").fetchone()['id']
         action = '录入'
 
     db.commit()

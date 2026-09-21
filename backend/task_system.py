@@ -18,7 +18,6 @@ import json
 import logging
 import threading
 import time
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -56,9 +55,8 @@ def register_handler(task_type, func):
 
 
 def _new_conn():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
+    from db import open_db
+    return open_db()
 
 
 def submit_task(task_type, payload=None, created_by='system',
