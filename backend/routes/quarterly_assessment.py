@@ -272,8 +272,8 @@ def _collect_system_data(cur, members, year, quarter):
             WHERE c.owner_id=? AND substr(p.payment_date,1,10) BETWEEN ? AND ?
         """, (uname, start, end))
         pay_amt = float(cur.fetchone()['amt'] or 0)
-        s = (f'本季度新签合同 {new_cnt} 份、合计 {new_amt/10000:.2f} 万元；'
-             f'本季度累计验收 {acc_amt/10000:.2f} 万元；本季度累计回款 {pay_amt/10000:.2f} 万元')
+        s = (f'本季度新签合同 {new_cnt} 份、合计 {new_amt:.2f} 元；'
+             f'本季度累计验收 {acc_amt:.2f} 元；本季度累计回款 {pay_amt:.2f} 元')
         # 年度累计回款目标完成率（月度目标为累计口径）
         cur.execute("SELECT target_amount FROM monthly_targets WHERE username=? AND year=? AND month=?",
                     (uname, year, q_end_month))
@@ -287,8 +287,8 @@ def _collect_system_data(cur, members, year, quarter):
             """, (uname, f'{year:04d}-01', f'{year:04d}-{q_end_month:02d}'))
             cum = float(cur.fetchone()['amt'] or 0)
             rate = cum / tgt * 100 if tgt else 0
-            s += (f'；{year}年累计回款目标（截至{q_end_month}月）{tgt/10000:.2f} 万元，'
-                  f'实际累计回款 {cum/10000:.2f} 万元，完成率 {rate:.1f}%')
+            s += (f'；{year}年累计回款目标（截至{q_end_month}月）{tgt:.2f} 元，'
+                  f'实际累计回款 {cum:.2f} 元，完成率 {rate:.1f}%')
         else:
             s += f'；无{year}年个人回款目标记录'
         # 本季度拜访排班与商机跟进
@@ -319,7 +319,7 @@ def _collect_system_data(cur, members, year, quarter):
         b_cnt = br['cnt'] or 0
         b_amt = float(br['amt'] or 0)
         s += (f'；本季度商机跟进记录 {f_cnt} 条；当前在跟商机 {b_cnt} 个、'
-              f'预计金额合计 {b_amt/10000:.2f} 万元')
+              f'预计金额合计 {b_amt:.2f} 元')
         # 本季度商机阶段进展（有跟进日志的商机阶段分布）
         cur.execute("""
             SELECT b.stage, COUNT(DISTINCT b.id) cnt

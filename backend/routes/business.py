@@ -174,13 +174,13 @@ def create_business():
             plan_week = today.strftime('%Y-W') + str(current_week_num + 1).zfill(2)
 
         cursor.execute("""
-            INSERT INTO business (title, cust_id, stakeholder, amount, stage, probability, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week, note, ext_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO business (title, cust_id, stakeholder, amount, stage, probability, predict_date, source, industry, region, owner_id, address, customer_relation, weekly_plan, next_week_plan, plan_week, note, project_manager, ext_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get('title'), data.get('cust_id'), data.get('stakeholder'), data.get('amount'), data.get('stage'),
             data.get('probability'), data.get('predict_date'), data.get('source'), data.get('industry'), data.get('region'), data.get('owner_id'),
             data.get('address'), data.get('customer_relation'), data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
-            data.get('note'),
+            data.get('note'), data.get('project_manager'),
             json.dumps(ext_cleaned, ensure_ascii=False) if ext_cleaned else None
         ))
         db.commit()
@@ -363,7 +363,7 @@ def update_business(business_id):
                 UPDATE business SET
                     title=?, cust_id=?, stakeholder=?, amount=?, stage=?, probability=?, predict_date=?,
                     source=?, industry=?, region=?, address=?, customer_relation=?,
-                    weekly_plan=?, next_week_plan=?, plan_week=?, owner_id=?, note=?{ext_clause}
+                    weekly_plan=?, next_week_plan=?, plan_week=?, owner_id=?, project_manager=?, note=?{ext_clause}
                 WHERE id=?
             """, (
                 data.get('title'), data.get('cust_id'), data.get('stakeholder'),
@@ -371,7 +371,7 @@ def update_business(business_id):
                 data.get('source'), data.get('industry'), data.get('region'),
                 data.get('address'), data.get('customer_relation'),
                 data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
-                data.get('owner_id'), data.get('note'),
+                data.get('owner_id'), data.get('project_manager'), data.get('note'),
                 ext_param, business_id
             ))
         else:
@@ -379,7 +379,7 @@ def update_business(business_id):
                 UPDATE business SET
                     title=?, cust_id=?, stakeholder=?, amount=?, stage=?, probability=?, predict_date=?,
                     source=?, industry=?, region=?, address=?, customer_relation=?,
-                    weekly_plan=?, next_week_plan=?, plan_week=?, note=?{ext_clause}
+                    weekly_plan=?, next_week_plan=?, plan_week=?, project_manager=?, note=?{ext_clause}
                 WHERE id=?
             """, (
                 data.get('title'), data.get('cust_id'), data.get('stakeholder'),
@@ -387,7 +387,7 @@ def update_business(business_id):
                 data.get('source'), data.get('industry'), data.get('region'),
                 data.get('address'), data.get('customer_relation'),
                 data.get('weekly_plan'), data.get('next_week_plan'), plan_week,
-                data.get('note'),
+                data.get('project_manager'), data.get('note'),
                 ext_param, business_id
             ))
         db.commit()

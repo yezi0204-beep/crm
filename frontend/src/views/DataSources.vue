@@ -36,32 +36,32 @@
 
     <!-- 表格 -->
     <el-card class="table-card" shadow="never">
-      <el-table :data="rows" border stripe v-loading="loading" class="data-table">
-        <el-table-column label="名称" min-width="200" fixed="left">
+      <el-table :data="rows" stripe v-loading="loading" class="data-table" size="small">
+        <el-table-column label="名称" min-width="160" fixed="left">
           <template #default="{ row }">
             <el-icon-link v-if="row.url" :href="row.url" target="_blank" class="link-icon" />
             <span class="name">{{ row.name }}</span>
             <el-tag v-if="!row.enabled" type="info" size="small" style="margin-left:6px">停用</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="source_type" label="类型" width="110" align="center" />
-        <el-table-column label="URL" min-width="260" show-overflow-tooltip>
+        <el-table-column prop="source_type" label="类型" width="90" align="center" />
+        <el-table-column label="URL" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <a v-if="row.url" :href="row.url" target="_blank" class="url">{{ row.url }}</a>
             <span v-else class="none">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="industry" label="行业" width="110" show-overflow-tooltip />
-        <el-table-column prop="region" label="地区" width="90" align="center" />
-        <el-table-column label="采集方式" width="120" align="center">
+        <el-table-column prop="industry" label="行业" width="90" show-overflow-tooltip />
+        <el-table-column prop="region" label="地区" width="70" align="center" />
+        <el-table-column label="采集方式" width="100" align="center">
           <template #default="{ row }">{{ row.collection_method || '自动采集' }}</template>
         </el-table-column>
-        <el-table-column label="采集频率" width="110" align="center">
+        <el-table-column label="采集频率" width="80" align="center">
           <template #default="{ row }">
             <el-tag size="small" type="primary" effect="plain">{{ row.frequency || '每日' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="采集器插件" min-width="170">
+        <el-table-column label="采集器" width="120" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag v-if="row.parser_type" size="small" type="success">
               {{ collectorLabel(row.parser_type) }}
@@ -69,28 +69,28 @@
             <el-tag v-else size="small" type="danger" effect="dark">未配置</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="启用" width="80" align="center">
+        <el-table-column label="启用" width="60" align="center">
           <template #default="{ row }">
             <el-switch :model-value="row.enabled" @change="toggle(row)" />
           </template>
         </el-table-column>
-        <el-table-column label="最后采集" width="160" show-overflow-tooltip>
+        <el-table-column label="最后采集" width="130" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="muted">{{ row.last_scraped_at || '从未' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="下次采集" width="160" show-overflow-tooltip>
+        <el-table-column label="下次采集" width="130" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="muted">{{ row.next_collect_at || (row.collection_method === '手动采集' ? '（手动）' : '—') }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="备注" min-width="160" show-overflow-tooltip>
+        <el-table-column label="备注" min-width="110" show-overflow-tooltip>
           <template #default="{ row }"><span class="muted">{{ row.notes || '—' }}</span></template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="success" text :disabled="!row.enabled || !row.parser_type" :loading="collectId===row.id" @click="collect(row)">
-              手动采集
+              采集
             </el-button>
             <el-button size="small" text @click="openForm(row)">编辑</el-button>
             <el-button size="small" type="danger" text @click="remove(row)">删除</el-button>
@@ -341,11 +341,13 @@ onMounted(() => { fetchMeta(); fetch() })
 </script>
 
 <style scoped>
-.data-sources { padding: 0; }
+.data-sources { padding: 0; width: 100%; box-sizing: border-box; overflow: hidden; }
 .toolbar-card, .table-card { margin-bottom: 14px; }
+.table-card { overflow: hidden; }
+.data-table { width: 100%; }
 .toolbar {
   display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 14px;
+  margin-bottom: 14px; flex-wrap: wrap; gap: 10px;
 }
 .title { font-size: 18px; font-weight: 700; color: #1f2d3d; margin-right: 14px; }
 .desc { color: #909399; font-size: 12px; }

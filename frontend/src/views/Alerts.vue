@@ -46,7 +46,7 @@
                 <div class="alert-meta">
                   <span class="meta-item">负责人: {{ alert.owner }}</span>
                   <span class="meta-item">到期日期: {{ formatDueDate(alert.due_date) }}</span>
-                  <span class="meta-item" v-if="alert.amount > 0">待回款: {{ alert.amount }}万</span>
+                  <span class="meta-item" v-if="alert.amount > 0">待回款: {{ alert.amount }}元</span>
                 </div>
               </div>
               <div class="alert-days">
@@ -125,7 +125,7 @@
                 <div class="alert-meta">
                   <span class="meta-item">负责人: {{ alert.owner }}</span>
                   <span class="meta-item">到期日期: {{ formatDueDate(alert.due_date) }}</span>
-                  <span class="meta-item">待回款: {{ alert.amount }}万</span>
+                  <span class="meta-item">待回款: {{ alert.amount }}元</span>
                 </div>
               </div>
               <div class="alert-days">

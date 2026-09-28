@@ -188,12 +188,12 @@
             <div class="summary-label">拜访记录</div>
           </div>
           <div class="summary-card" v-if="detail.summary.business_total_amount > 0">
-            <div class="summary-num">{{ Number((detail.summary.business_total_amount / 10000).toFixed(6)) }}</div>
-            <div class="summary-label">商机总额(万)</div>
+            <div class="summary-num">{{ Number(detail.summary.business_total_amount.toFixed(2)) }}</div>
+            <div class="summary-label">商机总额(元)</div>
           </div>
           <div class="summary-card" v-if="detail.summary.contract_total_amount > 0">
-            <div class="summary-num">{{ Number((detail.summary.contract_total_amount / 10000).toFixed(6)) }}</div>
-            <div class="summary-label">合同总额(万)</div>
+            <div class="summary-num">{{ Number(detail.summary.contract_total_amount.toFixed(2)) }}</div>
+            <div class="summary-label">合同总额(元)</div>
           </div>
         </div>
 
@@ -253,8 +253,8 @@
             <el-table v-if="detail.business && detail.business.length" :data="detail.business" size="small" border max-height="250">
               <el-table-column label="商机标题" prop="title" min-width="160" show-overflow-tooltip />
               <el-table-column label="客户" prop="customer_company" width="140" show-overflow-tooltip />
-              <el-table-column label="金额(万)" width="110">
-                <template #default="{ row }">{{ Number(((row.amount || 0) / 10000).toFixed(6)) }}</template>
+              <el-table-column label="金额(元)" width="110">
+                <template #default="{ row }">{{ Number((row.amount || 0).toFixed(2)) }}</template>
               </el-table-column>
               <el-table-column label="阶段" prop="stage" width="90" />
               <el-table-column label="状态" prop="status" width="80">
@@ -276,11 +276,11 @@
               <el-table-column label="合同编号" prop="contract_no" width="140" show-overflow-tooltip />
               <el-table-column label="合同名称" prop="contract_name" min-width="160" show-overflow-tooltip />
               <el-table-column label="客户" prop="customer_company" width="130" show-overflow-tooltip />
-              <el-table-column label="合同总额(万)" width="120">
-                <template #default="{ row }">{{ Number(((row.total_amt || 0) / 10000).toFixed(6)) }}</template>
+              <el-table-column label="合同总额(元)" width="120">
+                <template #default="{ row }">{{ Number((row.total_amt || 0).toFixed(2)) }}</template>
               </el-table-column>
-              <el-table-column label="已回款(万)" width="110">
-                <template #default="{ row }">{{ Number(((row.paid_amt || 0) / 10000).toFixed(6)) }}</template>
+              <el-table-column label="已回款(元)" width="110">
+                <template #default="{ row }">{{ Number((row.paid_amt || 0).toFixed(2)) }}</template>
               </el-table-column>
               <el-table-column label="状态" prop="status" width="80" />
             </el-table>
@@ -380,11 +380,11 @@
             <span v-else style="color:#909399">未拜访</span>
           </template>
         </el-table-column>
-        <el-table-column label="商机额(万)" width="100" align="right">
-          <template #default="{ row }">{{ Number((row.business_amount / 10000).toFixed(6)) }}</template>
+        <el-table-column label="商机额(元)" width="100" align="right">
+          <template #default="{ row }">{{ Number(row.business_amount.toFixed(2)) }}</template>
         </el-table-column>
-        <el-table-column label="合同额(万)" width="100" align="right">
-          <template #default="{ row }">{{ Number((row.contract_amount / 10000).toFixed(6)) }}</template>
+        <el-table-column label="合同额(元)" width="100" align="right">
+          <template #default="{ row }">{{ Number(row.contract_amount.toFixed(2)) }}</template>
         </el-table-column>
         <el-table-column label="推荐理由" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">

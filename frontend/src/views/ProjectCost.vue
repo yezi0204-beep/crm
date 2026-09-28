@@ -39,7 +39,7 @@
 
     <div v-else class="sheet-wrap" v-loading="loading">
       <div class="sheet-title">软件系统研发任务成本核算</div>
-      <div class="sheet-unit">（单位：万元）</div>
+      <div class="sheet-unit">（单位：元）</div>
 
       <table class="cost-sheet">
         <thead>
@@ -65,7 +65,7 @@
                 v-model="form[row.key]"
                 :min="0"
                 :step="0.01"
-                :precision="6"
+                :precision="2"
                 :controls="false"
                 size="small"
                 class="cell-input"
@@ -78,7 +78,7 @@
                 v-model="actualForm[row.actualKey]"
                 :min="0"
                 :step="0.01"
-                :precision="6"
+                :precision="2"
                 :controls="false"
                 size="small"
                 class="cell-input"
@@ -127,7 +127,7 @@
                 v-model="form.cost_tax"
                 :min="0"
                 :step="0.01"
-                :precision="6"
+                :precision="2"
                 :controls="false"
                 size="small"
                 class="cell-input"
@@ -140,7 +140,7 @@
                 v-model="actualForm.actual_cost_tax"
                 :min="0"
                 :step="0.01"
-                :precision="6"
+                :precision="2"
                 :controls="false"
                 size="small"
                 class="cell-input"
@@ -178,7 +178,7 @@
       </div>
       <div class="sheet-hint">
         说明：成本合计 = 人工费 + 差旅费 + 业务招待费 + 外协费 + 管理费（不含税费）；
-        净利润 = 投资金额 − 成本合计 − 税费；净利润率 = 净利润 ÷ 投资金额。金额单位万元，精确到分（0.000001万 = 0.01元）。
+        净利润 = 投资金额 − 成本合计 − 税费；净利润率 = 净利润 ÷ 投资金额。金额单位元，精确到分（0.01元）。
       </div>
     </div>
   </div>
@@ -244,13 +244,13 @@ const rows = [
 
 const totalCost = computed(() =>
   Number((form.cost_labor + form.cost_travel + form.cost_entertain
-    + form.cost_outsource + form.cost_manage).toFixed(6)))
+    + form.cost_outsource + form.cost_manage).toFixed(2)))
 const actualTotalCost = computed(() =>
   Number((actualForm.actual_cost_labor + actualForm.actual_cost_travel + actualForm.actual_cost_entertain
-    + actualForm.actual_cost_outsource + actualForm.actual_cost_manage).toFixed(6)))
-const investment = computed(() => Number(((current.value?.total_amt || 0) / 10000).toFixed(6)))
-const netProfit = computed(() => Number((investment.value - totalCost.value - form.cost_tax).toFixed(6)))
-const actualNetProfit = computed(() => Number((investment.value - actualTotalCost.value - actualForm.actual_cost_tax).toFixed(6)))
+    + actualForm.actual_cost_outsource + actualForm.actual_cost_manage).toFixed(2)))
+const investment = computed(() => Number(((current.value?.total_amt || 0)).toFixed(2)))
+const netProfit = computed(() => Number((investment.value - totalCost.value - form.cost_tax).toFixed(2)))
+const actualNetProfit = computed(() => Number((investment.value - actualTotalCost.value - actualForm.actual_cost_tax).toFixed(2)))
 const netMargin = computed(() =>
   investment.value > 0 ? ((netProfit.value / investment.value) * 100).toFixed(2) : '0.00')
 const actualNetMargin = computed(() =>
@@ -258,7 +258,7 @@ const actualNetMargin = computed(() =>
 
 const fmt = (v) => {
   const n = Number(v || 0)
-  return n.toFixed(6).replace(/\.?0+$/, '')
+  return n.toFixed(2)
 }
 
 const hasCost = (c) =>
@@ -285,14 +285,14 @@ const onSelectContract = async (id) => {
     const res = await api.get(`/contracts/${id}`)
     if (res.code === 200 && res.data) {
       current.value = res.data
-      // 计划成本（元→万元）
+      // 计划成本（按元回填）
       Object.assign(form, {
-        cost_labor: (Number(res.data.cost_labor) || 0) / 10000,
-        cost_travel: (Number(res.data.cost_travel) || 0) / 10000,
-        cost_entertain: (Number(res.data.cost_entertain) || 0) / 10000,
-        cost_outsource: (Number(res.data.cost_outsource) || 0) / 10000,
-        cost_manage: (Number(res.data.cost_manage) || 0) / 10000,
-        cost_tax: (Number(res.data.cost_tax) || 0) / 10000
+        cost_labor: (Number(res.data.cost_labor) || 0),
+        cost_travel: (Number(res.data.cost_travel) || 0),
+        cost_entertain: (Number(res.data.cost_entertain) || 0),
+        cost_outsource: (Number(res.data.cost_outsource) || 0),
+        cost_manage: (Number(res.data.cost_manage) || 0),
+        cost_tax: (Number(res.data.cost_tax) || 0)
       })
       let rk = {}
       try { rk = res.data.cost_remark ? JSON.parse(res.data.cost_remark) : {} } catch { rk = {} }
@@ -300,14 +300,14 @@ const onSelectContract = async (id) => {
         labor: rk.labor || '', travel: rk.travel || '', entertain: rk.entertain || '',
         outsource: rk.outsource || '', manage: rk.manage || '', tax: rk.tax || ''
       }
-      // 实际成本（元→万元）
+      // 实际成本（按元回填）
       Object.assign(actualForm, {
-        actual_cost_labor: (Number(res.data.actual_cost_labor) || 0) / 10000,
-        actual_cost_travel: (Number(res.data.actual_cost_travel) || 0) / 10000,
-        actual_cost_entertain: (Number(res.data.actual_cost_entertain) || 0) / 10000,
-        actual_cost_outsource: (Number(res.data.actual_cost_outsource) || 0) / 10000,
-        actual_cost_manage: (Number(res.data.actual_cost_manage) || 0) / 10000,
-        actual_cost_tax: (Number(res.data.actual_cost_tax) || 0) / 10000
+        actual_cost_labor: (Number(res.data.actual_cost_labor) || 0),
+        actual_cost_travel: (Number(res.data.actual_cost_travel) || 0),
+        actual_cost_entertain: (Number(res.data.actual_cost_entertain) || 0),
+        actual_cost_outsource: (Number(res.data.actual_cost_outsource) || 0),
+        actual_cost_manage: (Number(res.data.actual_cost_manage) || 0),
+        actual_cost_tax: (Number(res.data.actual_cost_tax) || 0)
       })
       // 实际备注 JSON
       const ar = emptyActualRemarks()
@@ -351,22 +351,22 @@ const save = async () => {
     const payload = {}
     // 计划列（仅有权限时提交）
     if (canEditPlan) {
-      payload.cost_labor = Math.round(form.cost_labor * 10000 * 100) / 100
-      payload.cost_travel = Math.round(form.cost_travel * 10000 * 100) / 100
-      payload.cost_entertain = Math.round(form.cost_entertain * 10000 * 100) / 100
-      payload.cost_outsource = Math.round(form.cost_outsource * 10000 * 100) / 100
-      payload.cost_manage = Math.round(form.cost_manage * 10000 * 100) / 100
-      payload.cost_tax = Math.round(form.cost_tax * 10000 * 100) / 100
+      payload.cost_labor = Math.round(form.cost_labor * 100) / 100
+      payload.cost_travel = Math.round(form.cost_travel * 100) / 100
+      payload.cost_entertain = Math.round(form.cost_entertain * 100) / 100
+      payload.cost_outsource = Math.round(form.cost_outsource * 100) / 100
+      payload.cost_manage = Math.round(form.cost_manage * 100) / 100
+      payload.cost_tax = Math.round(form.cost_tax * 100) / 100
       payload.cost_remark = JSON.stringify(remarks.value)
     }
     // 实际列
     if (canEditActual) {
-      payload.actual_cost_labor = Math.round(actualForm.actual_cost_labor * 10000 * 100) / 100
-      payload.actual_cost_travel = Math.round(actualForm.actual_cost_travel * 10000 * 100) / 100
-      payload.actual_cost_entertain = Math.round(actualForm.actual_cost_entertain * 10000 * 100) / 100
-      payload.actual_cost_outsource = Math.round(actualForm.actual_cost_outsource * 10000 * 100) / 100
-      payload.actual_cost_manage = Math.round(actualForm.actual_cost_manage * 10000 * 100) / 100
-      payload.actual_cost_tax = Math.round(actualForm.actual_cost_tax * 10000 * 100) / 100
+      payload.actual_cost_labor = Math.round(actualForm.actual_cost_labor * 100) / 100
+      payload.actual_cost_travel = Math.round(actualForm.actual_cost_travel * 100) / 100
+      payload.actual_cost_entertain = Math.round(actualForm.actual_cost_entertain * 100) / 100
+      payload.actual_cost_outsource = Math.round(actualForm.actual_cost_outsource * 100) / 100
+      payload.actual_cost_manage = Math.round(actualForm.actual_cost_manage * 100) / 100
+      payload.actual_cost_tax = Math.round(actualForm.actual_cost_tax * 100) / 100
       payload.actual_cost_remark = JSON.stringify(actualRemarks.value)
     }
     const res = await api.put(`/contracts/${contractId.value}/cost`, payload)

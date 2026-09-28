@@ -360,7 +360,8 @@ def get_alerts():
 
     if user_can(username, 'data.view_all'):
         cursor.execute("""
-            SELECT c.id, c.contract_name, c.expected_income_date, c.total_amt, c.paid_amt, c.owner_id, u.name as owner_name
+            SELECT c.id, c.contract_name, c.expected_income_date, c.total_amt, c.paid_amt, c.tax_amount, c.owner_id, u.name as owner_name,
+            COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) as accepted
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
             WHERE c.status = '执行中' AND c.expected_income_date IS NOT NULL AND c.expected_income_date != ''
@@ -374,7 +375,7 @@ def get_alerts():
                 'title': '回款预警',
                 'detail': f"合同「{row['contract_name']}」预计回款日期即将到期",
                 'due_date': row['expected_income_date'],
-                'amount': (row['total_amt'] - row['paid_amt']) / 10000 if row['total_amt'] else 0,
+                'amount': (row['accepted'] + float(row['tax_amount'] or 0) - row['paid_amt']) if row['accepted'] else 0,
                 'owner': row['owner_name'],
                 'contract_id': row['id']
             })
@@ -420,7 +421,8 @@ def get_alerts():
             })
     else:
         cursor.execute("""
-            SELECT c.id, c.contract_name, c.expected_income_date, c.total_amt, c.paid_amt, c.owner_id, u.name as owner_name
+            SELECT c.id, c.contract_name, c.expected_income_date, c.total_amt, c.paid_amt, c.tax_amount, c.owner_id, u.name as owner_name,
+            COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) as accepted
             FROM contracts c
             LEFT JOIN users u ON c.owner_id = u.username
             WHERE c.status = '执行中' AND c.owner_id = ?
@@ -435,7 +437,7 @@ def get_alerts():
                 'title': '回款预警',
                 'detail': f"合同「{row['contract_name']}」预计回款日期即将到期",
                 'due_date': row['expected_income_date'],
-                'amount': (row['total_amt'] - row['paid_amt']) / 10000 if row['total_amt'] else 0,
+                'amount': (row['accepted'] + float(row['tax_amount'] or 0) - row['paid_amt']) if row['accepted'] else 0,
                 'owner': row['owner_name'],
                 'contract_id': row['id']
             })

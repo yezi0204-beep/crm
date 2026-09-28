@@ -297,8 +297,8 @@
         
         <el-row :gutter="20">
           <el-col :span="12">
-            <el-form-item label="合同总额(万)" prop="total_amt">
-              <el-input-number v-model="contractForm.total_amt" :min="0" :step="0.01" :precision="6" />
+            <el-form-item label="合同总额(元)" prop="total_amt">
+              <el-input-number v-model="contractForm.total_amt" :min="0" :step="0.01" :precision="2" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -318,26 +318,26 @@
 
         <el-row :gutter="20">
           <el-col :span="8">
-            <el-form-item label="含税收入(万)">
-              <el-input-number v-model="contractForm.income" :min="0" :step="0.01" :precision="6" />
+            <el-form-item label="含税收入(元)">
+              <el-input-number v-model="contractForm.income" :min="0" :step="0.01" :precision="2" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="税额(万)">
-              <el-input-number v-model="contractForm.tax_amount" :min="0" :step="0.01" :precision="6" />
+            <el-form-item label="税额(元)">
+              <el-input-number v-model="contractForm.tax_amount" :min="0" :step="0.01" :precision="2" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="待验收合同额(万)">
-              <el-input-number v-model="contractForm.pending_acceptance_amount" :min="0" :step="0.01" :precision="6" />
+            <el-form-item label="待验收合同额(元)">
+              <el-input-number v-model="contractForm.pending_acceptance_amount" :min="0" :step="0.01" :precision="2" />
             </el-form-item>
           </el-col>
         </el-row>
 
         <el-row :gutter="20">
           <el-col :span="8">
-            <el-form-item label="预计毛利(万)">
-              <el-input-number v-model="contractForm.estimated_gross_profit" :min="0" :step="0.01" :precision="6" />
+            <el-form-item label="预计毛利(元)">
+              <el-input-number v-model="contractForm.estimated_gross_profit" :min="0" :step="0.01" :precision="2" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -503,7 +503,7 @@
         <p class="import-tip">
           <strong>导入说明：</strong><br>
           1. 请使用Excel文件（.xlsx/.xls格式）<br>
-          2. 必须包含以下列：合同编号、合同名称、合同总额(万)<br>
+          2. 必须包含以下列：合同编号、合同名称、合同总额(元)<br>
           3. 可选列：甲方、项目令号、签约日期、业态、密级、负责人、验收节点、回款节点<br>
           4. 合同编号必须唯一，重复编号将无法导入
         </p>
@@ -522,9 +522,9 @@
             <el-table-column prop="data.contract_no" label="合同编号" width="150" />
             <el-table-column prop="data.contract_name" label="合同名称" width="150" />
             <el-table-column prop="data.party_a" label="甲方" width="120" />
-            <el-table-column prop="data.total_amt" label="合同总额(万)" width="120">
+            <el-table-column prop="data.total_amt" label="合同总额(元)" width="120">
               <template #default="scope">
-                {{ Number(((scope.row.data.total_amt || 0) / 10000).toFixed(6)) }}
+                {{ Number((scope.row.data.total_amt || 0).toFixed(2)) }}
               </template>
             </el-table-column>
             <el-table-column prop="valid" label="状态" width="100">
@@ -746,14 +746,14 @@
         <el-table-column prop="month" label="月份" width="80" align="center">
           <template #default="{ row }">{{ row.month }}月</template>
         </el-table-column>
-        <el-table-column label="预计验收金额(万元)" align="center">
+        <el-table-column label="预计验收金额(元)" align="center">
           <template #default="{ row }">
-            <el-input-number v-model="row.expected_acceptance" :min="0" :step="1" :precision="6" controls-position="right" style="width: 100%;" />
+            <el-input-number v-model="row.expected_acceptance" :min="0" :step="1" :precision="2" controls-position="right" style="width: 100%;" />
           </template>
         </el-table-column>
-        <el-table-column label="预计回款金额(万元)" align="center">
+        <el-table-column label="预计回款金额(元)" align="center">
           <template #default="{ row }">
-            <el-input-number v-model="row.expected_payment" :min="0" :step="1" :precision="6" controls-position="right" style="width: 100%;" />
+            <el-input-number v-model="row.expected_payment" :min="0" :step="1" :precision="2" controls-position="right" style="width: 100%;" />
           </template>
         </el-table-column>
       </el-table>
@@ -806,12 +806,12 @@ const allColumns = [
   { prop: 'contract_no', label: '合同编号', width: 130 },
   { prop: 'project_order_no', label: '项目令号', width: 120 },
   { prop: 'party_a', label: '甲方', width: '', minWidth: 140 },
-  { prop: 'total_amt', label: '合同总额(万)', width: 110 },
-  { prop: 'income', label: '含税收入(万)', width: 110 },
-  { prop: 'tax_amount', label: '税额(万)', width: 110 },
-  { prop: 'pending_acceptance_amount', label: '待验收合同额(万)', width: 140 },
-  { prop: 'paid_amt', label: '已回款(万)', width: 110 },
-  { prop: 'pending_amt', label: '待回款(万)', width: 110 },
+  { prop: 'total_amt', label: '合同总额(元)', width: 110 },
+  { prop: 'income', label: '含税收入(元)', width: 110 },
+  { prop: 'tax_amount', label: '税额(元)', width: 110 },
+  { prop: 'pending_acceptance_amount', label: '待验收合同额(元)', width: 140 },
+  { prop: 'paid_amt', label: '已回款(元)', width: 110 },
+  { prop: 'pending_amt', label: '待回款(元)', width: 110 },
   ...(isAppCenterDirector.value ? [{ prop: 'estimated_hours', label: '预计工时', width: 100 }] : []),
   { prop: 'sign_date', label: '签约日期', width: 110 },
   { prop: 'business_type', label: '业态', width: 90 },
@@ -1024,7 +1024,7 @@ async function loadForecast() {
       forecastRows.value = Array.from({ length: 12 }, (_, i) => {
         const m = i + 1
         const saved = map[m]
-        // 填报数据以万元存储，前端直接按万元展示
+        // 填报数据以元存储，前端直接按元展示
         return {
           month: m,
           expected_acceptance: saved ? Number(saved.expected_acceptance) || 0 : 0,
@@ -1043,24 +1043,24 @@ function fillFromContract() {
   // 待验收额：合同总额 - 已验收含税收入
   const income = Number(row.income || 0)
   const pendingAcc = Math.max(0, totalAmt - income)
-  // 待回款额
-  const pendingPay = Math.max(0, totalAmt - paidAmt)
-  // 从当前月起均分到年底（合同额单位为元，填报单位为万元，需 /10000）
+  // 待回款额 = 含税收入(累计验收额+税额) - 已回款
+  const pendingPay = Math.max(0, income - paidAmt)
+  // 从当前月起均分到年底（合同额单位为元，填报单位为元）
   const nowMonth = new Date().getMonth() + 1
   const remainMonths = 13 - nowMonth
   if (remainMonths > 0) {
-    const accPer = pendingAcc / remainMonths / 10000
-    const payPer = pendingPay / remainMonths / 10000
+    const accPer = pendingAcc / remainMonths
+    const payPer = pendingPay / remainMonths
     forecastRows.value.forEach(r => {
       if (r.month >= nowMonth) {
-        r.expected_acceptance = Math.round(accPer * 1e6) / 1e6
-        r.expected_payment = Math.round(payPer * 1e6) / 1e6
+        r.expected_acceptance = Math.round(accPer * 100) / 100
+        r.expected_payment = Math.round(payPer * 100) / 100
       } else {
         r.expected_acceptance = 0
         r.expected_payment = 0
       }
     })
-    ElMessage.success(`已将待验收 ${Number((pendingAcc / 10000).toFixed(6))} 万元、待回款 ${Number((pendingPay / 10000).toFixed(6))} 万元均分到 ${nowMonth}月-12月`)
+    ElMessage.success(`已将待验收 ${Number(pendingAcc.toFixed(2))} 元、待回款 ${Number(pendingPay.toFixed(2))} 元均分到 ${nowMonth}月-12月`)
   } else {
     ElMessage.warning('当前已是12月，无法均分')
   }
@@ -1070,11 +1070,11 @@ async function saveForecast() {
   if (!forecastContract.value) return
   savingForecast.value = true
   try {
-    // 前端按万元录入，后端同样以万元存储
+    // 前端按元录入，后端同样以元存储
     const items = forecastRows.value.map(r => ({
       month: r.month,
-      expected_acceptance: Math.round((Number(r.expected_acceptance) || 0) * 1e6) / 1e6,
-      expected_payment: Math.round((Number(r.expected_payment) || 0) * 1e6) / 1e6,
+      expected_acceptance: Math.round((Number(r.expected_acceptance) || 0) * 100) / 100,
+      expected_payment: Math.round((Number(r.expected_payment) || 0) * 100) / 100,
       note: r.note || ''
     }))
     const res = await api.post(`/contracts/${forecastContract.value.id}/forecast`, {
@@ -1185,8 +1185,8 @@ const rules = {
 }
 
 const formatAmount = (value) => {
-  // 元 → 万元，精确到分：0.000001万元 = 0.01元，去尾零显示
-  return Number(((value || 0) / 10000).toFixed(6))
+  // 按元展示，精确到分
+  return Number((value || 0).toFixed(2))
 }
 
 // 按元格式化（千分位），用于分成/验收弹窗
@@ -1195,9 +1195,10 @@ const formatYuan = (value) => {
 }
 
 const getPendingAmt = (row) => {
-  const total = row.total_amt || 0
+  // 待回款 = 含税收入(累计验收额+税额) - 已回款
+  const income = row.income || 0
   const paid = row.paid_amt || 0
-  return Math.max(0, total - paid)
+  return Math.max(0, income - paid)
 }
 
 const handleImportParse = (response) => {
@@ -1251,8 +1252,8 @@ const closeImportModal = () => {
 }
 
 const sortPendingAmount = (a, b) => {
-  const pendingA = (a.total_amt || 0) - (a.paid_amt || 0)
-  const pendingB = (b.total_amt || 0) - (b.paid_amt || 0)
+  const pendingA = a.pending_amt || 0
+  const pendingB = b.pending_amt || 0
   return pendingA - pendingB
 }
 
@@ -1369,11 +1370,11 @@ const saveContract = async () => {
     if (valid) {
       const payload = {
         ...contractForm,
-        total_amt: (contractForm.total_amt || 0) * 10000,
-        income: (contractForm.income || 0) * 10000,
-        tax_amount: (contractForm.tax_amount || 0) * 10000,
-        pending_acceptance_amount: (contractForm.pending_acceptance_amount || 0) * 10000,
-        estimated_gross_profit: (contractForm.estimated_gross_profit || 0) * 10000
+        total_amt: (contractForm.total_amt || 0),
+        income: (contractForm.income || 0),
+        tax_amount: (contractForm.tax_amount || 0),
+        pending_acceptance_amount: (contractForm.pending_acceptance_amount || 0),
+        estimated_gross_profit: (contractForm.estimated_gross_profit || 0)
       }
       
       if (!contractForm.id) {
@@ -1406,12 +1407,12 @@ const saveContract = async () => {
 
 const editContract = (row) => {
   Object.assign(contractForm, row)
-  // 数值字段：元→万元
-  contractForm.total_amt = (row.total_amt || 0) / 10000
-  contractForm.income = (row.income || 0) / 10000
-  contractForm.tax_amount = (row.tax_amount || 0) / 10000
-  contractForm.pending_acceptance_amount = (row.pending_acceptance_amount || 0) / 10000
-  contractForm.estimated_gross_profit = (row.estimated_gross_profit || 0) / 10000
+  // 数值字段：按元回填
+  contractForm.total_amt = (row.total_amt || 0)
+  contractForm.income = (row.income || 0)
+  contractForm.tax_amount = (row.tax_amount || 0)
+  contractForm.pending_acceptance_amount = (row.pending_acceptance_amount || 0)
+  contractForm.estimated_gross_profit = (row.estimated_gross_profit || 0)
   // 文本字段：null/undefined 统一为空串，避免把 NULL 回写覆盖原数据
   const textFields = ['contract_name', 'contract_no', 'party_a', 'project_order_no', 'sign_date',
     'business_type', 'business_direction', 'classification', 'status', 'owner_id', 'cust_id', 'b_id',
@@ -1525,9 +1526,9 @@ const exportContracts = () => {
     const rowData = exportColumns.map(col => {
       let value = row[col.prop]
       if (col.prop === 'total_amt' || col.prop === 'paid_amt' || col.prop === 'income' || col.prop === 'pending_acceptance_amount') {
-        value = ((value || 0) / 10000).toFixed(6)
+        value = (value || 0).toFixed(2)
       } else if (col.prop === 'pending_amt') {
-        value = (((row.total_amt || 0) - (row.paid_amt || 0)) / 10000).toFixed(6)
+        value = (row.pending_amt || 0).toFixed(2)
       }
       return escapeCsvValue(value)
     })

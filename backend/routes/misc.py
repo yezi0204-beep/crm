@@ -280,7 +280,7 @@ def get_projects():
                b.created_at as start_date, b.predict_date as end_date,
                b.stage, b.status, b.project_manager as manager,
                b.owner_id, u.name as owner_name,
-               b.amount, b.probability
+               b.amount, b.probability, b.cust_id, b.note
         FROM business b
         LEFT JOIN customers c ON b.cust_id = c.id
         LEFT JOIN users u ON b.owner_id = u.username
@@ -532,7 +532,7 @@ def process_question_rule(question, cursor, payload):
 
 def get_contracts_near_expiry(cursor):
     cursor.execute("""
-        SELECT contract_name, expected_income_date, total_amt, (total_amt - paid_amt) as pending_amt
+        SELECT contract_name, expected_income_date, total_amt, (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) as pending_amt
         FROM contracts
         WHERE status='执行中' AND expected_income_date IS NOT NULL AND expected_income_date != ''
         ORDER BY expected_income_date ASC LIMIT 5
@@ -546,17 +546,17 @@ def get_contracts_near_expiry(cursor):
     for row in rows:
         result += f"• <strong>{row['contract_name']}</strong><br>"
         result += f"  预计回款日期：{row['expected_income_date']}<br>"
-        result += f"  合同总额：{row['total_amt']/10000:.2f}万元，待回款：{row['pending_amt']/10000:.2f}万元<br><br>"
+        result += f"  合同总额：{row['total_amt']:.2f}元，待回款：{row['pending_amt']:.2f}元<br><br>"
 
     return result
 
 
 def get_top_pending_customer(cursor):
     cursor.execute("""
-        SELECT c.company, SUM(ct.total_amt - ct.paid_amt) as total_pending
+        SELECT c.company, SUM(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=ct.id), 0) + COALESCE(ct.tax_amount, 0) - COALESCE(ct.paid_amt, 0)) as total_pending
         FROM contracts ct
         JOIN customers c ON ct.party_a = c.company
-        WHERE ct.status='执行中' AND (ct.total_amt - ct.paid_amt) > 0
+        WHERE ct.status='执行中' AND (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=ct.id), 0) + COALESCE(ct.tax_amount, 0) - COALESCE(ct.paid_amt, 0)) > 0
         GROUP BY c.company
         ORDER BY total_pending DESC LIMIT 5
     """)
@@ -567,16 +567,16 @@ def get_top_pending_customer(cursor):
 
     result = '<strong>待回款金额最高的客户：</strong><br><br>'
     for i, row in enumerate(rows, 1):
-        result += f"{i}. <strong>{row['company']}</strong>：待回款 {row['total_pending']/10000:.2f} 万元<br>"
+        result += f"{i}. <strong>{row['company']}</strong>：待回款 {row['total_pending']:.2f} 元<br>"
 
     return result
 
 
 def get_top_pending_contract(cursor):
     cursor.execute("""
-        SELECT contract_name, party_a, (total_amt - paid_amt) as pending_amt, total_amt
+        SELECT contract_name, party_a, (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) as pending_amt, total_amt
         FROM contracts
-        WHERE status='执行中' AND (total_amt - paid_amt) > 0
+        WHERE status='执行中' AND (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) > 0
         ORDER BY pending_amt DESC LIMIT 5
     """)
     rows = cursor.fetchall()
@@ -588,7 +588,7 @@ def get_top_pending_contract(cursor):
     for i, row in enumerate(rows, 1):
         result += f"{i}. <strong>{row['contract_name']}</strong><br>"
         result += f"  甲方：{row['party_a']}<br>"
-        result += f"  待回款：{row['pending_amt']/10000:.2f} 万元（总额：{row['total_amt']/10000:.2f} 万元）<br><br>"
+        result += f"  待回款：{row['pending_amt']:.2f} 元（总额：{row['total_amt']:.2f} 元）<br><br>"
 
     return result
 
@@ -640,7 +640,7 @@ def get_top_contract_by_amount(cursor):
 
     return f"合同总额最高的项目是：<strong>{row['contract_name']}</strong><br>" \
            f"甲方：{row['party_a']}<br>" \
-           f"合同金额：<strong>{row['total_amt']/10000:.2f} 万元</strong><br>" \
+           f"合同金额：<strong>{row['total_amt']:.2f} 元</strong><br>" \
            f"签约日期：{row['sign_date']}"
 
 
@@ -658,14 +658,14 @@ def get_total_payments(cursor):
     cursor.execute("SELECT SUM(amount) as total FROM payment_records")
     total = cursor.fetchone()['total'] or 0
 
-    return f"累计回款总额：<strong>{total/10000:.2f} 万元</strong>。"
+    return f"累计回款总额：<strong>{total:.2f} 元</strong>。"
 
 
 def get_total_pending(cursor):
-    cursor.execute("SELECT SUM(total_amt - paid_amt) as total FROM contracts WHERE status='执行中'")
+    cursor.execute("SELECT SUM(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) as total FROM contracts WHERE status='执行中'")
     total = cursor.fetchone()['total'] or 0
 
-    return f"所有执行中合同的待回款总额：<strong>{total/10000:.2f} 万元</strong>。"
+    return f"所有执行中合同的待回款总额：<strong>{total:.2f} 元</strong>。"
 
 
 def get_weekly_plan(cursor, username):
@@ -708,7 +708,7 @@ def get_next_week_plan(cursor, username):
 
 def get_contracts_near_expiry_raw(cursor):
     cursor.execute("""
-        SELECT contract_name, expected_income_date, total_amt, (total_amt - paid_amt) as pending_amt
+        SELECT contract_name, expected_income_date, total_amt, (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) as pending_amt
         FROM contracts
         WHERE status='执行中' AND expected_income_date IS NOT NULL AND expected_income_date != ''
         ORDER BY expected_income_date ASC LIMIT 5
@@ -719,10 +719,10 @@ def get_contracts_near_expiry_raw(cursor):
 
 def get_top_pending_customer_raw(cursor):
     cursor.execute("""
-        SELECT c.company, SUM(ct.total_amt - ct.paid_amt) as total_pending
+        SELECT c.company, SUM(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=ct.id), 0) + COALESCE(ct.tax_amount, 0) - COALESCE(ct.paid_amt, 0)) as total_pending
         FROM contracts ct
         JOIN customers c ON ct.party_a = c.company
-        WHERE ct.status='执行中' AND (ct.total_amt - ct.paid_amt) > 0
+        WHERE ct.status='执行中' AND (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=ct.id), 0) + COALESCE(ct.tax_amount, 0) - COALESCE(ct.paid_amt, 0)) > 0
         GROUP BY c.company
         ORDER BY total_pending DESC LIMIT 5
     """)
@@ -732,9 +732,9 @@ def get_top_pending_customer_raw(cursor):
 
 def get_top_pending_contract_raw(cursor):
     cursor.execute("""
-        SELECT contract_name, party_a, (total_amt - paid_amt) as pending_amt, total_amt
+        SELECT contract_name, party_a, (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) as pending_amt, total_amt
         FROM contracts
-        WHERE status='执行中' AND (total_amt - paid_amt) > 0
+        WHERE status='执行中' AND (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) > 0
         ORDER BY pending_amt DESC LIMIT 5
     """)
     rows = cursor.fetchall()
@@ -787,7 +787,7 @@ def get_total_payments_raw(cursor):
 
 
 def get_total_pending_raw(cursor):
-    cursor.execute("SELECT SUM(total_amt - paid_amt) as total FROM contracts WHERE status='执行中'")
+    cursor.execute("SELECT SUM(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) as total FROM contracts WHERE status='执行中'")
     total = cursor.fetchone()['total'] or 0
     return json.dumps({'total': total}, ensure_ascii=False)
 

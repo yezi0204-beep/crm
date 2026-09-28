@@ -30,11 +30,11 @@
       <div class="forecast-summary">
         <div class="summary-item">
           <div class="summary-label">加权预测总额</div>
-          <div class="summary-value primary">¥{{ forecastData.total_forecast || 0 }} <span class="unit">万</span></div>
+          <div class="summary-value primary">¥{{ forecastData.total_forecast || 0 }} <span class="unit">元</span></div>
         </div>
         <div class="summary-item">
           <div class="summary-label">已签约金额</div>
-          <div class="summary-value success">¥{{ forecastData.total_signed || 0 }} <span class="unit">万</span></div>
+          <div class="summary-value success">¥{{ forecastData.total_signed || 0 }} <span class="unit">元</span></div>
         </div>
         <div class="summary-item">
           <div class="summary-label">预测准确率</div>
@@ -55,7 +55,7 @@
           <el-table :data="conversionData.stages" stripe size="small" style="margin-top: 12px;">
             <el-table-column prop="name" label="阶段" width="100" />
             <el-table-column prop="count" label="商机数" width="80" align="center" />
-            <el-table-column label="商机金额(万)" width="120" align="right">
+            <el-table-column label="商机金额(元)" width="120" align="right">
               <template #default="scope">{{ formatAmount(scope.row.amount) }}</template>
             </el-table-column>
             <el-table-column label="转化率" width="100" align="center">
@@ -115,17 +115,17 @@
         <el-table-column prop="name" label="负责人" width="100" />
         <el-table-column prop="role" label="角色" width="80" />
         <el-table-column prop="business_count" label="商机数" width="80" align="center" />
-        <el-table-column label="商机金额(万)" width="120" align="right">
+        <el-table-column label="商机金额(元)" width="120" align="right">
           <template #default="scope">{{ formatAmount(scope.row.business_amount) }}</template>
         </el-table-column>
         <el-table-column prop="contract_count" label="合同数" width="80" align="center" />
-        <el-table-column label="合同金额(万)" width="120" align="right">
+        <el-table-column label="合同金额(元)" width="120" align="right">
           <template #default="scope">{{ formatAmount(scope.row.contract_amount) }}</template>
         </el-table-column>
-        <el-table-column label="回款金额(万)" width="120" align="right">
+        <el-table-column label="回款金额(元)" width="120" align="right">
           <template #default="scope">{{ formatAmount(scope.row.payment_amount) }}</template>
         </el-table-column>
-        <el-table-column label="加权预测(万)" width="120" align="right">
+        <el-table-column label="加权预测(元)" width="120" align="right">
           <template #default="scope">{{ formatAmount(scope.row.forecast_amount) }}</template>
         </el-table-column>
         <el-table-column label="胜率" width="80" align="center">
@@ -345,9 +345,9 @@ import * as echarts from 'echarts'
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.has('data.view_all'))
 
-// 金额格式化：元 → 万元，精确到分需保留6位小数（0.000001万元 = 0.01元），去尾零显示
+// 金额格式化：元，保留2位小数
 const formatAmount = (value) => {
-  return Number(((value || 0) / 10000).toFixed(6))
+  return Number((value || 0).toFixed(2))
 }
 
 // 年份选择
@@ -465,16 +465,16 @@ const fetchTrendComparison = async () => {
         total_customers: '新增客户数',
         total_business: '新增商机数',
         total_contracts: '新增合同数',
-        contracts_amount: '合同总额(万)',
-        total_payments: '回款总额(万)'
+        contracts_amount: '合同总额(元)',
+        total_payments: '回款总额(元)'
       }
       trendMetrics.value = Object.entries(res.data.metrics).map(([key, val]) => {
         const isAmount = key === 'contracts_amount' || key === 'total_payments'
         return {
           key,
           label: labelMap[key] || key,
-          current: isAmount ? Number((val.current / 10000).toFixed(6)) : val.current,
-          previous: isAmount ? Number((val.previous / 10000).toFixed(6)) : val.previous,
+          current: isAmount ? Number((val.current || 0).toFixed(2)) : val.current,
+          previous: isAmount ? Number((val.previous || 0).toFixed(2)) : val.previous,
           growth_rate: val.growth_rate
         }
       })
@@ -712,14 +712,14 @@ const updateForecastChart = () => {
     tooltip: { trigger: 'axis', formatter: (params) => {
       let html = params[0].axisValue + '<br/>'
       params.forEach(p => {
-        html += `${p.marker} ${p.seriesName}: ¥${p.value} 万<br/>`
+        html += `${p.marker} ${p.seriesName}: ¥${p.value} 元<br/>`
       })
       return html
     }},
     legend: { data: ['加权预测', '已签约'], bottom: 0 },
     grid: { left: '3%', right: '4%', bottom: '12%', containLabel: true },
     xAxis: { type: 'category', data: forecastData.value.months },
-    yAxis: { type: 'value', name: '万元' },
+    yAxis: { type: 'value', name: '元' },
     series: [
       { name: '加权预测', type: 'bar', data: forecastData.value.forecast_data, itemStyle: { color: '#5470c6' } },
       { name: '已签约', type: 'bar', data: forecastData.value.signed_data, itemStyle: { color: '#91cc75' } }
@@ -734,7 +734,7 @@ const updateConversionChart = () => {
   conversionChartInstance.setOption({
     tooltip: { trigger: 'item', formatter: (p) => {
       const stage = stages[p.dataIndex] || {}
-      return `${p.name}<br/>商机数: ${stage.count || 0} 个<br/>金额: ${Number(((stage.amount || 0) / 10000).toFixed(6))} 万<br/>转化率: ${stage.conversion_rate || 0}%<br/>流失率: ${stage.drop_rate || 0}%`
+      return `${p.name}<br/>商机数: ${stage.count || 0} 个<br/>金额: ${Number((stage.amount || 0).toFixed(2))} 元<br/>转化率: ${stage.conversion_rate || 0}%<br/>流失率: ${stage.drop_rate || 0}%`
     }},
     series: [{
       name: '阶段转化',
@@ -771,7 +771,7 @@ const updateTeamChart = () => {
     legend: { data: ['商机金额', '合同金额', '回款金额'], bottom: 0 },
     grid: { left: '3%', right: '4%', bottom: '12%', containLabel: true },
     xAxis: { type: 'category', data: members.map(m => m.name), axisLabel: { rotate: 30 } },
-    yAxis: { type: 'value', name: '万元' },
+    yAxis: { type: 'value', name: '元' },
     series: [
       { name: '商机金额', type: 'bar', data: members.map(m => m.business_amount), itemStyle: { color: '#5470c6' } },
       { name: '合同金额', type: 'bar', data: members.map(m => m.contract_amount), itemStyle: { color: '#91cc75' } },

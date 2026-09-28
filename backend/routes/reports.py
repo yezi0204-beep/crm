@@ -261,8 +261,8 @@ def get_forecast():
         key = month_str
         data = month_map.get(key, {'forecast': 0, 'signed': 0})
         months.append(f"{m}月")
-        forecast_data.append(round(data['forecast'] / 10000, 1))  # 元→万元
-        signed_data.append(round(data['signed'] / 10000, 1))
+        forecast_data.append(round(data['forecast'], 1))
+        signed_data.append(round(data['signed'], 1))
 
     total_forecast = round(sum(forecast_data), 1)
     total_signed = round(sum(signed_data), 1)
@@ -329,7 +329,7 @@ def get_conversion():
             'key': stage['key'],
             'name': stage['name'],
             'count': count,
-            'amount': round(amount / 10000, 1),  # 万元
+            'amount': round(amount, 1),
             'conversion_rate': conversion_rate,
             'drop_rate': drop_rate
         })
@@ -408,11 +408,11 @@ def get_team_performance():
             'name': name,
             'role': b.get('role', ''),
             'business_count': b_count,
-            'business_amount': round((b.get('business_amount', 0) or 0) / 10000, 1),
+            'business_amount': round((b.get('business_amount', 0) or 0), 1),
             'contract_count': c.get('contract_count', 0) or 0,
-            'contract_amount': round((c.get('contract_amount', 0) or 0) / 10000, 1),
-            'payment_amount': round((p.get('payment_amount', 0) or 0) / 10000, 1),
-            'forecast_amount': round((b.get('forecast_amount', 0) or 0) / 10000, 1),
+            'contract_amount': round((c.get('contract_amount', 0) or 0), 1),
+            'payment_amount': round((p.get('payment_amount', 0) or 0), 1),
+            'forecast_amount': round((b.get('forecast_amount', 0) or 0), 1),
             'won_count': won_count,
             'win_rate': win_rate
         })
@@ -537,7 +537,7 @@ def get_insights():
                 'type': 'top_performer',
                 'severity': 'info',
                 'title': f"业绩之星：{top_row['owner_name']}",
-                'detail': f"{top_row['owner_name']} 本年合同总额 {top_row['contract_amount'] / 10000:.1f} 万元，签约 {top_row['contract_count']} 份",
+                'detail': f"{top_row['owner_name']} 本年合同总额 {top_row['contract_amount']:.1f} 元，签约 {top_row['contract_count']} 份",
                 'suggestion': "可分享其销售经验，或在团队内推广其方法论"
             })
 
@@ -562,7 +562,7 @@ def get_insights():
                     'type': 'risk_alert',
                     'severity': 'medium',
                     'title': f"风险预警：{row['owner_name']} 预测金额高但转化率低",
-                    'detail': f"{row['owner_name']} 加权预测 {row['forecast'] / 10000:.1f} 万元，但当前胜率仅 {win_rate:.1f}%（{row['biz_count']}个商机，已签 {row['won_count']}个）",
+                    'detail': f"{row['owner_name']} 加权预测 {row['forecast']:.1f} 元，但当前胜率仅 {win_rate:.1f}%（{row['biz_count']}个商机，已签 {row['won_count']}个）",
                     'suggestion': "建议复核其商机概率评估的合理性，或提供销售支持"
                 })
 
@@ -579,7 +579,7 @@ def get_insights():
             'type': 'opportunity',
             'severity': 'info',
             'title': f"成交机会：{opp_row['total']} 个高概率商机待签约",
-            'detail': f"有 {opp_row['total']} 个商机概率 ≥80% 但尚未签约，潜在金额 {opp_row['amount'] / 10000:.1f} 万元",
+            'detail': f"有 {opp_row['total']} 个商机概率 ≥80% 但尚未签约，潜在金额 {opp_row['amount']:.1f} 元",
             'suggestion': "建议优先推进这些商机，争取尽快签约落袋"
         })
 
@@ -630,7 +630,7 @@ def export_report():
     # Sheet 1: 销售预测
     ws1 = wb.active
     ws1.title = "销售预测"
-    ws1.append(["月份", "加权预测金额(万元)", "已签约金额(万元)"])
+    ws1.append(["月份", "加权预测金额(元)", "已签约金额(元)"])
     cursor.execute(f"""
         SELECT substr(predict_date, 1, 7) as month,
                SUM(amount * COALESCE(probability, 0) / 100.0) as forecast,
@@ -648,15 +648,15 @@ def export_report():
     for m in range(1, 13):
         month_str = f"{year}-{m:02d}"
         f_val, s_val = forecast_map.get(month_str, (0, 0))
-        ws1.append([f"{m}月", round(f_val / 10000, 2), round(s_val / 10000, 2)])
+        ws1.append([f"{m}月", round(f_val, 2), round(s_val, 2)])
         total_forecast += f_val
         total_signed += s_val
-    ws1.append(["合计", round(total_forecast / 10000, 2), round(total_signed / 10000, 2)])
+    ws1.append(["合计", round(total_forecast, 2), round(total_signed, 2)])
     _style_header(ws1)
 
     # Sheet 2: 阶段转化
     ws2 = wb.create_sheet("阶段转化")
-    ws2.append(["阶段", "商机数", "商机金额(万元)", "转化率(%)", "流失率(%)"])
+    ws2.append(["阶段", "商机数", "商机金额(元)", "转化率(%)", "流失率(%)"])
     cursor.execute(f"""
         SELECT probability, amount FROM business
         WHERE status = 'active' {owner_filter}
@@ -675,13 +675,13 @@ def export_report():
             prev = stage_counts[i - 1]
             conv = round(stage_counts[i] / prev * 100, 1) if prev > 0 else 0.0
             drop = round(100 - conv, 1) if prev > 0 else 100.0
-        ws2.append([stage['name'], stage_counts[i], round(stage_amounts[i] / 10000, 2), conv, drop])
+        ws2.append([stage['name'], stage_counts[i], round(stage_amounts[i], 2), conv, drop])
     _style_header(ws2)
 
     # Sheet 3: 团队业绩（仅主任/院长）
     if is_admin:
         ws3 = wb.create_sheet("团队业绩")
-        ws3.append(["负责人", "角色", "商机数", "商机金额(万元)", "合同数", "合同金额(万元)", "回款金额(万元)", "加权预测(万元)", "胜率(%)"])
+        ws3.append(["负责人", "角色", "商机数", "商机金额(元)", "合同数", "合同金额(元)", "回款金额(元)", "加权预测(元)", "胜率(%)"])
         cursor.execute("""
             SELECT u.name as owner_name, u.role,
                    COUNT(b.id) as biz_count,
@@ -727,10 +727,10 @@ def export_report():
             win_rate = round(won / b_count * 100, 1) if b_count > 0 else 0
             ws3.append([
                 name, b.get('role', ''),
-                b_count, round((b.get('biz_amount', 0) or 0) / 10000, 2),
-                c.get('contract_count', 0) or 0, round((c.get('contract_amount', 0) or 0) / 10000, 2),
-                round((p.get('payment_amount', 0) or 0) / 10000, 2),
-                round((b.get('forecast', 0) or 0) / 10000, 2),
+                b_count, round((b.get('biz_amount', 0) or 0), 2),
+                c.get('contract_count', 0) or 0, round((c.get('contract_amount', 0) or 0), 2),
+                round((p.get('payment_amount', 0) or 0), 2),
+                round((b.get('forecast', 0) or 0), 2),
                 win_rate
             ])
         _style_header(ws3)
@@ -859,7 +859,7 @@ def _generate_insights(cursor, role, username, is_admin, owner_filter, owner_par
                 'type': 'top_performer',
                 'severity': 'info',
                 'title': f"业绩之星：{top_row['owner_name']}",
-                'detail': f"{top_row['owner_name']} 本年合同总额 {top_row['contract_amount'] / 10000:.1f} 万元，签约 {top_row['contract_count']} 份",
+                'detail': f"{top_row['owner_name']} 本年合同总额 {top_row['contract_amount']:.1f} 元，签约 {top_row['contract_count']} 份",
                 'suggestion': "可分享其销售经验，或在团队内推广其方法论"
             })
 
@@ -884,7 +884,7 @@ def _generate_insights(cursor, role, username, is_admin, owner_filter, owner_par
                     'type': 'risk_alert',
                     'severity': 'medium',
                     'title': f"风险预警：{row['owner_name']} 预测金额高但转化率低",
-                    'detail': f"{row['owner_name']} 加权预测 {row['forecast'] / 10000:.1f} 万元，但当前胜率仅 {win_rate:.1f}%（{row['biz_count']}个商机，已签 {row['won_count']}个）",
+                    'detail': f"{row['owner_name']} 加权预测 {row['forecast']:.1f} 元，但当前胜率仅 {win_rate:.1f}%（{row['biz_count']}个商机，已签 {row['won_count']}个）",
                     'suggestion': "建议复核其商机概率评估的合理性，或提供销售支持"
                 })
 
@@ -901,7 +901,7 @@ def _generate_insights(cursor, role, username, is_admin, owner_filter, owner_par
             'type': 'opportunity',
             'severity': 'info',
             'title': f"成交机会：{opp_row['total']} 个高概率商机待签约",
-            'detail': f"有 {opp_row['total']} 个商机概率 ≥80% 但尚未签约，潜在金额 {opp_row['amount'] / 10000:.1f} 万元",
+            'detail': f"有 {opp_row['total']} 个商机概率 ≥80% 但尚未签约，潜在金额 {opp_row['amount']:.1f} 元",
             'suggestion': "建议优先推进这些商机，争取尽快签约落袋"
         })
 

@@ -70,8 +70,8 @@
         <el-input v-model="radarFilters.region" placeholder="地区" clearable style="width:100px" @keyup.enter="searchRadar" />
         <el-input v-model="radarFilters.buyer" placeholder="客户单位" clearable style="width:140px" @keyup.enter="searchRadar" />
         <el-input v-model="radarFilters.competitor" placeholder="竞争对手" clearable style="width:120px" @keyup.enter="searchRadar" />
-        <el-input v-model="radarFilters.budget_min" placeholder="预算≥(万)" clearable style="width:110px" />
-        <el-input v-model="radarFilters.budget_max" placeholder="预算≤(万)" clearable style="width:110px" />
+        <el-input v-model="radarFilters.budget_min" placeholder="预算≥(元)" clearable style="width:110px" />
+        <el-input v-model="radarFilters.budget_max" placeholder="预算≤(元)" clearable style="width:110px" />
         <el-date-picker v-model="radarDateRange" type="daterange" start-placeholder="发布开始" end-placeholder="发布结束"
                         value-format="YYYY-MM-DD" style="width:240px" />
         <el-button type="primary" @click="searchRadar">筛选</el-button>

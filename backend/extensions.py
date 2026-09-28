@@ -51,14 +51,14 @@ def auto_complete_if_paid_off(cursor, contract_id):
     """待回款归零的执行中合同自动标记为已完成。
 
     在回款新增/编辑/删除/导入及合同编辑（改合同额）后调用。
-    仅处理 total_amt > 0 的合同（未填合同额的无法判断，不联动）。
+    待回款 = 收入金额(累计验收额) + 税额 - 已回款金额 = 含税收入 - 已回款；仅处理有验收记录的合同。
     """
     try:
         cursor.execute("""
             UPDATE contracts SET status='已完成'
             WHERE id=? AND status='执行中'
-              AND COALESCE(total_amt, 0) > 0
-              AND COALESCE(total_amt, 0) - COALESCE(paid_amt, 0) <= 0
+              AND COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) > 0
+              AND COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0) <= 0
         """, (contract_id,))
     except Exception as e:
         print(f"[auto_complete] 合同 {contract_id} 回款完成状态联动失败: {e}")

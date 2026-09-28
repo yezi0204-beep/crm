@@ -780,9 +780,9 @@ def visit_recommendations():
         # 推荐理由
         reasons = []
         if business_amt > 0:
-            reasons.append(f'待跟进商机 {business_count} 个（{business_amt/10000:.1f}万）')
+            reasons.append(f'待跟进商机 {business_count} 个（{business_amt:.2f}元）')
         if contract_amt > 0:
-            reasons.append(f'历史合同额 {contract_amt/10000:.1f}万，客户价值高')
+            reasons.append(f'历史合同额 {contract_amt:.2f}元，客户价值高')
         if days_since >= 60:
             reasons.append(f'已 {days_since} 天未拜访，需维护客户关系')
         if visit_count == 0:

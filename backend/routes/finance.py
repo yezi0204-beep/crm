@@ -309,7 +309,7 @@ def import_parse_payments():
                         errors.append('金额不能为空')
                     else:
                         try:
-                            value = float(value) * 10000
+                            value = float(value)
                         except:
                             errors.append('金额格式错误')
                 elif key == 'payment_date':

@@ -216,7 +216,7 @@ def get_company_stats(name, db, days=365):
         dict: {
             'win_projects': 中标项目列表,
             'win_count': 中标数量,
-            'win_amount': 中标总金额(万),
+            'win_amount': 中标总金额(元),
             'top_customers': 主要客户,
             'top_industries': 主要行业,
             'top_regions': 主要区域,

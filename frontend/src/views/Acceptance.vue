@@ -66,8 +66,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right" v-if="canDelete">
+        <el-table-column label="操作" width="130" fixed="right" v-if="canDelete">
           <template #default="{ row }">
+            <el-button type="primary" size="small" link @click="openEditModal(row)">编辑</el-button>
             <el-button type="danger" size="small" link @click="deleteAcceptance(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -125,6 +126,63 @@
       <template #footer>
         <el-button @click="showAddModal = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submitAdd">确认新增</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 编辑验收记录弹窗 -->
+    <el-dialog v-model="showEditModal" title="编辑验收记录" width="640px" :close-on-click-modal="false">
+      <el-form :model="editForm" label-width="110px" :rules="editRules" ref="editFormRef">
+        <el-form-item label="合同">
+          <el-input :model-value="editForm.contract_label" disabled />
+        </el-form-item>
+        <el-form-item label="验收日期" prop="acceptance_date">
+          <el-date-picker
+            v-model="editForm.acceptance_date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选择验收日期"
+            style="width: 100%;"
+          />
+        </el-form-item>
+        <el-form-item label="收入(元)" prop="acceptance_amount">
+          <el-input-number
+            v-model="editForm.acceptance_amount"
+            :precision="2"
+            :step="100"
+            controls-position="right"
+            style="width: 100%;"
+            placeholder="正数验收，负数核减"
+          />
+        </el-form-item>
+        <el-form-item label="税额(元)" prop="tax_amount">
+          <el-input-number
+            v-model="editForm.tax_amount"
+            :precision="2"
+            :step="100"
+            :min="0"
+            controls-position="right"
+            style="width: 100%;"
+            placeholder="合同税额"
+          />
+        </el-form-item>
+        <el-form-item label="业务方向" prop="business_direction">
+          <el-input
+            v-model="editForm.business_direction"
+            placeholder="选填，合同业务方向"
+          />
+        </el-form-item>
+        <el-form-item label="验收情况" prop="note">
+          <el-input
+            v-model="editForm.note"
+            type="textarea"
+            :rows="3"
+            placeholder="选填，本次验收的说明"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEditModal = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitEdit">保存修改</el-button>
       </template>
     </el-dialog>
 
@@ -258,6 +316,23 @@ const addRules = {
   acceptance_amount: [{ required: true, message: '请输入收入', trigger: 'blur' }]
 }
 
+// 编辑验收记录
+const showEditModal = ref(false)
+const editFormRef = ref(null)
+const editForm = reactive({
+  acceptance_id: null,
+  contract_label: '',
+  acceptance_date: '',
+  acceptance_amount: 0,
+  tax_amount: 0,
+  business_direction: '',
+  note: ''
+})
+const editRules = {
+  acceptance_date: [{ required: true, message: '请选择验收日期', trigger: 'change' }],
+  acceptance_amount: [{ required: true, message: '请输入收入', trigger: 'blur' }]
+}
+
 // 导入
 const showImportModal = ref(false)
 const importStep = ref(1)
@@ -361,6 +436,49 @@ const submitAdd = async () => {
       }
     } catch (error) {
       ElMessage.error('添加失败：' + (error.message || '网络错误'))
+    } finally {
+      saving.value = false
+    }
+  })
+}
+
+const openEditModal = (row) => {
+  editForm.acceptance_id = row.acceptance_id
+  editForm.contract_label = `${row.contract_no || ''} | ${row.contract_name || ''}`
+  editForm.acceptance_date = row.acceptance_date || ''
+  editForm.acceptance_amount = Number(row.acceptance_amount) || 0
+  editForm.tax_amount = Number(row.tax_amount) || 0
+  editForm.business_direction = row.business_direction || ''
+  editForm.note = row.note || ''
+  showEditModal.value = true
+}
+
+const submitEdit = async () => {
+  if (!editFormRef.value) return
+  await editFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    if (!editForm.acceptance_amount || Number(editForm.acceptance_amount) === 0) {
+      ElMessage.warning('收入不能为0（正数验收，负数核减）')
+      return
+    }
+    saving.value = true
+    try {
+      const res = await api.put(`/contracts/acceptances/${editForm.acceptance_id}`, {
+        acceptance_date: editForm.acceptance_date,
+        acceptance_amount: Number(editForm.acceptance_amount),
+        tax_amount: Number(editForm.tax_amount),
+        business_direction: editForm.business_direction || '',
+        note: editForm.note || ''
+      })
+      if (res.code === 200) {
+        ElMessage.success('验收记录已更新')
+        showEditModal.value = false
+        fetchAcceptances()
+      } else {
+        ElMessage.error(res.message || '更新失败')
+      }
+    } catch (error) {
+      ElMessage.error('更新失败：' + (error.message || '网络错误'))
     } finally {
       saving.value = false
     }

@@ -40,7 +40,7 @@
           <el-table-column prop="contract_name" label="合同名称" min-width="160" sortable show-overflow-tooltip />
           <el-table-column prop="contract_no" label="合同编号" min-width="130" sortable />
           <el-table-column prop="payment_date" label="回款日期" min-width="120" sortable />
-          <el-table-column prop="amount" label="金额(万)" min-width="110" sortable>
+          <el-table-column prop="amount" label="金额(元)" min-width="110" sortable>
             <template #default="scope">
               {{ formatAmount(scope.row.amount) }}
             </template>
@@ -78,8 +78,8 @@
         <el-form-item label="回款日期" prop="payment_date">
           <el-date-picker v-model="paymentForm.payment_date" type="date" />
         </el-form-item>
-        <el-form-item label="金额(万)" prop="amount">
-          <el-input-number v-model="paymentForm.amount" :min="0" :step="0.01" :precision="6" />
+        <el-form-item label="金额(元)" prop="amount">
+          <el-input-number v-model="paymentForm.amount" :min="0" :step="0.01" :precision="2" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="paymentForm.note" type="textarea" />
@@ -110,7 +110,7 @@
         <p class="import-tip">
           <strong>导入说明：</strong><br>
           1. 请使用Excel文件（.xlsx/.xls格式）<br>
-          2. 必须包含以下列：合同编号、回款日期、金额(万)<br>
+          2. 必须包含以下列：合同编号、回款日期、金额(元)<br>
           3. 可选列：合同名称、备注<br>
           4. 合同编号必须在系统中存在<br>
           5. 如果与系统中回款信息重复，可选择保留哪一个
@@ -140,9 +140,9 @@
             <el-table-column prop="data.contract_no" label="合同编号" width="150" />
             <el-table-column prop="data.contract_name" label="合同名称" width="150" />
             <el-table-column prop="data.payment_date" label="回款日期" width="130" />
-            <el-table-column prop="data.amount" label="金额(万)" width="120">
+            <el-table-column prop="data.amount" label="金额(元)" width="120">
               <template #default="scope">
-                {{ Number(((scope.row.data.amount || 0) / 10000).toFixed(6)) }}
+                {{ Number((scope.row.data.amount || 0).toFixed(2)) }}
               </template>
             </el-table-column>
             <el-table-column prop="data.note" label="备注" />
@@ -207,11 +207,11 @@
             <el-table-column prop="data.contract_no" label="合同编号" width="150" />
             <el-table-column prop="data.contract_name" label="合同名称" width="150" />
             <el-table-column prop="data.payment_date" label="回款日期" width="130" />
-            <el-table-column label="金额对比(万)" width="180">
+            <el-table-column label="金额对比(元)" width="180">
               <template #default="scope">
                 <div class="compare-cell">
-                  <span class="import-label">导入：{{ Number(((scope.row.data.amount || 0) / 10000).toFixed(6)) }}</span>
-                  <span class="system-label">系统：{{ Number(((scope.row.existing_data?.amount || 0) / 10000).toFixed(6)) }}</span>
+                  <span class="import-label">导入：{{ Number((scope.row.data.amount || 0).toFixed(2)) }}</span>
+                  <span class="system-label">系统：{{ Number((scope.row.existing_data?.amount || 0).toFixed(2)) }}</span>
                 </div>
               </template>
             </el-table-column>
@@ -275,8 +275,8 @@ const rules = {
 }
 
 const formatAmount = (value) => {
-  // 元 → 万元，精确到分：0.000001万元 = 0.01元，去尾零显示
-  return Number(((value || 0) / 10000).toFixed(6))
+  // 按元展示，精确到分
+  return Number((value || 0).toFixed(2))
 }
 
 const exportPayments = () => {
@@ -292,7 +292,7 @@ const exportPayments = () => {
     { prop: 'contract_no', label: '合同编号' },
     { prop: 'party_a', label: '甲方' },
     { prop: 'payment_date', label: '回款日期' },
-    { prop: 'amount', label: '金额(万)' },
+    { prop: 'amount', label: '金额(元)' },
     { prop: 'owner_name', label: '负责人' },
     { prop: 'note', label: '备注' },
     { prop: 'created_at', label: '创建时间' }
@@ -313,9 +313,9 @@ const exportPayments = () => {
   data.forEach(row => {
     const rowData = exportColumns.map(col => {
       let value = row[col.prop]
-      // 金额精确到分：存储单位为元，导出为万元保留 6 位小数（0.000001 万 = 0.01 元）
+      // 金额精确到分：存储单位为元，导出按元保留 2 位小数
       if (col.prop === 'amount') {
-        value = ((value || 0) / 10000).toFixed(6)
+        value = (value || 0).toFixed(2)
       }
       return escapeCsvValue(value)
     })
@@ -373,7 +373,7 @@ const savePayment = async () => {
   
   await formRef.value.validate(async (valid) => {
     if (valid) {
-      paymentForm.amount = (paymentForm.amount || 0) * 10000
+      paymentForm.amount = (paymentForm.amount || 0)
       
       try {
         let response
@@ -399,7 +399,7 @@ const savePayment = async () => {
 
 const editPayment = (row) => {
   Object.assign(paymentForm, row)
-  paymentForm.amount = (row.amount || 0) / 10000
+  paymentForm.amount = (row.amount || 0)
   showAddModal.value = true
 }
 

@@ -33,7 +33,7 @@
           <li>系统会自动识别每个工作表属于哪个模块（客户/商机/合同/回款/拜访/线索）</li>
           <li>自动将 Excel 列头映射到对应字段，可手动调整</li>
           <li>多个工作表可一次性导入，按依赖顺序自动处理（客户→商机→合同→回款）</li>
-          <li>金额默认按"万元"处理，可切换为"元"</li>
+          <li>金额单位为元</li>
           <li>无法匹配的关联数据（如合同找不到客户）会自动创建</li>
           <li>存在歧义时会标注提示，由你决策</li>
         </ul>
@@ -166,7 +166,7 @@ const uploading = ref(false)
 const importing = ref(false)
 const filename = ref('')
 const sheets = ref([])
-const isWan = ref(true)
+const isWan = ref(false)
 const importResult = ref({})
 
 const stepIndex = computed(() => {

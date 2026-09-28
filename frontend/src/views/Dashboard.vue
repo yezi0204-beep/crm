@@ -38,7 +38,7 @@
         <div class="stat-icon orange">💰</div>
         <div class="stat-content">
           <div class="stat-value">{{ formatAmount(dashboardData.contracts_amount) }}</div>
-          <div class="stat-label">合同总额(万)</div>
+          <div class="stat-label">合同总额(元)</div>
           <div class="stat-trend" :class="getTrendClass(dashboardData.trends?.contracts_amount)">
             {{ formatTrend(dashboardData.trends?.contracts_amount) }}
           </div>
@@ -49,7 +49,7 @@
         <div class="stat-icon red">💵</div>
         <div class="stat-content">
           <div class="stat-value">{{ formatAmount(dashboardData.total_payments) }}</div>
-          <div class="stat-label">累计回款(万)</div>
+          <div class="stat-label">累计回款(元)</div>
           <div class="stat-trend" :class="getTrendClass(dashboardData.trends?.total_payments)">
             {{ formatTrend(dashboardData.trends?.total_payments) }}
           </div>
@@ -116,15 +116,15 @@
       <div class="finance-metrics">
         <div class="fm-item">
           <div class="fm-value">{{ formatWan(financeData.metrics?.total_contract_amt) }}</div>
-          <div class="fm-label">合同总额(万)</div>
+          <div class="fm-label">合同总额(元)</div>
         </div>
         <div class="fm-item">
           <div class="fm-value blue">{{ formatWan(financeData.metrics?.cumulative_acceptance) }}</div>
-          <div class="fm-label">累计验收(万)</div>
+          <div class="fm-label">累计验收(元)</div>
         </div>
         <div class="fm-item">
           <div class="fm-value orange">{{ formatWan(financeData.metrics?.pending_acceptance) }}</div>
-          <div class="fm-label">待验收(万)</div>
+          <div class="fm-label">待验收(元)</div>
         </div>
         <div class="fm-item">
           <div class="fm-value blue">{{ financeData.metrics?.acceptance_rate ?? 0 }}%</div>
@@ -132,11 +132,11 @@
         </div>
         <div class="fm-item">
           <div class="fm-value green">{{ formatWan(financeData.metrics?.cumulative_payment) }}</div>
-          <div class="fm-label">累计回款(万)</div>
+          <div class="fm-label">累计回款(元)</div>
         </div>
         <div class="fm-item">
           <div class="fm-value orange">{{ formatWan(financeData.metrics?.pending_payment) }}</div>
-          <div class="fm-label">待回款(万)</div>
+          <div class="fm-label">待回款(元)</div>
         </div>
         <div class="fm-item">
           <div class="fm-value green">{{ financeData.metrics?.payment_rate ?? 0 }}%</div>
@@ -148,19 +148,19 @@
       <div class="finance-summary">
         <div class="finance-summary-item">
           <span class="finance-label">本年已验收（实际）</span>
-          <span class="finance-value">{{ formatWan(financeData.summary?.actual_acceptance) }} 万</span>
+          <span class="finance-value">{{ formatWan(financeData.summary?.actual_acceptance) }} 元</span>
         </div>
         <div class="finance-summary-item">
           <span class="finance-label">本年已回款（实际）</span>
-          <span class="finance-value">{{ formatWan(financeData.summary?.actual_payment) }} 万</span>
+          <span class="finance-value">{{ formatWan(financeData.summary?.actual_payment) }} 元</span>
         </div>
         <div class="finance-summary-item">
           <span class="finance-label">本年待验收（预计）</span>
-          <span class="finance-value expected">{{ formatWan(financeData.summary?.expected_acceptance) }} 万</span>
+          <span class="finance-value expected">{{ formatWan(financeData.summary?.expected_acceptance) }} 元</span>
         </div>
         <div class="finance-summary-item">
           <span class="finance-label">本年待回款（预计）</span>
-          <span class="finance-value expected">{{ formatWan(financeData.summary?.expected_payment) }} 万</span>
+          <span class="finance-value expected">{{ formatWan(financeData.summary?.expected_payment) }} 元</span>
         </div>
       </div>
 
@@ -182,13 +182,13 @@
           <div class="finance-sub-title">按负责人统计（全量合同）</div>
           <el-table :data="financeData.owners || []" border stripe size="small" max-height="320">
             <el-table-column prop="owner_name" label="负责人" min-width="80" />
-            <el-table-column label="合同额(万)" align="right" width="90">
+            <el-table-column label="合同额(元)" align="right" width="90">
               <template #default="{ row }">{{ formatWan(row.contract_amt) }}</template>
             </el-table-column>
-            <el-table-column label="已回款(万)" align="right" width="90">
+            <el-table-column label="已回款(元)" align="right" width="90">
               <template #default="{ row }">{{ formatWan(row.paid) }}</template>
             </el-table-column>
-            <el-table-column label="待回款(万)" align="right" width="90">
+            <el-table-column label="待回款(元)" align="right" width="90">
               <template #default="{ row }">{{ formatWan(row.pending_pay) }}</template>
             </el-table-column>
             <el-table-column label="回款率" align="right" width="70">
@@ -209,10 +209,10 @@
             </el-table-column>
             <el-table-column prop="contract_name" label="合同名称" min-width="160" show-overflow-tooltip />
             <el-table-column prop="owner_name" label="负责人" width="80" />
-            <el-table-column label="预计验收(万)" align="right" width="100">
+            <el-table-column label="预计验收(元)" align="right" width="100">
               <template #default="{ row }">{{ formatWan(row.expected_acceptance) }}</template>
             </el-table-column>
-            <el-table-column label="预计回款(万)" align="right" width="100">
+            <el-table-column label="预计回款(元)" align="right" width="100">
               <template #default="{ row }">{{ formatWan(row.expected_payment) }}</template>
             </el-table-column>
           </el-table>
@@ -277,7 +277,7 @@
                 <span class="contract-link" @click="router.push('/contracts')">{{ scope.row.contract_name }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="total_amt" label="金额(万)" width="100" :formatter="(row, column, cellValue) => formatAmount(cellValue)" />
+            <el-table-column prop="total_amt" label="金额(元)" width="100" :formatter="(row, column, cellValue) => formatAmount(cellValue)" />
             <el-table-column prop="sign_date" label="签约日期" width="110">
               <template #default="scope">
                 {{ formatDate(scope.row.sign_date) }}
@@ -365,13 +365,13 @@ const aiRegionChart = ref(null)
 let chart1 = null
 let chart2 = null
 
-// 元 → 万元，精确到分：0.000001万元 = 0.01元，去尾零显示
+// 按元展示，精确到分
 const formatAmount = (value) => {
-  return Number(((value || 0) / 10000).toFixed(6))
+  return Number((value || 0).toFixed(2))
 }
 
 const formatWan = (value) => {
-  return Number(((value || 0) / 10000).toFixed(6))
+  return Number((value || 0).toFixed(2))
 }
 
 const formatDate = (dateStr) => {
@@ -393,8 +393,8 @@ const exportForecastDetails = () => {
     { label: '月份', get: r => r.month_label || '' },
     { label: '合同名称', get: r => r.contract_name || '' },
     { label: '负责人', get: r => r.owner_name || '' },
-    { label: '预计验收(万)', get: r => Number(((r.expected_acceptance || 0) / 10000).toFixed(6)) },
-    { label: '预计回款(万)', get: r => Number(((r.expected_payment || 0) / 10000).toFixed(6)) }
+    { label: '预计验收(元)', get: r => Number((r.expected_acceptance || 0).toFixed(2)) },
+    { label: '预计回款(元)', get: r => Number((r.expected_payment || 0).toFixed(2)) }
   ]
   let csv = '\uFEFF' + cols.map(c => escapeCsv(c.label)).join(',') + '\n'
   details.forEach(r => {
@@ -559,14 +559,14 @@ const updateFinanceChart = () => {
     let total = 0
     params.forEach(p => {
       if (p.value > 0) {
-        html += `${p.marker} ${p.seriesName}: ${Number((p.value / 10000).toFixed(6))} 万<br/>`
+        html += `${p.marker} ${p.seriesName}: ${Number(p.value.toFixed(2))} 元<br/>`
         total += p.value
       }
     })
-    html += `<b>合计: ${Number((total / 10000).toFixed(6))} 万</b>`
+    html += `<b>合计: ${Number(total.toFixed(2))} 元</b>`
     return html
   }
-  const wanAxis = { type: 'value', axisLabel: { formatter: v => (v / 10000).toFixed(0) + '万' } }
+  const wanAxis = { type: 'value', axisLabel: { formatter: v => v.toFixed(0) + '元' } }
 
   if (chartFinance) {
     chartFinance.setOption({

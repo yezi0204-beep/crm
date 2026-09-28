@@ -47,7 +47,7 @@
           <el-table-column prop="title" label="商机名称" min-width="130" sortable show-overflow-tooltip />
           <el-table-column prop="customer_name" label="客户" min-width="110" sortable show-overflow-tooltip />
           <el-table-column prop="stakeholder" label="干系人" min-width="90" sortable />
-          <el-table-column prop="amount" label="预算(万)" min-width="100" sortable>
+          <el-table-column prop="amount" label="预算(元)" min-width="100" sortable>
             <template #default="scope">
               {{ formatAmount(scope.row.amount) }}
             </template>
@@ -109,8 +109,8 @@
             <el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="customer.name" />
           </el-select>
         </el-form-item>
-        <el-form-item label="金额(万)" prop="amount">
-          <el-input-number v-model="businessForm.amount" :min="0" :step="0.01" :precision="6" />
+        <el-form-item label="金额(元)" prop="amount">
+          <el-input-number v-model="businessForm.amount" :min="0" :step="0.01" :precision="2" />
         </el-form-item>
         <el-form-item label="项目落实概率">
           <el-select v-model="businessForm.probability" @change="onProbabilityChange">
@@ -632,8 +632,8 @@ const fetchUsers = async () => {
 }
 
 const formatAmount = (value) => {
-  // 元 → 万元，精确到分：0.000001万元 = 0.01元，toFixed(6) 后去尾零
-  return Number(((value || 0) / 10000).toFixed(6))
+  // 按元展示，精确到分
+  return Number((value || 0).toFixed(2))
 }
 
 const getProbabilityType = (probability) => {
@@ -688,7 +688,7 @@ const saveBusiness = async () => {
   
   await formRef.value.validate(async (valid) => {
     if (valid) {
-      businessForm.amount = (businessForm.amount || 0) * 10000
+      businessForm.amount = (businessForm.amount || 0)
       
       if (!businessForm.id) {
         businessForm.owner_id = authStore.username
@@ -759,7 +759,7 @@ const editBusiness = async (row) => {
     title: row.title || '',
     cust_id: row.cust_id || '',
     stakeholder: row.stakeholder || '',
-    amount: (row.amount || 0) / 10000,
+    amount: (row.amount || 0),
     probability: probability,
     stage: stage,
     predict_date: row.predict_date || '',
@@ -921,7 +921,7 @@ const exportBusiness = () => {
     { prop: 'title', label: '商机名称' },
     { prop: 'customer_name', label: '客户' },
     { prop: 'stakeholder', label: '干系人' },
-    { prop: 'amount', label: '预算(万)' },
+    { prop: 'amount', label: '预算(元)' },
     { prop: 'customer_relation', label: '客情关系' },
     { prop: 'probability', label: '项目落实概率(%)' },
     { prop: 'stage', label: '阶段' },
@@ -946,7 +946,7 @@ const exportBusiness = () => {
     const rowData = exportColumns.map(col => {
       let value = row[col.prop]
       if (col.prop === 'amount') {
-        value = ((value || 0) / 10000).toFixed(6)
+        value = (value || 0).toFixed(2)
       }
       return escapeCsvValue(value)
     })

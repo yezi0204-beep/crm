@@ -136,7 +136,7 @@
               </el-row>
               <el-row :gutter="16">
                 <el-col :span="12">
-                  <el-form-item label="商机金额(万)">
+                  <el-form-item label="商机金额(元)">
                     <el-input v-model="ownerForm.amount" type="number" placeholder="预估金额" />
                   </el-form-item>
                 </el-col>
@@ -167,7 +167,7 @@
                   <div class="recommend-stats">
                     <span>📋 {{ item.total_business }}</span>
                     <span>✅ {{ item.success_rate }}%</span>
-                    <span>💰 {{ item.total_amount }}万</span>
+                    <span>💰 {{ item.total_amount }}元</span>
                   </div>
                   <div class="recommend-reasons" v-if="item.reasons?.length">
                     <span v-for="(r, i) in item.reasons" :key="i" class="reason-tag">{{ r }}</span>

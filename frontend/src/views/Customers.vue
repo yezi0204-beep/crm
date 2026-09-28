@@ -343,7 +343,7 @@
             </el-card>
             <el-card class="stat-mini">
               <div class="stat-val">¥{{ formatAmount(profileData.stats.contract_total_amt) }}</div>
-              <div class="stat-lbl">合同总额(万)</div>
+              <div class="stat-lbl">合同总额(元)</div>
             </el-card>
             <el-card class="stat-mini">
               <div class="stat-val">{{ profileData.stats.visit_count }}</div>
@@ -475,9 +475,9 @@
                   <el-table-column prop="customer_count" label="客户数" width="70" sortable />
                   <el-table-column prop="business_count" label="商机数" width="70" sortable />
                   <el-table-column prop="contract_count" label="合同数" width="70" sortable />
-                  <el-table-column label="合同总额(万)" width="110" sortable :sort-method="(a,b)=>(a.total_amount||0)-(b.total_amount||0)">
+                  <el-table-column label="合同总额(元)" width="110" sortable :sort-method="(a,b)=>(a.total_amount||0)-(b.total_amount||0)">
                     <template #default="{ row }">
-                      ¥{{ Number(((row.total_amount || 0) / 10000).toFixed(6)) }}
+                      ¥{{ Number((row.total_amount || 0).toFixed(2)) }}
                     </template>
                   </el-table-column>
                 </el-table>
@@ -871,9 +871,9 @@ const releaseToPool = async (row) => {
   }
 }
 
-// 金额格式化：元 → 万元，精确到分需保留6位小数（0.000001万元 = 0.01元），去尾零显示
+// 金额格式化：按元展示，精确到分
 const formatAmount = (value) => {
-  return Number(((value || 0) / 10000).toFixed(6))
+  return Number((value || 0).toFixed(2))
 }
 
 // 打开画像 Drawer

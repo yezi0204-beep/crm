@@ -392,7 +392,8 @@ def get_monthly_finance():
         accepted = float(acc_map.get(r['id'], 0))
         # 待验收 = 合同额 - 累计验收额 - 税额（与合同列表口径一致）
         pending_acc = max(0.0, total_amt - accepted - float(r['tax_amount'] or 0))
-        pending_pay = max(0.0, total_amt - paid_amt)
+        # 待回款 = 收入金额(累计验收额) + 税额 - 已回款金额 = 含税收入 - 已回款
+        pending_pay = max(0.0, accepted + float(r['tax_amount'] or 0) - paid_amt)
 
         total_contract_amt += total_amt
         cumulative_acceptance += accepted
@@ -450,9 +451,9 @@ def get_monthly_finance():
             'contract_name': r['contract_name'],
             'contract_no': r['contract_no'],
             'owner_name': r['owner_name'],
-            # forecast 存万元，转元返回，前端 formatWan 统一显示
-            'expected_acceptance': round((r['expected_acceptance'] or 0) * 10000, 2),
-            'expected_payment': round((r['expected_payment'] or 0) * 10000, 2),
+            # forecast 存元，直接返回
+            'expected_acceptance': round((r['expected_acceptance'] or 0), 2),
+            'expected_payment': round((r['expected_payment'] or 0), 2),
         })
 
     return jsonify({'code': 200, 'message': 'success', 'data': {

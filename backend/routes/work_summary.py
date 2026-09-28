@@ -130,7 +130,7 @@ def _collect_data(cursor, department, start, end):
         WHERE owner_id IN ({ph}) AND date(created_at) >= ? AND date(created_at) <= ?
     """, (*usernames, start, end))
     row = cursor.fetchone()
-    data['business_new'] = {'count': row['cnt'], 'amount_wan': round((row['amount'] or 0) / 10000, 2)}
+    data['business_new'] = {'count': row['cnt'], 'amount': round((row['amount'] or 0), 2)}
 
     # ===== 维度3：签约与回款 =====
     cursor.execute(f"""
@@ -210,7 +210,7 @@ def generate_summary():
         '进行中拜访': data['visits_planned'],
         '覆盖客户数': data['customers_covered'],
         '新增商机数': data['business_new']['count'],
-        '新增商机金额(万)': data['business_new']['amount_wan'],
+        '新增商机金额(元)': data['business_new']['amount'],
         '签约合同数': data['contracts_signed']['count'],
         '签约合同金额(元)': data['contracts_signed']['amount_yuan'],
         '回款笔数': data['payments_received']['count'],

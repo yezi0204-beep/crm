@@ -52,7 +52,7 @@ def get_contracts():
         if sort_field == 'pending_amt':
             cursor.execute(
                 "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title, "
-                "(COALESCE(c.total_amt, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
+                "(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) + COALESCE(c.tax_amount, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
                 "LEFT JOIN customers cu ON c.cust_id = cu.id "
@@ -72,7 +72,7 @@ def get_contracts():
         if sort_field == 'pending_amt':
             cursor.execute(
                 "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title, "
-                "(COALESCE(c.total_amt, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
+                "(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) + COALESCE(c.tax_amount, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
                 "LEFT JOIN customers cu ON c.cust_id = cu.id "
@@ -114,15 +114,35 @@ def get_contracts():
         )
         acc_map = {r['contract_id']: (float(r['acc_sum']), r['acc_date']) for r in cursor.fetchall()}
         for c in contracts:
-            if c['id'] in acc_map:
-                acc_sum, acc_date = acc_map[c['id']]
+            cid = c['id']
+            tax_amt = float(c.get('tax_amount') or 0)
+            if cid in acc_map:
+                acc_sum, acc_date = acc_map[cid]
                 # 含税收入 = 累计验收额 + 税额
-                tax_amt = float(c.get('tax_amount') or 0)
                 income_with_tax = acc_sum + tax_amt
                 c['income'] = income_with_tax
                 c['pending_acceptance_amount'] = float(c.get('total_amt') or 0) - income_with_tax
                 if acc_date:
                     c['acceptance_date'] = acc_date
+            else:
+                acc_sum = 0
+            # 待回款 = 收入金额(累计验收额) + 税额 - 已回款金额 = 含税收入 - 已回款
+            c['pending_amt'] = max(0, acc_sum + tax_amt - float(c.get('paid_amt') or 0))
+
+    # 补充团队成员（项目分配表）
+    if contracts:
+        cids = [c['id'] for c in contracts]
+        ph = ','.join('?' * len(cids))
+        cursor.execute(f"""
+            SELECT pa.project_id, u.name FROM project_assignments pa
+            LEFT JOIN users u ON pa.user_id = u.username
+            WHERE pa.project_type = 'contract' AND pa.project_id IN ({ph})
+        """, cids)
+        member_map = {}
+        for r in cursor.fetchall():
+            member_map.setdefault(r['project_id'], []).append(r['name'])
+        for c in contracts:
+            c['team_members'] = member_map.get(c['id'], [])
 
     return jsonify({'code': 200, 'message': 'success', 'data': contracts})
 
@@ -705,6 +725,108 @@ def add_acceptance(contract_id):
         return jsonify({'code': 500, 'message': str(e), 'data': None})
 
 
+@contracts_bp.route('/api/contracts/acceptances/<int:acc_id>', methods=['PUT'])
+@token_required
+def update_acceptance(acc_id):
+    """编辑一条验收记录（日期/金额/验收情况，可选分成）。
+
+    body: {acceptance_date, acceptance_amount, note, commissions?: [{username, ratio}]}
+    仅可修改记录自身字段，不允许变更所属合同。
+    """
+    payload = request.current_user
+    if not user_can(payload['username'], 'data.view_all'):
+        return jsonify({'code': 403, 'message': '无权编辑验收记录', 'data': None})
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT id, contract_id, acceptance_date, acceptance_amount, note "
+        "FROM contract_acceptances WHERE id=?",
+        (acc_id,)
+    )
+    row = cur.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '验收记录不存在', 'data': None})
+    contract_id = row['contract_id']
+
+    data = request.get_json(silent=True) or {}
+    acc_date = (data.get('acceptance_date') or '').strip()
+    try:
+        acc_amt = float(data.get('acceptance_amount') if data.get('acceptance_amount') is not None else row['acceptance_amount'])
+    except (TypeError, ValueError):
+        return jsonify({'code': 400, 'message': '收入金额格式不正确', 'data': None})
+    note = data.get('note', row['note'] or '')
+    if not acc_date:
+        return jsonify({'code': 400, 'message': '验收日期不能为空', 'data': None})
+    if acc_amt == 0:
+        return jsonify({'code': 400, 'message': '收入不能为0（正数为验收，负数为核减）', 'data': None})
+
+    commissions = data.get('commissions')
+    if commissions is not None:
+        total_ratio = 0
+        seen = set()
+        for item in commissions:
+            u = (item.get('username') or '').strip()
+            r = float(item.get('ratio') or 0)
+            if not u:
+                return jsonify({'code': 400, 'message': '分成人员用户名不能为空', 'data': None})
+            if u in seen:
+                return jsonify({'code': 400, 'message': f'人员 {u} 重复', 'data': None})
+            seen.add(u)
+            total_ratio += r
+        if commissions and abs(total_ratio - 100.0) > 0.01:
+            return jsonify({'code': 400, 'message': f'分成比例之和为 {total_ratio}%，必须等于 100%', 'data': None})
+
+    try:
+        cur.execute(
+            "UPDATE contract_acceptances SET acceptance_date=?, acceptance_amount=?, note=? WHERE id=?",
+            (acc_date, acc_amt, note, acc_id)
+        )
+        # 可选：同步更新合同的税额、业务方向
+        tax_amount = data.get('tax_amount')
+        business_direction = (data.get('business_direction') or '').strip()
+        if tax_amount is not None:
+            try:
+                tax_amount = float(tax_amount)
+            except (TypeError, ValueError):
+                tax_amount = None
+        set_clauses, params = [], []
+        if tax_amount is not None:
+            set_clauses.append("tax_amount=?")
+            params.append(tax_amount)
+        if business_direction:
+            set_clauses.append("business_direction=?")
+            params.append(business_direction)
+        if set_clauses:
+            params.append(contract_id)
+            cur.execute(f"UPDATE contracts SET {', '.join(set_clauses)} WHERE id=?", params)
+        # 传入 commissions 时整体替换该验收的分成
+        if commissions is not None:
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cur.execute("DELETE FROM acceptance_commissions WHERE acceptance_id=?", (acc_id,))
+            for item in commissions:
+                u = (item.get('username') or '').strip()
+                r = float(item.get('ratio') or 0)
+                cur.execute(
+                    "INSERT INTO acceptance_commissions (acceptance_id, username, ratio, created_by, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (acc_id, u, r, payload['username'], now)
+                )
+        # 联动同步：重新计算合同的收入/待验收额/验收日期
+        _sync_contract_acceptance_fields(cur, contract_id)
+        db.commit()
+        try:
+            record_operation_log(payload['username'], '编辑验收', '合同管理',
+                                 f'验收记录ID={acc_id} 合同ID={contract_id} '
+                                 f'日期 {row["acceptance_date"]}→{acc_date} '
+                                 f'金额 {row["acceptance_amount"]}→{acc_amt}')
+        except Exception:
+            pass
+        return jsonify({'code': 200, 'message': '验收记录已更新', 'data': None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
 @contracts_bp.route('/api/contracts/acceptances/<int:acc_id>', methods=['DELETE'])
 @token_required
 def delete_acceptance(acc_id):
@@ -850,7 +972,7 @@ def import_parse_contracts():
                 col_map['party_a'] = idx
             elif header == '项目令号':
                 col_map['project_order_no'] = idx
-            elif header == '合同总额(万)':
+            elif header == '合同总额(元)':
                 col_map['total_amt'] = idx
             elif header == '签约日期':
                 col_map['sign_date'] = idx
@@ -892,7 +1014,7 @@ def import_parse_contracts():
                         errors.append('合同总额不能为空')
                     else:
                         try:
-                            value = float(value) * 10000
+                            value = float(value)
                         except:
                             errors.append('合同总额格式错误')
                 elif key == 'sign_date':
@@ -1192,7 +1314,7 @@ def get_acceptance_list():
 @token_required
 def import_acceptances():
     """导入验收数据：每行创建一笔验收记录，并可选更新合同级字段(收入/税额/业务方向)。
-    必填：合同编号、验收日期、验收金额(万)。可选：验收情况、收入(万)、税额(万)、业务方向。
+    必填：合同编号、验收日期、验收金额(元)。可选：验收情况、收入(元)、税额(元)、业务方向。
     """
     payload = request.current_user
     username = payload['username']
@@ -1365,12 +1487,12 @@ def parse_acceptance_excel():
             ('contract_no', ['合同编号', '合同号', '编号', '合同Code']),
             ('contract_name', ['合同名称', '合同名']),
             ('party_a', ['甲方']),
-            ('total_amt', ['合同额(万)', '合同总额(万)', '合同额', '合同金额(万)', '合同金额', '合同总价(万)']),
-            ('tax_amount', ['税额(万)', '税额', '税金']),
+            ('total_amt', ['合同额(元)', '合同总额(元)', '合同额', '合同金额(元)', '合同金额', '合同总价(元)']),
+            ('tax_amount', ['税额(元)', '税额', '税金']),
             ('acceptance_date', ['验收日期', '验收时间']),
-            ('acceptance_amount', ['收入(万)', '收入', '验收金额(万)', '验收金额', '验收额(万)', '验收额', '本次验收金额']),
+            ('acceptance_amount', ['收入(元)', '收入', '验收金额(元)', '验收金额', '验收额(元)', '验收额', '本次验收金额']),
             ('note', ['验收情况', '验收备注', '备注', '说明']),
-            ('pending_acceptance_amount', ['待验收合同额(万)', '待验收合同额', '待验收金额(万)', '待验收']),
+            ('pending_acceptance_amount', ['待验收合同额(元)', '待验收合同额', '待验收金额(元)', '待验收']),
             ('business_direction', ['业务方向']),
         ]
 

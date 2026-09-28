@@ -28,6 +28,7 @@ marketing_bp = Blueprint('marketing', __name__)
 tickets_bp = Blueprint('tickets', __name__)
 security_bp = Blueprint('security', __name__)
 workcost_bp = Blueprint('workcost', __name__)
+workhours_bp = Blueprint('workhours', __name__)
 
 # Phase1: 关键词管理 + 原始情报
 keywords_bp = Blueprint('keywords', __name__)
@@ -72,6 +73,7 @@ def register_blueprints(app):
     from .tasks import register_routes as register_tasks
     from .capabilities import register_routes as register_capabilities
     from .workcost import register_routes as register_workcost
+    from .workhours import register_routes as register_workhours
     from .quarterly_assessment import register_routes as register_quarterly_assessment
 
     # Phase9: LLM Gateway（/api/ai/*）
@@ -110,6 +112,7 @@ def register_blueprints(app):
     register_tasks(app)
     register_capabilities(app)
     register_workcost(app)
+    register_workhours(app)
     register_quarterly_assessment(app)
     register_ai_gateway(app)
 
