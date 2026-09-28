@@ -191,7 +191,7 @@ import api from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
-const canEditPlan = authStore.has('workhour.manage') || authStore.has('data.view_all')
+const canEditPlan = authStore.has('workhour.manage') || authStore.has('data.view_all') || authStore.has('cost.plan.manage')
 const canEditActual = canEditPlan || authStore.has('cost.actual.manage')
 const canSave = canEditPlan || canEditActual
 
@@ -207,11 +207,13 @@ const emptyForm = () => ({
   cost_travel: 0,
   cost_entertain: 0,
   cost_outsource: 0,
+  cost_procurement: 0,
   cost_manage: 0,
+  cost_other: 0,
   cost_tax: 0
 })
 const form = reactive(emptyForm())
-const remarks = ref({ labor: '', travel: '', entertain: '', outsource: '', manage: '', tax: '' })
+const remarks = ref({ labor: '', travel: '', entertain: '', outsource: '', procurement: '', manage: '', other: '', tax: '' })
 
 // 实际成本表单
 const emptyActualForm = () => ({
@@ -219,7 +221,9 @@ const emptyActualForm = () => ({
   actual_cost_travel: 0,
   actual_cost_entertain: 0,
   actual_cost_outsource: 0,
+  actual_cost_procurement: 0,
   actual_cost_manage: 0,
+  actual_cost_other: 0,
   actual_cost_tax: 0
 })
 const actualForm = reactive(emptyActualForm())
@@ -228,26 +232,30 @@ const emptyActualRemarks = () => ({
   travel: { text: '' },
   entertain: { text: '' },
   outsource: { text: '' },
+  procurement: { text: '' },
   manage: { text: '' },
+  other: { text: '' },
   tax: { text: '' }
 })
 const actualRemarks = ref(emptyActualRemarks())
 
 // 表格行定义（税费/合计/投资/净利润在表中单独展示）
 const rows = [
-  { key: 'cost_labor', actualKey: 'actual_cost_labor', name: '人工成本', cat: '直接成本', catStart: true, rowspan: 4, remarkKey: 'labor' },
+  { key: 'cost_labor', actualKey: 'actual_cost_labor', name: '人工成本', cat: '直接成本', catStart: true, rowspan: 5, remarkKey: 'labor' },
   { key: 'cost_travel', actualKey: 'actual_cost_travel', name: '差旅费', catStart: false, remarkKey: 'travel' },
   { key: 'cost_entertain', actualKey: 'actual_cost_entertain', name: '业务招待费', catStart: false, remarkKey: 'entertain' },
   { key: 'cost_outsource', actualKey: 'actual_cost_outsource', name: '外协费', catStart: false, remarkKey: 'outsource' },
-  { key: 'cost_manage', actualKey: 'actual_cost_manage', name: '管理费', cat: '间接成本', catStart: true, rowspan: 1, remarkKey: 'manage' }
+  { key: 'cost_procurement', actualKey: 'actual_cost_procurement', name: '采购费', catStart: false, remarkKey: 'procurement' },
+  { key: 'cost_manage', actualKey: 'actual_cost_manage', name: '管理费', cat: '间接成本', catStart: true, rowspan: 2, remarkKey: 'manage' },
+  { key: 'cost_other', actualKey: 'actual_cost_other', name: '其他费用', catStart: false, remarkKey: 'other' }
 ]
 
 const totalCost = computed(() =>
   Number((form.cost_labor + form.cost_travel + form.cost_entertain
-    + form.cost_outsource + form.cost_manage).toFixed(2)))
+    + form.cost_outsource + form.cost_procurement + form.cost_manage + form.cost_other).toFixed(2)))
 const actualTotalCost = computed(() =>
   Number((actualForm.actual_cost_labor + actualForm.actual_cost_travel + actualForm.actual_cost_entertain
-    + actualForm.actual_cost_outsource + actualForm.actual_cost_manage).toFixed(2)))
+    + actualForm.actual_cost_outsource + actualForm.actual_cost_procurement + actualForm.actual_cost_manage + actualForm.actual_cost_other).toFixed(2)))
 const investment = computed(() => Number(((current.value?.total_amt || 0)).toFixed(2)))
 const netProfit = computed(() => Number((investment.value - totalCost.value - form.cost_tax).toFixed(2)))
 const actualNetProfit = computed(() => Number((investment.value - actualTotalCost.value - actualForm.actual_cost_tax).toFixed(2)))
@@ -263,7 +271,8 @@ const fmt = (v) => {
 
 const hasCost = (c) =>
   (Number(c.cost_labor) || 0) + (Number(c.cost_travel) || 0) + (Number(c.cost_entertain) || 0)
-  + (Number(c.cost_outsource) || 0) + (Number(c.cost_manage) || 0) + (Number(c.cost_tax) || 0) > 0
+  + (Number(c.cost_outsource) || 0) + (Number(c.cost_procurement) || 0) + (Number(c.cost_manage) || 0)
+  + (Number(c.cost_other) || 0) + (Number(c.cost_tax) || 0) > 0
 
 const loadContracts = async () => {
   const res = await api.get('/contracts', { page: 1, page_size: 1000 })
@@ -291,14 +300,17 @@ const onSelectContract = async (id) => {
         cost_travel: (Number(res.data.cost_travel) || 0),
         cost_entertain: (Number(res.data.cost_entertain) || 0),
         cost_outsource: (Number(res.data.cost_outsource) || 0),
+        cost_procurement: (Number(res.data.cost_procurement) || 0),
         cost_manage: (Number(res.data.cost_manage) || 0),
+        cost_other: (Number(res.data.cost_other) || 0),
         cost_tax: (Number(res.data.cost_tax) || 0)
       })
       let rk = {}
       try { rk = res.data.cost_remark ? JSON.parse(res.data.cost_remark) : {} } catch { rk = {} }
       remarks.value = {
         labor: rk.labor || '', travel: rk.travel || '', entertain: rk.entertain || '',
-        outsource: rk.outsource || '', manage: rk.manage || '', tax: rk.tax || ''
+        outsource: rk.outsource || '', procurement: rk.procurement || '',
+        manage: rk.manage || '', other: rk.other || '', tax: rk.tax || ''
       }
       // 实际成本（按元回填）
       Object.assign(actualForm, {
@@ -306,7 +318,9 @@ const onSelectContract = async (id) => {
         actual_cost_travel: (Number(res.data.actual_cost_travel) || 0),
         actual_cost_entertain: (Number(res.data.actual_cost_entertain) || 0),
         actual_cost_outsource: (Number(res.data.actual_cost_outsource) || 0),
+        actual_cost_procurement: (Number(res.data.actual_cost_procurement) || 0),
         actual_cost_manage: (Number(res.data.actual_cost_manage) || 0),
+        actual_cost_other: (Number(res.data.actual_cost_other) || 0),
         actual_cost_tax: (Number(res.data.actual_cost_tax) || 0)
       })
       // 实际备注 JSON
@@ -355,7 +369,9 @@ const save = async () => {
       payload.cost_travel = Math.round(form.cost_travel * 100) / 100
       payload.cost_entertain = Math.round(form.cost_entertain * 100) / 100
       payload.cost_outsource = Math.round(form.cost_outsource * 100) / 100
+      payload.cost_procurement = Math.round(form.cost_procurement * 100) / 100
       payload.cost_manage = Math.round(form.cost_manage * 100) / 100
+      payload.cost_other = Math.round(form.cost_other * 100) / 100
       payload.cost_tax = Math.round(form.cost_tax * 100) / 100
       payload.cost_remark = JSON.stringify(remarks.value)
     }
@@ -365,7 +381,9 @@ const save = async () => {
       payload.actual_cost_travel = Math.round(actualForm.actual_cost_travel * 100) / 100
       payload.actual_cost_entertain = Math.round(actualForm.actual_cost_entertain * 100) / 100
       payload.actual_cost_outsource = Math.round(actualForm.actual_cost_outsource * 100) / 100
+      payload.actual_cost_procurement = Math.round(actualForm.actual_cost_procurement * 100) / 100
       payload.actual_cost_manage = Math.round(actualForm.actual_cost_manage * 100) / 100
+      payload.actual_cost_other = Math.round(actualForm.actual_cost_other * 100) / 100
       payload.actual_cost_tax = Math.round(actualForm.actual_cost_tax * 100) / 100
       payload.actual_cost_remark = JSON.stringify(actualRemarks.value)
     }

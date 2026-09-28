@@ -228,19 +228,21 @@ def create_contract():
              cost, gross_profit, acceptance_date, expected_income_date,
              expected_income_year, business_type, total_cost, acceptance_nodes, payment_nodes, note, is_framework,
              income, tax_amount, business_direction, estimated_gross_profit,
-             cost_labor, cost_travel, cost_entertain, cost_outsource, cost_manage, cost_tax)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             cost_labor, cost_travel, cost_entertain, cost_outsource, cost_manage, cost_tax,
+             cost_procurement, cost_other)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             b_id, cust_id, contract_no, data.get('party_a'), data.get('project_order_no'),
-            data.get('total_amt'), 0, data.get('sign_date'), data.get('owner_id'), '执行中',
-            data.get('contract_name'), data.get('classification'), data.get('is_audit'), data.get('pending_acceptance_amount'),
-            data.get('cost'), data.get('gross_profit'), data.get('acceptance_date'), data.get('expected_income_date'),
-            data.get('expected_income_year'), data.get('business_type'), data.get('acceptance_nodes'), data.get('payment_nodes'),
+            _num(data.get('total_amt')), 0, data.get('sign_date'), data.get('owner_id'), '执行中',
+            data.get('contract_name'), data.get('classification'), data.get('is_audit'), _num(data.get('pending_acceptance_amount')),
+            _num(data.get('cost')), _num(data.get('gross_profit')), data.get('acceptance_date'), data.get('expected_income_date'),
+            _num(data.get('expected_income_year'), None), data.get('business_type'), data.get('acceptance_nodes'), data.get('payment_nodes'),
             data.get('note'), 1 if data.get('is_framework') else 0,
-            data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction'),
-            data.get('estimated_gross_profit', 0),
-            data.get('cost_labor', 0), data.get('cost_travel', 0), data.get('cost_entertain', 0),
-            data.get('cost_outsource', 0), data.get('cost_manage', 0), data.get('cost_tax', 0)
+            _num(data.get('income'), 0), _num(data.get('tax_amount'), 0), data.get('business_direction'),
+            _num(data.get('estimated_gross_profit'), 0),
+            _num(data.get('cost_labor', 0)), _num(data.get('cost_travel', 0)), _num(data.get('cost_entertain', 0)),
+            _num(data.get('cost_outsource', 0)), _num(data.get('cost_manage', 0)), _num(data.get('cost_tax', 0)),
+            _num(data.get('cost_procurement', 0)), _num(data.get('cost_other', 0))
         ))
         db.commit()
         contract_id = cursor.lastrowid
@@ -307,21 +309,23 @@ def update_contract(contract_id):
                 cust_id=?, b_id=?,
                 acceptance_nodes=?, payment_nodes=?, note=?, is_framework=?,
                 income=?, tax_amount=?, business_direction=?, estimated_gross_profit=?,
-                cost_labor=?, cost_travel=?, cost_entertain=?, cost_outsource=?, cost_manage=?, cost_tax=?
+                cost_labor=?, cost_travel=?, cost_entertain=?, cost_outsource=?, cost_manage=?, cost_tax=?,
+                cost_procurement=?, cost_other=?
             WHERE id=?
         """, (
             data.get('contract_name'), data.get('contract_no'), data.get('party_a'), data.get('project_order_no'),
-            data.get('total_amt'), data.get('sign_date'), data.get('classification'), data.get('is_audit'),
-            data.get('pending_acceptance_amount'), data.get('cost'), data.get('gross_profit'),
-            data.get('acceptance_date'), data.get('expected_income_date'), data.get('expected_income_year'),
+            _num(data.get('total_amt')), data.get('sign_date'), data.get('classification'), data.get('is_audit'),
+            _num(data.get('pending_acceptance_amount')), _num(data.get('cost')), _num(data.get('gross_profit')),
+            data.get('acceptance_date'), data.get('expected_income_date'), _num(data.get('expected_income_year'), None),
             data.get('business_type'), data.get('status'), effective_owner_id,
             cust_id, b_id,
             data.get('acceptance_nodes'), data.get('payment_nodes'), data.get('note'),
             1 if data.get('is_framework') else 0,
-            data.get('income', 0), data.get('tax_amount', 0), data.get('business_direction'),
-            data.get('estimated_gross_profit', 0),
-            data.get('cost_labor', 0), data.get('cost_travel', 0), data.get('cost_entertain', 0),
-            data.get('cost_outsource', 0), data.get('cost_manage', 0), data.get('cost_tax', 0),
+            _num(data.get('income', 0)), _num(data.get('tax_amount', 0)), data.get('business_direction'),
+            _num(data.get('estimated_gross_profit', 0)),
+            _num(data.get('cost_labor', 0)), _num(data.get('cost_travel', 0)), _num(data.get('cost_entertain', 0)),
+            _num(data.get('cost_outsource', 0)), _num(data.get('cost_manage', 0)), _num(data.get('cost_tax', 0)),
+            _num(data.get('cost_procurement', 0)), _num(data.get('cost_other', 0)),
             contract_id
         ))
         # 待回款归零联动：编辑合同额/回款额后自动完成
@@ -343,10 +347,22 @@ def update_contract(contract_id):
         return jsonify({'code': 500, 'message': str(e), 'data': None})
 
 
+def _num(val, default=0):
+    """空字符串/None → default，否则 float。"""
+    if val is None or val == '':
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
 COST_FIELDS = ('cost_labor', 'cost_travel', 'cost_entertain',
-               'cost_outsource', 'cost_manage', 'cost_tax')
+               'cost_outsource', 'cost_manage', 'cost_tax',
+               'cost_procurement', 'cost_other')
 ACTUAL_COST_FIELDS = ('actual_cost_labor', 'actual_cost_travel', 'actual_cost_entertain',
-                      'actual_cost_outsource', 'actual_cost_manage', 'actual_cost_tax')
+                      'actual_cost_outsource', 'actual_cost_manage', 'actual_cost_tax',
+                      'actual_cost_procurement', 'actual_cost_other')
 
 
 @contracts_bp.route('/api/contracts/<int:contract_id>/cost', methods=['PUT'])
@@ -355,8 +371,8 @@ def update_contract_cost(contract_id):
     """项目成本核算：更新计划成本和/或实际成本（元）与各项备注（JSON），不触碰合同其他字段。
 
     权限分流：
-    - 计划列（COST_FIELDS/cost_remark）需 workhour.manage 或 data.view_all
-    - 实际列（ACTUAL_COST_FIELDS/actual_cost_remark）需 cost.actual.manage 或 workhour.manage 或 data.view_all
+    - 计划列（COST_FIELDS/cost_remark）需 workhour.manage 或 data.view_all 或 cost.plan.manage
+    - 实际列（ACTUAL_COST_FIELDS/actual_cost_remark）需 cost.actual.manage 或 workhour.manage 或 data.view_all 或 cost.plan.manage
     - payload 只含哪些字段就只校验和写入哪些（动态 SET），避免越权覆盖
     """
     payload = request.current_user
@@ -371,7 +387,8 @@ def update_contract_cost(contract_id):
         return jsonify({'code': 400, 'message': '无成本字段需要更新', 'data': None})
 
     # 权限分流
-    can_plan = user_can(username, 'workhour.manage') or user_can(username, 'data.view_all')
+    can_plan = (user_can(username, 'workhour.manage') or user_can(username, 'data.view_all')
+                or user_can(username, 'cost.plan.manage'))
     can_actual = can_plan or user_can(username, 'cost.actual.manage')
 
     if has_plan and not can_plan:
@@ -396,7 +413,7 @@ def update_contract_cost(contract_id):
             if f not in data:
                 continue
             try:
-                v = round(float(data.get(f) if data.get(f) is not None else 0), 2)
+                v = round(_num(data.get(f), 0), 2)
             except (TypeError, ValueError):
                 return jsonify({'code': 400, 'message': '计划成本金额必须为数字', 'data': None})
             if v < 0:
@@ -417,7 +434,7 @@ def update_contract_cost(contract_id):
             if f not in data:
                 continue
             try:
-                v = round(float(data.get(f) if data.get(f) is not None else 0), 2)
+                v = round(_num(data.get(f), 0), 2)
             except (TypeError, ValueError):
                 return jsonify({'code': 400, 'message': '实际成本金额必须为数字', 'data': None})
             if v < 0:
@@ -1111,7 +1128,7 @@ def import_execute_contracts():
                 contract_no,
                 row_data.get('party_a'),
                 row_data.get('project_order_no'),
-                row_data.get('total_amt', 0),
+                row_data.get('total_amt', 0) or 0,
                 0,
                 row_data.get('sign_date'),
                 payload['username'],
@@ -1124,7 +1141,7 @@ def import_execute_contracts():
                 0,
                 '',
                 '',
-                '',
+                None,
                 row_data.get('business_type'),
                 row_data.get('acceptance_nodes'),
                 row_data.get('payment_nodes')
