@@ -151,6 +151,7 @@ export default {
     passwordPlaceholder: 'Enter your password',
     loginSuccess: 'Login successful',
     loginFailed: 'Login failed',
-    welcome: 'Welcome back'
+    welcome: 'Welcome back',
+    rememberMe: 'Remember me'
   }
 }

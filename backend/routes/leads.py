@@ -78,17 +78,13 @@ def _get_search_session():
 
 
 def _search_web(query, max_results=15):
-    """搜索互联网，返回真实搜索结果。多引擎降级：DuckDuckGo POST → Bing 移动版。
+    """搜索互联网，返回真实搜索结果。使用 Bing 搜索引擎（国内可直连）。
 
     返回 [{title, url, snippet}, ...]。网络不可用或无结果时返回空列表，绝不造假数据。
     """
     if not query:
         return []
-    # 1) 优先 DuckDuckGo（POST 方式，降低限速概率）
-    results = _search_duckduckgo(query, max_results)
-    if results:
-        return results
-    # 2) DuckDuckGo 限速/无结果，降级 Bing 移动版（返回静态 HTML，无需 JS）
+    # Bing 搜索（国内可直连，返回静态 HTML，无需 JS）
     return _search_bing(query, max_results)
 
 
@@ -102,7 +98,7 @@ def _search_duckduckgo(query, max_results=15):
             'https://html.duckduckgo.com/html/',
             data={'q': query, 'b': '', 'kl': 'cn-zh'},
             headers={'User-Agent': ua},
-            timeout=12,
+            timeout=5,
         )
         if resp.status_code != 200 or not resp.text:
             return []

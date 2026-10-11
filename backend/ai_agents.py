@@ -305,58 +305,118 @@ def _rule_project(title, content):
 # Agent 5：能力匹配
 # ============================================================
 def agent5_capability(title, content, project, db=None):
-    """依据 CRM 产品库判断我方能否承接。"""
-    # 加载产品库摘要
+    """依据 CRM 产品库与业务标签能力，判断我方能否承接。"""
+    # 加载我方能力清单（产品库 + 业务标签能力）
     products_hint = ''
+    capabilities_hint = ''
+    matched_caps = []
+
     if db is not None:
+        # 1) 产品库
         try:
             rows = db.execute(
                 "SELECT name, category, description FROM products ORDER BY id LIMIT 50"
             ).fetchall()
             if rows:
-                products_hint = '我方产品库：\n' + '\n'.join(
-                    f"- {r['name']}（{r['category'] or '未分类'}）：{(r['description'] or '')[:60]}" for r in rows
+                products_hint = '【我方产品库】\n' + '\n'.join(
+                    f"- {r['name']}（{r['category'] or '未分类'}）：{(r['description'] or '')[:80]}" for r in rows
                 )
         except Exception:
             pass
+
+        # 2) 业务标签能力清单（核心能力数据来源）
+        try:
+            from capability_matcher import load_capabilities, match_project_capabilities
+            caps = load_capabilities(db)
+            if caps:
+                lines = []
+                for c in caps:
+                    level = c.get('capability_level') or c.get('level') or 'normal'
+                    level_text = {'mature': '成熟', 'growing': '成长中',
+                                  'learning': '学习中', 'normal': '一般'}.get(level, level)
+                    products = c.get('products') or []
+                    solutions = c.get('solutions') or []
+                    cases = c.get('cases') or []
+                    desc = c.get('capability_desc') or c.get('description') or ''
+                    parts = [f"能力：{c['name']}（{level_text}）"]
+                    if desc:
+                        parts.append(f"说明：{desc[:80]}")
+                    if products:
+                        parts.append(f"产品：{'、'.join(products[:5])}")
+                    if solutions:
+                        parts.append(f"方案：{'、'.join(solutions[:3])}")
+                    if cases:
+                        parts.append(f"案例：{'、'.join(cases[:2])}")
+                    lines.append('- ' + '；'.join(parts))
+                capabilities_hint = '【我方能力清单】\n' + '\n'.join(lines)
+
+                # 规则匹配命中的能力，作为重点提示
+                cap_result = match_project_capabilities(title, content or '', db)
+                matched_caps = cap_result.get('matched', [])
+        except Exception as e:
+            logger.warning(f'加载业务标签能力失败: {e}')
+
+    # 拼装能力提示：优先用业务标签能力，产品库作补充
+    capability_context = '\n\n'.join(filter(None, [capabilities_hint, products_hint]))
+    if not capability_context:
+        capability_context = '（暂未配置我方产品/能力清单）'
+
+    matched_hint = ''
+    if matched_caps:
+        matched_hint = '\n\n【规则匹配命中的我方能力（重点参考）】\n' + '\n'.join(
+            f"- {m['name']}（置信度{m['confidence']}%，命中词：{'、'.join(m.get('hit_terms', []))}）"
+            for m in matched_caps[:8]
+        )
 
     text = (title or '') + '\n' + (content or '')[:1200]
     proj_hint = json.dumps(project, ensure_ascii=False) if project else ''
     prompt = f"""根据我方产品/能力，判断能否承接该项目。
 
-{products_hint}
+{capability_context}{matched_hint}
 
 项目标题：{title}
 项目正文（截取）：
 {text[:1000]}
 项目分析：{proj_hint}
 
-只返回 JSON：
-{{"can_do": true或false, "matched_products": ["匹配的产品名"], "capability_gap": "能力差距说明（无则空）", "confidence": 0到1, "reason": "一句话判断理由"}}"""
+判断要求：
+1. 基于上面提供的我方能力清单进行评估，不要再说"未提供我方产品/能力清单"；
+2. 若我方能力清单中存在与项目需求匹配的能力（含成熟/成长中），倾向于 can_do=true；
+3. 若项目需求与我方所有能力均不相关，can_do=false 并说明差距；
+4. 仅返回 JSON，格式如下：
+{{"can_do": true或false, "matched_products": ["匹配的能力/产品名"], "capability_gap": "能力差距说明（无则空字符串）", "confidence": 0到1, "reason": "一句话判断理由"}}"""
     result = _call_llm_json(prompt, '你是售前能力评估专家，只返回JSON。')
     if result and isinstance(result, dict) and 'can_do' in result:
         return result
+    # LLM 失败时用规则降级：有命中能力即 can_do
     return _rule_capability(title, content, db)
 
 
 def _rule_capability(title, content, db=None):
-    """规则降级能力匹配：基于产品名关键词命中。"""
+    """规则降级能力匹配：优先用 capability_matcher，其次产品名关键词命中。"""
     text = (title or '') + (content or '')
     matched = []
     if db is not None:
         try:
-            rows = db.execute("SELECT name FROM products").fetchall()
-            for r in rows:
-                if r['name'] and r['name'] in text:
-                    matched.append(r['name'])
+            from capability_matcher import match_project_capabilities
+            cap_result = match_project_capabilities(title, content or '', db)
+            matched = [m['name'] for m in cap_result.get('matched', [])]
         except Exception:
             pass
+        if not matched:
+            try:
+                rows = db.execute("SELECT name FROM products").fetchall()
+                for r in rows:
+                    if r['name'] and r['name'] in text:
+                        matched.append(r['name'])
+            except Exception:
+                pass
     return {
         'can_do': len(matched) > 0,
         'matched_products': matched[:5],
-        'capability_gap': '' if matched else '未匹配到我方产品',
-        'confidence': 0.6 if matched else 0.4,
-        'reason': f'规则匹配{len(matched)}个产品'
+        'capability_gap': '' if matched else '未匹配到我方能力',
+        'confidence': 0.7 if matched else 0.4,
+        'reason': f'规则匹配{len(matched)}个能力'
     }
 
 
@@ -364,14 +424,23 @@ def _rule_capability(title, content, db=None):
 # Agent 6：商机评分
 # ============================================================
 def agent6_scoring(context):
-    """计算 7 维度评分：业务匹配度/客户价值/预算金额/项目阶段/时间紧迫度/区域匹配度/竞争情况。"""
+    """计算 7 维度评分：业务匹配度/客户价值/预算金额/项目阶段/时间紧迫度/区域匹配度/竞争情况。
+
+    双引擎注入：context 含 keyword_score（关键词引擎评分 0-100）和 keyword_matched（命中的业务标签），
+    LLM 评分时应参考关键词引擎的客观匹配结果，避免语义评分脱离业务标签体系。
+    """
+    kw_score = context.get('keyword_score', 50)
+    kw_matched = context.get('keyword_matched', [])
+    kw_hint = f"\n\n【双引擎关键词评分】{kw_score}分，命中标签：{', '.join(kw_matched[:5]) if kw_matched else '无'}" \
+        f"\n（business_match 维度应参考此客观匹配结果，两者偏差不宜过大）"
+
     prompt = f"""基于以下分析结果，对商机进行 7 维度评分（每维度 0-100）。
 
 分析上下文：
-{json.dumps(context, ensure_ascii=False)[:2000]}
+{json.dumps(context, ensure_ascii=False)[:2000]}{kw_hint}
 
 评分维度：
-- business_match: 业务匹配度（与我方业务的契合程度）
+- business_match: 业务匹配度（与我方业务的契合程度，参考双引擎关键词评分）
 - customer_value: 客户价值（客户重要性/战略价值）
 - budget_amount: 预算金额（预算规模，越大越高）
 - project_stage: 项目阶段（越接近招标越高分）
@@ -393,11 +462,12 @@ def _rule_scoring(context):
         'business_match': 50, 'customer_value': 50, 'budget_amount': 50,
         'project_stage': 50, 'time_urgency': 50, 'region_match': 50, 'competition': 50
     }
-    # 业务匹配度
+    # 业务匹配度：双引擎关键词评分（50%）+ 业务标签匹配（50%）
+    kw_score = context.get('keyword_score', 50)
     biz = context.get('agent2', {})
     tags = biz.get('business_tags', [])
-    if tags:
-        dims['business_match'] = min(30 + len(tags) * 20, 100)
+    tag_score = min(30 + len(tags) * 20, 100) if tags else 50
+    dims['business_match'] = int(kw_score * 0.5 + tag_score * 0.5)
     # 能力匹配
     cap = context.get('agent5', {})
     if cap.get('can_do'):
@@ -500,6 +570,15 @@ def analyze_with_agents(raw_intel_id, db=None, force=False):
         title = row['title'] or ''
         content = row['content'] or row['snippet'] or ''
 
+        # 双引擎关键词评分（注入 agent6 的 business_match 维度参考）
+        # 语义引擎在此不重复调用（agent6 本身就是 LLM 语义评分）
+        try:
+            from dual_engine import keyword_evaluate
+            kw_eval = keyword_evaluate(title, content, row['snippet'] or '', db)
+        except Exception as e:
+            logger.warning(f'双引擎关键词评分失败: {e}')
+            kw_eval = {'score': 50, 'matched': [], 'excluded': False, 'mode': 'error'}
+
         # 顺序执行 7 个 Agent，上下文逐步累积
         a1 = agent1_classify(title, content)
         a2 = agent2_business(title, content, db)
@@ -511,6 +590,9 @@ def analyze_with_agents(raw_intel_id, db=None, force=False):
             'title': title,
             'agent1': a1, 'agent2': a2, 'agent3': a3,
             'agent4': a4, 'agent5': a5,
+            # 双引擎关键词评分（0-100）+ 命中的业务标签列表
+            'keyword_score': kw_eval['score'],
+            'keyword_matched': kw_eval['matched'],
         }
         a6 = agent6_scoring(context)
         context['agent6'] = a6

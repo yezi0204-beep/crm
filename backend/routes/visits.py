@@ -18,6 +18,7 @@ def get_visits():
     cust_id = request.args.get('cust_id', '')
     status = request.args.get('status', '')
     keyword = request.args.get('keyword', '')
+    work_type = request.args.get('work_type', '')
 
     db = get_db()
     cursor = db.cursor()
@@ -44,9 +45,12 @@ def get_visits():
     if status:
         conditions.append("v.status = ?")
         params.append(status)
+    if work_type:
+        conditions.append("v.work_type = ?")
+        params.append(work_type)
     if keyword:
-        conditions.append("(c.name LIKE ? OR c.company LIKE ? OR v.purpose LIKE ?)")
-        params.extend([f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'])
+        conditions.append("(c.name LIKE ? OR c.company LIKE ? OR v.purpose LIKE ? OR v.work_content LIKE ?)")
+        params.extend([f'%{keyword}%', f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'])
 
     where_clause = ' AND '.join(conditions) if conditions else '1=1'
 

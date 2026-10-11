@@ -1431,6 +1431,51 @@ def convert_lead(lid):
         return jsonify({'code': 200, 'message': '已转入CRM',
                         'data': {'lead_id': lead_row['converted_lead_id']}})
 
+    new_lead_id, message, duplicate = _convert_lead_core(
+        lid, db, lead_row, operator=request.current_user
+    )
+    if new_lead_id is None:
+        return jsonify({'code': 400, 'message': message or '转入失败'})
+
+    return jsonify({
+        'code': 200,
+        'message': message or '已转入CRM线索库',
+        'data': {'lead_id': new_lead_id, 'duplicate': duplicate}
+    })
+
+
+def _convert_lead_core(lid, db, lead_row=None, operator=None):
+    """将 intelligence_leads 转入 CRM 线索库的核心逻辑。
+
+    路由层（convert_lead）和调度器自动入库（auto_convert_high_score_leads）共用此函数。
+
+    Args:
+        lid: intelligence_leads.id
+        db: db 连接（已打开）
+        lead_row: 可选，已查询的 intelligence_leads 行；None 时内部查询
+        operator: 操作者，dict（含 username）或字符串；默认 'system'
+
+    Returns:
+        (new_lead_id, message, duplicate)
+        - new_lead_id=None 表示失败（去重关联也算成功，返回已存在的 lead_id）
+        - duplicate=True 表示该商机已在 CRM 中存在（仅做了关联，未新插入）
+    """
+    if lead_row is None:
+        lead_row = db.execute("SELECT * FROM intelligence_leads WHERE id=?", (lid,)).fetchone()
+    if not lead_row:
+        return None, '商机不存在', False
+
+    if lead_row['status'] == 'converted':
+        return lead_row['converted_lead_id'], '已转入CRM', False
+
+    # 操作者用户名（路由传 dict，调度器传字符串）
+    if operator is None:
+        operator_name = 'system'
+    elif isinstance(operator, dict):
+        operator_name = operator.get('username', 'system')
+    else:
+        operator_name = str(operator) or 'system'
+
     raw_row = None
     if lead_row['raw_intelligence_id']:
         raw_row = db.execute(
@@ -1446,12 +1491,10 @@ def convert_lead(lid):
     if link:
         existing = db.execute("SELECT id FROM scraped_leads WHERE link=?", (link,)).fetchone()
         if existing:
-            # 已存在，直接关联
             db.execute("UPDATE intelligence_leads SET status='converted', converted_lead_id=? WHERE id=?",
                        (existing['id'], lid))
             db.commit()
-            return jsonify({'code': 200, 'message': '该商机已在CRM中存在，已自动关联',
-                            'data': {'lead_id': existing['id'], 'duplicate': True}})
+            return existing['id'], '该商机已在CRM中存在，已自动关联', True
 
     if opp_name and company:
         existing = db.execute(
@@ -1462,8 +1505,7 @@ def convert_lead(lid):
             db.execute("UPDATE intelligence_leads SET status='converted', converted_lead_id=? WHERE id=?",
                        (existing['id'], lid))
             db.commit()
-            return jsonify({'code': 200, 'message': '该商机已在CRM中存在，已自动关联',
-                            'data': {'lead_id': existing['id'], 'duplicate': True}})
+            return existing['id'], '该商机已在CRM中存在，已自动关联', True
 
     # 构造线索数据并插入
     lead_data = _build_lead_from_intel(lead_row, raw_row)
@@ -1507,28 +1549,28 @@ def convert_lead(lid):
                (new_lead_id, lid))
 
     # 记录生命周期流转：关联 CRM 线索（情报→线索）
-    from lifecycle_model import map_to_crm_stage, get_stage_info
-    current_stage = lead_row['lifecycle_stage'] or 'intelligence'
-    crm_stage = map_to_crm_stage(current_stage)
-    db.execute("""
-        INSERT INTO lifecycle_logs (lead_id, from_stage, to_stage, reason, operator, crm_stage)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        lid, current_stage, current_stage,
-        f'转入CRM线索#{new_lead_id}（CRM阶段：线索）',
-        request.current_user.get('username', ''), 'lead'
-    ))
+    try:
+        from lifecycle_model import map_to_crm_stage
+        current_stage = lead_row['lifecycle_stage'] or 'intelligence'
+        db.execute("""
+            INSERT INTO lifecycle_logs (lead_id, from_stage, to_stage, reason, operator, crm_stage)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            lid, current_stage, current_stage,
+            f'转入CRM线索#{new_lead_id}（CRM阶段：线索）',
+            operator_name, 'lead'
+        ))
+    except Exception as e:
+        logger.warning(f'生命周期日志写入失败 lid={lid}: {e}')
+
     db.commit()
 
     record_operation_log(
-        request.current_user, 'convert', 'intelligence_leads',
+        operator_name if not isinstance(operator, dict) else operator,
+        'convert', 'intelligence_leads',
         f'转入CRM:{lead_data["company"]} - {lead_data["opportunity_name"][:30]}'
     )
-    return jsonify({
-        'code': 200,
-        'message': '已转入CRM线索库',
-        'data': {'lead_id': new_lead_id, 'company': lead_data['company']}
-    })
+    return new_lead_id, '已转入CRM线索库', False
 
 
 @intelligence_bp.route('/leads/<int:lid>/reject', methods=['POST'])

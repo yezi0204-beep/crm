@@ -134,7 +134,14 @@ def get_user_permissions(username):
     perms = set()
     for role in roles:
         cursor.execute("SELECT permission_code FROM role_permissions WHERE role_code = ?", (role,))
-        perms.update(r['permission_code'] for r in cursor.fetchall())
+        for r in cursor.fetchall():
+            code = r['permission_code']
+            # 以 "-" 开头的权限点表示拒绝（deny）：从并集中扣除。
+            # 用于部门伪角色（如 dept:技术中心）收窄其继承角色的权限范围。
+            if isinstance(code, str) and code.startswith('-'):
+                perms.discard(code[1:])
+            else:
+                perms.add(code)
     perms = sorted(perms)
     if has_request_context():
         g._rbac_perms = perms

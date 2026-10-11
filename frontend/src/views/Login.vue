@@ -57,7 +57,7 @@
         </el-form-item>
 
         <div class="form-options">
-          <el-checkbox v-model="rememberMe">{{ t('common.confirm') }}</el-checkbox>
+          <el-checkbox v-model="rememberMe">{{ t('login.rememberMe') }}</el-checkbox>
           <a href="#" class="forgot-link">{{ t('common.reset') }}</a>
         </div>
 

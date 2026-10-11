@@ -22,7 +22,8 @@ from extensions import (
     setup_extensions, get_db, record_operation_log, ensure_tables, user_can
 )
 from routes import register_blueprints
-from scheduler import start_scheduler, stop_scheduler, run_cleanup_now, scheduler_running
+from scheduler import start_scheduler, stop_scheduler, run_cleanup_now
+import scheduler as _scheduler_mod
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ def health_check():
         'status': 'ok',
         'database': db_ok,
         'llm_enabled': USE_LLM,
-        'scheduler': 'running' if scheduler_running else 'stopped'
+        'scheduler': 'running' if _scheduler_mod.scheduler_running else 'stopped'
     })
 
 @app.route('/api/system/cleanup', methods=['POST'])

@@ -578,7 +578,6 @@ const customerForm = reactive({
 
 const rules = {
   name: [{ required: true, message: '请输入联系人', trigger: 'blur' }],
-  phone: [{ required: true, message: '请输入手机号', trigger: 'blur' }],
   company: [{ required: true, message: '请输入公司名称', trigger: 'blur' }]
 }
 

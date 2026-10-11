@@ -151,6 +151,7 @@ export default {
     passwordPlaceholder: '请输入密码',
     loginSuccess: '登录成功',
     loginFailed: '登录失败',
-    welcome: '欢迎回来'
+    welcome: '欢迎回来',
+    rememberMe: '记住我'
   }
 }

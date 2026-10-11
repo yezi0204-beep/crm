@@ -272,6 +272,11 @@ def get_workhours():
 @misc_bp.route('/api/projects', methods=['GET'])
 @token_required
 def get_projects():
+    """项目分配页项目列表（全量活跃商机）。
+
+    项目成员分配权限由 workhours.py 的 _can_manage_assignment 控制
+    （workhour.manage 或项目负责人/项目经理），页面需展示全部项目供分配。
+    """
     db = get_db()
     cursor = db.cursor()
 

@@ -18,29 +18,62 @@
         v-loading="loading"
         class="data-table"
       >
-        <el-table-column label="标签" min-width="220">
+        <el-table-column label="标签" min-width="200">
           <template #default="{ row }">
             <el-tag :type="levelTagType(row.level)" size="small" class="lv-tag">{{ row.name }}</el-tag>
-            <el-tag v-if="row.capability_level" :type="capTagType(row.capability_level)" size="small" effect="dark" class="cap-tag">{{ row.capability_level }}</el-tag>
             <el-tag v-if="!row.is_active" type="info" size="small">已停用</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="层级" width="80" align="center">
+        <el-table-column label="层级" width="70" align="center">
           <template #default="{ row }">{{ row.level }}级</template>
         </el-table-column>
-        <el-table-column label="同义词" min-width="160">
+        <el-table-column label="能力等级" width="95" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.capability_level" :type="capTagType(row.capability_level)" size="small" effect="dark">
+              {{ capLevelText(row.capability_level) }}
+            </el-tag>
+            <span v-else class="none">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="能力描述" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.capability_desc">{{ row.capability_desc }}</span>
+            <span v-else class="none">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="产品 / 方案 / 案例" min-width="280">
+          <template #default="{ row }">
+            <div v-if="row.capability_level" class="cap-lines">
+              <div class="cap-line" v-if="row.products && row.products.length">
+                <span class="cap-label">产品</span>
+                <el-tag v-for="s in row.products" :key="'p'+s" size="small" type="success" effect="plain" class="w-tag">{{ s }}</el-tag>
+              </div>
+              <div class="cap-line" v-if="row.solutions && row.solutions.length">
+                <span class="cap-label">方案</span>
+                <el-tag v-for="s in row.solutions" :key="'s'+s" size="small" type="primary" effect="plain" class="w-tag">{{ s }}</el-tag>
+              </div>
+              <div class="cap-line" v-if="row.cases && row.cases.length">
+                <span class="cap-label">案例</span>
+                <el-tag v-for="s in row.cases" :key="'c'+s" size="small" type="warning" effect="plain" class="w-tag">{{ s }}</el-tag>
+              </div>
+              <span v-if="!(row.products && row.products.length) && !(row.solutions && row.solutions.length) && !(row.cases && row.cases.length)" class="none">—</span>
+            </div>
+            <span v-else class="none">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="同义词" min-width="150">
           <template #default="{ row }">
             <el-tag v-for="s in row.synonyms" :key="s" size="small" type="success" effect="plain" class="w-tag">{{ s }}</el-tag>
             <span v-if="!row.synonyms.length" class="none">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="关联词" min-width="140">
+        <el-table-column label="关联词" min-width="130">
           <template #default="{ row }">
             <el-tag v-for="s in row.related_words" :key="s" size="small" type="warning" effect="plain" class="w-tag">{{ s }}</el-tag>
             <span v-if="!row.related_words.length" class="none">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="排除词" min-width="140">
+        <el-table-column label="排除词" min-width="130">
           <template #default="{ row }">
             <el-tag v-for="s in row.exclude_words" :key="s" size="small" type="danger" effect="plain" class="w-tag">{{ s }}</el-tag>
             <span v-if="!row.exclude_words.length" class="none">—</span>
@@ -132,6 +165,7 @@ const form = ref({})
 
 const levelTagType = (level) => (level === 1 ? 'danger' : level === 2 ? 'primary' : 'success')
 const capTagType = (level) => ({ mature: 'success', growing: 'warning', learning: 'info', normal: '' }[level] || '')
+const capLevelText = (level) => ({ mature: '成熟', growing: '成长中', learning: '学习中', normal: '普通' }[level] || level || '—')
 
 const fetchTree = async () => {
   loading.value = true
@@ -244,6 +278,24 @@ onMounted(fetchTree)
 }
 .none {
   color: #c0c4cc;
+}
+.cap-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cap-line {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.cap-label {
+  flex-shrink: 0;
+  width: 34px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 22px;
 }
 .field-tip {
   color: #909399;

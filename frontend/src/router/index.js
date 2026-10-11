@@ -212,6 +212,11 @@ const routes = [
         path: 'task-monitor',
         name: 'TaskMonitor',
         component: () => import('../views/TaskMonitor.vue')
+      },
+      {
+        path: 'market-tasks',
+        name: 'MarketTasks',
+        component: () => import('../views/MarketTasks.vue')
       }
     ]
   }
@@ -260,6 +265,34 @@ router.beforeEach(async (to, from, next) => {
   if (appraisalOnly && to.path !== '/appraisal') {
     next('/appraisal')
     return
+  }
+
+  // 技术中心主任：仅允许工时管理/项目列表/售后服务，其余模块（销售/营销/AI情报/资源/人事考核/系统管理/项目成本核算）一律跳转工时管理
+  const isRestrictedDirector = authStore.role === '主任' && authStore.department === '技术中心'
+  if (isRestrictedDirector) {
+    const blocked = [
+      // 销售管理
+      '/dashboard', '/reports', '/customers', '/business', '/contracts', '/acceptances',
+      '/quotes', '/products', '/payments', '/visits',
+      // 营销管理
+      '/marketing',
+      // AI情报中心
+      '/cockpit', '/intelligence', '/customer-profiles', '/competitor-analysis',
+      '/task-monitor', '/daily-report', '/business-tags', '/enterprises',
+      // 资源管理
+      '/pool',
+      // 项目管理-项目成本核算
+      '/project-cost',
+      // 人事考核
+      '/appraisal', '/quarterly-assessment', '/work-cost',
+      // 系统管理
+      '/users', '/data-sources', '/alerts', '/search', '/qa', '/knowledge',
+      '/qualifications', '/smart-import', '/operation-logs',
+    ]
+    if (blocked.includes(to.path)) {
+      next('/workhours')
+      return
+    }
   }
 
   next()

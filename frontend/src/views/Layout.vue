@@ -35,7 +35,7 @@
         :collapse="isCollapsed"
         @select="closeMobileSidebar"
       >
-        <div class="menu-group" v-if="!isHrRole">
+        <div class="menu-group" v-if="!isHrRole && !isRestrictedDirector">
           <div class="menu-group-title" v-show="!isCollapsed">📊 {{ t('menu.salesManagement') }}</div>
           <el-menu-item index="/dashboard">
             <span class="menu-icon">📊</span>
@@ -79,7 +79,7 @@
           </el-menu-item>
         </div>
 
-        <div class="menu-group" v-if="!isHrRole">
+        <div class="menu-group" v-if="!isHrRole && !isRestrictedDirector">
           <div class="menu-group-title" v-show="!isCollapsed">📢 {{ t('menu.marketingManagement') }}</div>
           <el-menu-item index="/marketing">
             <span class="menu-icon">📢</span>
@@ -95,7 +95,7 @@
           </el-menu-item>
         </div>
 
-        <div class="menu-group" v-if="!isHrRole">
+        <div class="menu-group" v-if="!isHrRole && !isRestrictedDirector">
           <div class="menu-group-title" v-show="!isCollapsed">📡 AI情报中心</div>
           <el-menu-item index="/cockpit" v-if="has('cockpit.view')">
             <span class="menu-icon">🚀</span>
@@ -131,7 +131,7 @@
           </el-menu-item>
         </div>
 
-        <div class="menu-group" v-if="!isHrRole">
+        <div class="menu-group" v-if="!isHrRole && !isRestrictedDirector">
           <div class="menu-group-title" v-show="!isCollapsed">🌊 {{ t('menu.resourceManagement') }}</div>
           <el-menu-item index="/pool">
             <span class="menu-icon">🌊</span>
@@ -149,13 +149,17 @@
             <span class="menu-icon">📋</span>
             <span>{{ t('menuItem.projects') }}</span>
           </el-menu-item>
-          <el-menu-item index="/project-cost" v-if="has('workhour.view') || has('workhour.manage') || has('data.view_all') || has('cost.view') || has('cost.actual.manage')">
+          <el-menu-item index="/market-tasks">
+            <span class="menu-icon">📨</span>
+            <span>市场任务单</span>
+          </el-menu-item>
+          <el-menu-item index="/project-cost" v-if="!isRestrictedDirector && (has('workhour.view') || has('workhour.manage') || has('data.view_all') || has('cost.view') || has('cost.actual.manage'))">
             <span class="menu-icon">💰</span>
             <span>项目成本核算</span>
           </el-menu-item>
         </div>
 
-        <div class="menu-group">
+        <div class="menu-group" v-if="!isRestrictedDirector">
           <div class="menu-group-title" v-show="!isCollapsed">🧾 {{ t('menu.hrManagement') }}</div>
           <el-menu-item index="/appraisal">
             <span class="menu-icon">🧾</span>
@@ -171,7 +175,7 @@
           </el-menu-item>
         </div>
 
-        <div class="menu-group" v-if="!isHrRole">
+        <div class="menu-group" v-if="!isHrRole && !isRestrictedDirector">
           <div class="menu-group-title" v-show="!isCollapsed">🔧 {{ t('menu.systemManagement') }}</div>
           <el-menu-item index="/users" v-if="has('system.admin')">
             <span class="menu-icon">👥</span>
@@ -355,6 +359,11 @@ const has = (code) => authStore.has(code)
 // 仅考核权限（如"人力"角色）：只能看到月度考核菜单
 const isHrRole = computed(() =>
   authStore.permissions.length === 1 && authStore.permissions[0] === 'appraisal.view'
+)
+
+// 技术中心主任：仅保留项目管理（工时/项目列表）与售后服务，隐藏销售/营销/AI情报/资源/人事考核/系统管理及项目成本核算
+const isRestrictedDirector = computed(() =>
+  authStore.role === '主任' && authStore.department === '技术中心'
 )
 
 const isCollapsed = ref(false)

@@ -344,7 +344,7 @@ const quarterChart = ref(null)
 let chartFinance = null
 let chartQuarter = null
 
-const timeRange = ref('month')
+const timeRange = ref('year')
 const currentYear = new Date().getFullYear()
 const selectedYear = ref(currentYear)
 const availableYears = computed(() => {

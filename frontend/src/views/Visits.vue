@@ -762,36 +762,8 @@ const formRules = {
 }
 
 const filteredVisits = computed(() => {
-  let result = [...visits.value]
-  
-  if (filterStatus.value) {
-    result = result.filter(v => v.status === filterStatus.value)
-  }
-  
-  if (filterVisitorId.value) {
-    result = result.filter(v => v.visitor_id === filterVisitorId.value)
-  }
-  
-  if (filterWorkType.value) {
-    result = result.filter(v => v.work_type === filterWorkType.value)
-  }
-  
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter(v => 
-      (v.customer_name && v.customer_name.toLowerCase().includes(keyword)) ||
-      (v.customer_company && v.customer_company.toLowerCase().includes(keyword)) ||
-      (v.purpose && v.purpose.toLowerCase().includes(keyword)) ||
-      (v.work_content && v.work_content.toLowerCase().includes(keyword))
-    )
-  }
-  
-  if (filterDateRange.value && filterDateRange.value.length === 2) {
-    const [start, end] = filterDateRange.value
-    result = result.filter(v => v.plan_date >= start && v.plan_date <= end)
-  }
-  
-  return result
+  // 过滤逻辑已移至后端 SQL 查询，前端直接返回全部已加载数据
+  return visits.value
 })
 
 const getUserVisits = (username) => {
@@ -879,7 +851,13 @@ const fetchVisits = async () => {
     const params = new URLSearchParams()
     if (filterStatus.value) params.append('status', filterStatus.value)
     if (filterVisitorId.value) params.append('visitor_id', filterVisitorId.value)
-    
+    if (filterWorkType.value) params.append('work_type', filterWorkType.value)
+    if (searchKeyword.value) params.append('keyword', searchKeyword.value)
+    if (filterDateRange.value && filterDateRange.value.length === 2) {
+      params.append('start_date', filterDateRange.value[0])
+      params.append('end_date', filterDateRange.value[1])
+    }
+
     const res = await fetch(`/api/visits?${params.toString()}`, {
       headers: { 'Authorization': `Bearer ${token.value}` }
     })

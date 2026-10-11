@@ -215,6 +215,7 @@ def create_contract():
         b_id = data.get('b_id')
         b_id = b_id if b_id else None  # 规范化空字符串为 None
         cust_id = data.get('cust_id')
+        cust_id = cust_id if cust_id else None  # 规范化空字符串为 None
         if b_id:
             cursor.execute("SELECT cust_id FROM business WHERE id = ?", (b_id,))
             brow = cursor.fetchone()
@@ -294,6 +295,7 @@ def update_contract(contract_id):
         b_id = data.get('b_id')
         b_id = b_id if b_id else None  # 规范化空字符串为 None
         cust_id = data.get('cust_id')
+        cust_id = cust_id if cust_id else None  # 规范化空字符串为 None
         if b_id:
             cursor.execute("SELECT cust_id FROM business WHERE id = ?", (b_id,))
             brow = cursor.fetchone()

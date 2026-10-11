@@ -11,6 +11,8 @@ scheduler_running = False
 _last_cleanup = None  # 上次执行过期线索清理时间
 _last_report_date = None  # 上次生成AI日报的日期
 _last_analysis_date = None  # 上次执行客户/竞争对手分析的日期
+_last_agent_analysis_date = None  # 上次执行 7-Agent LLM 商机分析的日期
+_last_auto_convert_date = None  # 上次执行高分商机自动入库的日期
 
 
 def _open_db():
@@ -82,6 +84,7 @@ def collect_due_intelligence():
             source_dict = {
                 'id': source['id'], 'name': source['name'],
                 'url': source.get('url') or '', 'keywords': source.get('keywords') or '',
+                'category': source.get('category') or '',
             }
             collector = collector_cls(source_dict, config)
             items = collector.collect()
@@ -102,16 +105,49 @@ def collect_due_intelligence():
 
     # ---- 第3步：逐个短事务写入（毫秒级锁）----
     total_new = 0
+    filtered_count = 0
     wconn = _open_db()
     try:
         wcur = wconn.cursor()
+
+        # 确保表有 relevance_score 列（幂等）
+        from dual_engine import ensure_relevance_score_column
+        ensure_relevance_score_column(wconn)
+
+        # 结果类公告判定函数（中标/成交/废标/合同等已定标信息不入库）
+        try:
+            from utils.cleaner import is_result_announcement
+        except Exception:
+            is_result_announcement = lambda _title: False
+
+        # 双引擎评估函数
+        from dual_engine import hybrid_evaluate
+
         for source_id, item in collected_items:
             try:
                 title = clean_title(item.title) if item.title else ''
+
+                # 结果类公告（中标/成交/废标/合同等已定标信息）不入库
+                if is_result_announcement(title):
+                    filtered_count += 1
+                    continue
+
+                # 双引擎初筛：关键词硬过滤（排除词丢弃）+ 语义轻量评分
+                # skip_semantic=True：采集阶段只用关键词引擎（毫秒级），避免每条数据都调 LLM 拖慢采集
+                # 语义评分留给每日 7-Agent 分析时做（run_agent_analysis_today）
+                eval_result = hybrid_evaluate(
+                    title, item.content, item.snippet, db=wconn, skip_semantic=True
+                )
+                if not eval_result['should_collect']:
+                    filtered_count += 1
+                    continue
+
                 if is_junk_content(item.content, title):
                     continue
 
-                url_hash = hashlib.md5(item.url.encode()).hexdigest() if item.url else None
+                # URL+采集时间联合去重：同一URL每次采集都视为新数据（确保每天有新数据入库）
+                url_with_date = f"{item.url}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                url_hash = hashlib.md5(url_with_date.encode()).hexdigest() if item.url else None
                 if url_hash:
                     existing = wcur.execute(
                         "SELECT id FROM raw_intelligence WHERE url_hash=?", (url_hash,)
@@ -121,14 +157,17 @@ def collect_due_intelligence():
 
                 content_hash = hashlib.md5((item.content or '').encode()).hexdigest()[:16] if item.content else None
                 att_path = ','.join(item.attachment_urls) if hasattr(item, 'attachment_urls') and item.attachment_urls else ''
+                keywords_matched = ','.join(eval_result['matched']) if eval_result['matched'] else ''
+                relevance_score = eval_result['score']
 
                 wcur.execute("""
                     INSERT INTO raw_intelligence (source_id, url, url_hash, title, content,
-                                                  publish_date, content_hash, status, snippet, attachment_path)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                                                  publish_date, content_hash, status, snippet, attachment_path,
+                                                  keywords_matched, relevance_score, collected_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """, (source_id, item.url, url_hash, title, item.content or '',
                       item.publish_date or '', content_hash,
-                      getattr(item, 'snippet', '') or '', att_path))
+                      getattr(item, 'snippet', '') or '', att_path, keywords_matched, relevance_score))
                 total_new += 1
             except Exception as e:
                 logger.error(f"情报入库失败: {e}")
@@ -139,8 +178,8 @@ def collect_due_intelligence():
             wcur.execute("UPDATE lead_sources SET last_scraped_at=CURRENT_TIMESTAMP WHERE id=?", (sid,))
 
         wconn.commit()
-        if total_new > 0:
-            logger.info(f"情报采集完成：新增 {total_new} 条原始情报")
+        if total_new > 0 or filtered_count > 0:
+            logger.info(f"情报采集完成：新增 {total_new} 条原始情报，双引擎初筛过滤 {filtered_count} 条")
     except Exception as e:
         wconn.rollback()
         logger.error(f"情报批量入库失败: {e}")
@@ -150,8 +189,95 @@ def collect_due_intelligence():
     return total_new
 
 
+def run_agent_analysis_today(limit=50):
+    """每日自动 7-Agent LLM 商机分析：对 pending 状态的原始情报做语义理解+业务匹配评分+商机分类。
+
+    流水线环节：本地LLM语义理解 → 业务匹配评分 → 商机分类
+    每条情报需要 7 次 LLM 调用（agent1~agent7），每日限 limit 条（默认 50）。
+
+    Returns:
+        dict: {analyzed, success, failed, skipped}
+    """
+    try:
+        from ai_agents import batch_analyze_with_agents
+        result = batch_analyze_with_agents(source_id=None, limit=limit)
+        logger.info(
+            f"每日7-Agent分析完成：分析{result.get('analyzed', 0)}条 "
+            f"成功{result.get('success', 0)} 失败{result.get('failed', 0)} "
+            f"跳过{result.get('skipped', 0)}"
+        )
+        return result
+    except Exception as e:
+        logger.error(f"每日7-Agent分析任务错误: {e}")
+        return {'analyzed': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'error': str(e)}
+
+
+def auto_convert_high_score_leads(min_score=80, max_count=20):
+    """自动将高分 AI 商机转入 CRM 线索库（scraped_leads）。
+
+    流水线环节：CRM自动入库（intelligence_leads → scraped_leads）
+    筛选条件：
+    - score >= min_score（默认 80，即 A 级及以上，7-Agent 语义评分）
+    - is_relevant = 1（与业务相关）
+    - status NOT IN ('converted', 'rejected', 'merged')（未转入/未作废）
+    - relevance_score >= 40（双引擎综合分数达标，防止 7-Agent 误判）
+    转入后状态变为 'converted'，等待销售人员认领分配（leads.py 的 /leads/<id>/assign）。
+
+    Returns:
+        dict: {total, converted, skipped, failed}
+    """
+    from routes.intelligence import _convert_lead_core
+
+    conn = _open_db()
+    total = converted = skipped = failed = 0
+    try:
+        cur = conn.cursor()
+        # JOIN raw_intelligence 拿双引擎 relevance_score，双引擎分数过低的不入库
+        rows = cur.execute(
+            """SELECT il.*, COALESCE(ri.relevance_score, 0) as relevance_score
+               FROM intelligence_leads il
+               LEFT JOIN raw_intelligence ri ON il.raw_intelligence_id = ri.id
+               WHERE il.score >= ? AND il.is_relevant = 1
+                 AND il.status NOT IN ('converted', 'rejected', 'merged')
+                 AND COALESCE(ri.relevance_score, 0) >= 40
+               ORDER BY il.score DESC, ri.relevance_score DESC, il.id ASC LIMIT ?""",
+            (min_score, max_count)
+        ).fetchall()
+        total = len(rows)
+
+        for row in rows:
+            try:
+                lid = row['id']
+                # 复用 intelligence.py 的核心入库逻辑（含去重、生命周期日志）
+                new_id, msg, dup = _convert_lead_core(
+                    lid, conn, lead_row=dict(row), operator='system'
+                )
+                if new_id is None:
+                    failed += 1
+                else:
+                    converted += 1
+                    logger.info(
+                        f"自动入库 intelligence_lead#{lid} → scraped_lead#{new_id} "
+                        f"({row['title'][:30] if row['title'] else ''} "
+                        f"7Agent分{row['score']} 双引擎分{row['relevance_score']})"
+                    )
+            except Exception as e:
+                failed += 1
+                logger.error(f"自动入库失败 lid={row['id']}: {e}")
+    except Exception as e:
+        logger.error(f"自动入库任务错误: {e}")
+    finally:
+        conn.close()
+
+    logger.info(
+        f"高分商机自动入库完成：候选{total}条 转入{converted} 失败{failed}"
+    )
+    return {'total': total, 'converted': converted, 'skipped': skipped, 'failed': failed}
+
+
 def run_scheduler():
     global scheduler_running, _last_cleanup, _last_report_date, _last_analysis_date
+    global _last_agent_analysis_date, _last_auto_convert_date
     logger.info("定时任务调度器已启动")
 
     # 调度循环：每 1 小时检查一次情报采集；客户清理每 24 小时一次
@@ -207,6 +333,30 @@ def run_scheduler():
                     _last_analysis_date = today_str
             except Exception as e:
                 logger.error(f"客户/竞争对手分析失败: {e}")
+
+            # 2.7 每日 7-Agent LLM 商机分析（每天 20:00-21:00 自动执行一次）
+            #    流水线：本地LLM语义理解 → 业务匹配评分 → 商机分类
+            #    对 pending 状态的原始情报做 7-Agent 协同分析，写入 intelligence_leads
+            try:
+                today_str = now.strftime('%Y-%m-%d')
+                if now.hour >= 20 and _last_agent_analysis_date != today_str:
+                    logger.info(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 启动每日7-Agent商机分析任务...")
+                    run_agent_analysis_today(limit=50)
+                    _last_agent_analysis_date = today_str
+            except Exception as e:
+                logger.error(f"每日7-Agent分析任务失败: {e}")
+
+            # 2.8 高分商机自动入库（每天 21:00-23:00 自动执行一次）
+            #    流水线：CRM自动入库（intelligence_leads → scraped_leads）
+            #    score>=80 且 is_relevant=1 的商机自动转入CRM线索库，等待销售认领分配
+            try:
+                today_str = now.strftime('%Y-%m-%d')
+                if now.hour >= 21 and _last_auto_convert_date != today_str:
+                    logger.info(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 启动高分商机自动入库任务...")
+                    auto_convert_high_score_leads(min_score=60, max_count=20)
+                    _last_auto_convert_date = today_str
+            except Exception as e:
+                logger.error(f"高分商机自动入库任务失败: {e}")
 
         except Exception as e:
             logger.error(f"定时任务执行错误: {e}")

@@ -198,6 +198,8 @@ import { useAuthStore } from '../stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const auth = useAuthStore()
+// 支持身兼多职：有 workhour.approve 或 workhour.manage 权限即可显示审批 tab
+// 后端 list_pending 会按项目过滤，只能审批自己负责的项目工时
 const isApprover = computed(() =>
   auth.role === '项目经理' || auth.has('workhour.manage') || auth.has('workhour.approve')
 )

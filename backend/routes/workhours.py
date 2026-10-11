@@ -29,21 +29,34 @@ def register_routes(app):
     app.register_blueprint(workhours_bp, url_prefix='/api/work-hours')
 
 
-def _can_approve(username, business_id):
-    """判断当前用户是否有权审批某商机的工时。"""
-    if user_can(username, 'workhour.manage') or user_can(username, 'workhour.approve'):
+def _can_approve(username, project_type, project_id):
+    """判断当前用户是否有权审批某项目/合同的工时。
+
+    权限规则（数据级隔离，与 list_pending 一致）：
+      - workhour.manage（主任/院长/人力）：可审批全部
+      - workhour.approve（项目经理，含身兼多职如销售+项目经理）：只能审批
+        自己负责的项目/合同工时
+        * business 类型：business.project_manager 或 business.owner_id = 当前用户
+        * contract 类型：contracts.owner_id = 当前用户
+      - 其他：无权审批
+    """
+    if user_can(username, 'workhour.manage'):
         return True
+    if not project_type or not project_id:
+        return False
     db = get_db()
+    if project_type == 'contract':
+        row = db.execute(
+            "SELECT owner_id FROM contracts WHERE id=?", (project_id,)
+        ).fetchone()
+        return bool(row and row['owner_id'] and row['owner_id'] == username)
+    # 默认 business 类型
     row = db.execute(
-        "SELECT project_manager FROM business WHERE id=?", (business_id,)
+        "SELECT project_manager, owner_id FROM business WHERE id=?", (project_id,)
     ).fetchone()
-    if row and row['project_manager'] and row['project_manager'] == username:
-        return True
-    # 角色为项目经理的用户可审批全部
-    u = db.execute("SELECT role FROM users WHERE username=?", (username,)).fetchone()
-    if u and u['role'] == '项目经理':
-        return True
-    return False
+    if not row:
+        return False
+    return (row['project_manager'] == username) or (row['owner_id'] == username)
 
 
 def _user_can_access_project(username, business_id):
@@ -529,30 +542,55 @@ def delete(wh_id):
 @workhours_bp.route('/pending', methods=['GET'])
 @token_required
 def list_pending():
-    """待审批工时列表（项目经理 / 有审批权限者可见全部待审）。"""
+    """待审批工时列表（数据级隔离）。
+
+    权限规则（支持身兼多职：销售+项目经理的用户可审批自己负责的项目工时）：
+      - workhour.manage（主任/院长/人力）：可见全部待审
+      - workhour.approve（项目经理，含身兼多职）：只能看到自己负责的项目/合同的待审工时
+        * business 类型：business.project_manager 或 owner_id = 当前用户
+        * contract 类型：contracts.owner_id = 当前用户
+      - 其他：403 无审批权限
+    """
     payload = request.current_user
-    if not (user_can(payload['username'], 'workhour.manage') or
-            user_can(payload['username'], 'workhour.approve')):
-        u = get_db().execute(
-            "SELECT role FROM users WHERE username=?", (payload['username'],)
-        ).fetchone()
-        if not (u and u['role'] == '项目经理'):
-            return jsonify({'code': 403, 'message': '无审批权限', 'data': None})
+    username = payload['username']
+    if not (user_can(username, 'workhour.manage') or
+            user_can(username, 'workhour.approve')):
+        return jsonify({'code': 403, 'message': '无审批权限', 'data': None})
 
     db = get_db()
-    rows = db.execute("""
-        SELECT wh.id, wh.business_id, wh.project_type, wh.project_id,
-               wh.user_id, wh.work_date, wh.hours,
-               wh.overtime_hours, wh.description, wh.status, wh.submit_time,
-               COALESCE(b.title, c.contract_name) AS project_name,
-               uu.name AS user_name
-        FROM work_hours wh
-        LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
-        LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
-        LEFT JOIN users uu ON wh.user_id = uu.username
-        WHERE wh.status = 'pending'
-        ORDER BY wh.submit_time ASC
-    """).fetchall()
+    if user_can(username, 'workhour.manage'):
+        # 管理员：返回全部待审
+        rows = db.execute("""
+            SELECT wh.id, wh.business_id, wh.project_type, wh.project_id,
+                   wh.user_id, wh.work_date, wh.hours,
+                   wh.overtime_hours, wh.description, wh.status, wh.submit_time,
+                   COALESCE(b.title, c.contract_name) AS project_name,
+                   uu.name AS user_name
+            FROM work_hours wh
+            LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
+            LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+            LEFT JOIN users uu ON wh.user_id = uu.username
+            WHERE wh.status = 'pending'
+            ORDER BY wh.submit_time ASC
+        """).fetchall()
+    else:
+        # 项目经理（含身兼多职）：只返回自己负责的项目/合同的待审工时
+        rows = db.execute("""
+            SELECT wh.id, wh.business_id, wh.project_type, wh.project_id,
+                   wh.user_id, wh.work_date, wh.hours,
+                   wh.overtime_hours, wh.description, wh.status, wh.submit_time,
+                   COALESCE(b.title, c.contract_name) AS project_name,
+                   uu.name AS user_name
+            FROM work_hours wh
+            LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
+            LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+            LEFT JOIN users uu ON wh.user_id = uu.username
+            WHERE wh.status = 'pending' AND (
+                (wh.project_type='business' AND (b.project_manager=? OR b.owner_id=?))
+                OR (wh.project_type='contract' AND c.owner_id=?)
+            )
+            ORDER BY wh.submit_time ASC
+        """, (username, username, username)).fetchall()
     data = [_row_to_dict(r) for r in rows]
     return jsonify({'code': 200, 'message': 'success',
                     'data': {'items': data, 'count': len(data)}})
@@ -569,7 +607,7 @@ def approve(wh_id):
         return jsonify({'code': 404, 'message': '记录不存在', 'data': None})
     if row['status'] != 'pending':
         return jsonify({'code': 400, 'message': '该记录非待审核状态', 'data': None})
-    if not _can_approve(payload['username'], row['business_id']):
+    if not _can_approve(payload['username'], row['project_type'], row['project_id']):
         return jsonify({'code': 403, 'message': '无权审批该项目工时', 'data': None})
 
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -600,7 +638,7 @@ def reject(wh_id):
         return jsonify({'code': 404, 'message': '记录不存在', 'data': None})
     if row['status'] != 'pending':
         return jsonify({'code': 400, 'message': '该记录非待审核状态', 'data': None})
-    if not _can_approve(payload['username'], row['business_id']):
+    if not _can_approve(payload['username'], row['project_type'], row['project_id']):
         return jsonify({'code': 403, 'message': '无权审批该项目工时', 'data': None})
 
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
