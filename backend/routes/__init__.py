@@ -30,6 +30,7 @@ security_bp = Blueprint('security', __name__)
 workcost_bp = Blueprint('workcost', __name__)
 workhours_bp = Blueprint('workhours', __name__)
 market_tasks_bp = Blueprint('market_tasks', __name__)
+tender_bp = Blueprint('tender', __name__)
 
 # Phase1: 关键词管理 + 原始情报
 keywords_bp = Blueprint('keywords', __name__)
@@ -77,6 +78,7 @@ def register_blueprints(app):
     from .workhours import register_routes as register_workhours
     from .quarterly_assessment import register_routes as register_quarterly_assessment
     from .market_tasks import register_routes as register_market_tasks
+    from .tender_analysis import register_routes as register_tender
 
     # Phase9: LLM Gateway（/api/ai/*）
     from llm_gateway import register_routes as register_ai_gateway
@@ -117,6 +119,7 @@ def register_blueprints(app):
     register_workhours(app)
     register_quarterly_assessment(app)
     register_market_tasks(app)
+    register_tender(app)
     register_ai_gateway(app)
 
     from .smart_import import smart_import_bp

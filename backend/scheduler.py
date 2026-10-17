@@ -145,9 +145,14 @@ def collect_due_intelligence():
                 if is_junk_content(item.content, title):
                     continue
 
-                # URL+采集时间联合去重：同一URL每次采集都视为新数据（确保每天有新数据入库）
-                url_with_date = f"{item.url}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                url_hash = hashlib.md5(url_with_date.encode()).hexdigest() if item.url else None
+                # URL 去重：同一公告（URL 相同）不再重复入库
+                # 统一使用 md5(url)，与人工导入等其它入口保持一致，避免每隔一轮采集就重复插入
+                if item.url:
+                    url_hash = hashlib.md5(item.url.encode()).hexdigest()
+                elif item.content:
+                    url_hash = hashlib.md5(item.content.encode()).hexdigest()
+                else:
+                    url_hash = None
                 if url_hash:
                     existing = wcur.execute(
                         "SELECT id FROM raw_intelligence WHERE url_hash=?", (url_hash,)

@@ -105,6 +105,10 @@
             <span class="menu-icon">📡</span>
             <span>情报与线索</span>
           </el-menu-item>
+          <el-menu-item index="/tender-analysis" v-if="has('intel.view') || has('intel.leads')">
+            <span class="menu-icon">📑</span>
+            <span>招标文件研判</span>
+          </el-menu-item>
           <el-menu-item index="/customer-profiles" v-if="has('intel.profile')">
             <span class="menu-icon">🏢</span>
             <span>客户画像</span>

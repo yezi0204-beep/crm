@@ -134,6 +134,152 @@
           </el-table-column>
         </el-table>
       </el-tab-pane>
+
+      <!-- ============ Tab3 数据挖掘分析 ============ -->
+      <el-tab-pane label="数据挖掘分析" name="analysis">
+        <div class="toolbar">
+          <el-date-picker v-model="anaYear" type="year" placeholder="全部年份" value-format="YYYY"
+                          style="width: 130px" @change="loadAnalysis" :clearable="true" />
+          <el-select v-model="anaDept" placeholder="全部部门" clearable style="width: 140px" @change="loadAnalysis">
+            <el-option v-for="d in DEPTS" :key="d" :label="d" :value="d" />
+          </el-select>
+          <el-button type="primary" plain @click="loadAnalysis">刷新分析</el-button>
+          <span class="ana-hint">口径：成本分摊按「单工时成本 = 月度总成本 ÷ 总工时」；成本率 = 项目工时成本 ÷ 合同额</span>
+        </div>
+
+        <div v-loading="anaLoading">
+          <!-- KPI -->
+          <div class="kpi-row">
+            <div class="kpi-card">
+              <div class="kpi-label">月度人力成本合计</div>
+              <div class="kpi-value">{{ fmt2(anaKpis.total_cost) }}<span class="kpi-unit">元</span></div>
+              <div class="kpi-sub">{{ anaKpis.month_count }} 个月 · {{ anaKpis.dept_count }} 个部门</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">考勤总工时</div>
+              <div class="kpi-value">{{ fmt2(anaKpis.total_hours) }}<span class="kpi-unit">工时</span></div>
+              <div class="kpi-sub">平均单工时成本 {{ fmt2(anaKpis.avg_unit_cost) }} 元</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">已分摊到项目</div>
+              <div class="kpi-value">{{ fmt2(anaKpis.allocated_cost) }}<span class="kpi-unit">元</span></div>
+              <div class="kpi-sub">分摊率 {{ anaKpis.allocation_rate }}% ｜ 未分摊 {{ fmt2(anaKpis.unallocated_cost) }} 元</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">项目工时成本</div>
+              <div class="kpi-value">{{ fmt2(anaKpis.project_cost) }}<span class="kpi-unit">元</span></div>
+              <div class="kpi-sub">{{ anaKpis.project_count }} 个项目 · {{ fmt2(anaKpis.project_hours) }} 工时</div>
+            </div>
+          </div>
+
+          <!-- 洞察 -->
+          <div class="insight-card">
+            <div class="insight-title">数据洞察</div>
+            <ul class="insight-list">
+              <li v-for="(t, i) in anaInsights" :key="i">{{ t }}</li>
+            </ul>
+          </div>
+
+          <!-- 图表 -->
+          <div class="chart-row">
+            <div class="chart-card">
+              <div class="chart-title">各部门月度人力成本 &amp; 单工时成本</div>
+              <div ref="anaCostChart" class="chart"></div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">人力成本构成占比</div>
+              <div ref="anaPieChart" class="chart"></div>
+            </div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">项目工时成本 Top 20</div>
+            <div ref="anaProjChart" class="chart"></div>
+          </div>
+
+          <!-- 部门月度明细 -->
+          <div class="table-title">部门月度人力成本明细</div>
+          <el-table :data="anaDeptMonthly" border size="small" max-height="380"
+                    show-summary :summary-method="anaMonthlySummary">
+            <el-table-column prop="month" label="月份" width="95" align="center" sortable />
+            <el-table-column prop="dept" label="部门" width="100" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.dept === '应用中心' ? 'primary' : 'warning'" size="small">{{ row.dept }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="total_hours" label="总工时" width="100" align="right">
+              <template #default="{ row }">{{ fmt2(row.total_hours) }}</template>
+            </el-table-column>
+            <el-table-column prop="total_cost" label="人力成本(元)" width="140" align="right">
+              <template #default="{ row }">{{ fmt2(row.total_cost) }}</template>
+            </el-table-column>
+            <el-table-column prop="unit_cost" label="单工时成本(元)" width="135" align="right">
+              <template #default="{ row }"><span class="unit-cost">{{ fmt2(row.unit_cost) }}</span></template>
+            </el-table-column>
+            <el-table-column prop="allocated_hours" label="已分配工时" width="110" align="right">
+              <template #default="{ row }">{{ fmt2(row.allocated_hours) }}</template>
+            </el-table-column>
+            <el-table-column prop="allocated_cost" label="已分摊成本(元)" width="140" align="right">
+              <template #default="{ row }"><span class="cost">{{ fmt2(row.allocated_cost) }}</span></template>
+            </el-table-column>
+            <el-table-column prop="allocation_rate" label="分摊率" width="120" align="right">
+              <template #default="{ row }">
+                <el-progress :percentage="Math.min(Number(row.allocation_rate) || 0, 100)"
+                             :stroke-width="6" :show-text="false"
+                             style="width: 66px; display: inline-block; vertical-align: middle" />
+                <span style="margin-left: 6px">{{ row.allocation_rate }}%</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="unallocated_cost" label="未分摊成本(元)" width="140" align="right">
+              <template #default="{ row }">{{ fmt2(row.unallocated_cost) }}</template>
+            </el-table-column>
+          </el-table>
+
+          <!-- 项目工时成本明细 -->
+          <div class="table-title">项目工时成本明细</div>
+          <el-table :data="anaProjects" border size="small" max-height="420"
+                    show-summary :summary-method="anaProjectSummary">
+            <el-table-column type="index" label="#" width="50" align="center" />
+            <el-table-column prop="contract_name" label="项目/合同名称" min-width="230" show-overflow-tooltip />
+            <el-table-column prop="customer_name" label="客户" width="160" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.customer_name || '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="owner_name" label="负责人" width="90" align="center">
+              <template #default="{ row }">{{ row.owner_name || '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="status" label="状态" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.status === '执行中' ? 'success' : 'info'" size="small">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="total_amt" label="合同额(元)" width="130" align="right" sortable>
+              <template #default="{ row }">{{ fmt2(row.total_amt) }}</template>
+            </el-table-column>
+            <el-table-column prop="total_hours" label="累计工时" width="100" align="right" sortable>
+              <template #default="{ row }">{{ fmt2(row.total_hours) }}</template>
+            </el-table-column>
+            <el-table-column prop="total_cost" label="工时成本(元)" width="140" align="right" sortable>
+              <template #default="{ row }"><span class="cost">{{ fmt2(row.total_cost) }}</span></template>
+            </el-table-column>
+            <el-table-column prop="cost_rate" label="成本率" width="100" align="right" sortable>
+              <template #default="{ row }">
+                <span :class="{ 'over-hours': row.cost_rate >= 30 }">{{ row.cost_rate }}%</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="estimated_hours" label="预计工时" width="100" align="right">
+              <template #default="{ row }">{{ row.estimated_hours != null ? fmt2(row.estimated_hours) : '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="hours_usage_rate" label="工时使用率" width="110" align="right">
+              <template #default="{ row }">
+                <span v-if="row.hours_usage_rate != null" :class="{ 'over-hours': row.hours_usage_rate > 100 }">
+                  {{ row.hours_usage_rate }}%
+                </span>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="month_count" label="涉及月数" width="90" align="center" />
+          </el-table>
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- ============ 录入/编辑月度成本对话框 ============ -->
@@ -275,9 +421,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+import * as echarts from 'echarts'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
 
@@ -325,6 +472,29 @@ const allocMonth = ref({})
 const allocContracts = ref([])
 const allocSearch = ref('')
 const allocStatusFilter = ref('')
+
+// ---------- 数据挖掘分析 ----------
+const anaLoading = ref(false)
+const anaYear = ref('')
+const anaDept = ref('')
+const anaKpis = ref({
+  total_cost: 0, total_hours: 0, avg_unit_cost: 0, allocated_cost: 0,
+  allocation_rate: 0, unallocated_cost: 0, project_cost: 0, project_hours: 0,
+  project_count: 0, month_count: 0, dept_count: 0,
+})
+const anaInsights = ref([])
+const anaDeptMonthly = ref([])
+const anaProjects = ref([])
+const anaComposition = ref([])
+const anaCostChart = ref(null)
+const anaPieChart = ref(null)
+const anaProjChart = ref(null)
+let anaCostIns = null
+let anaPieIns = null
+let anaProjIns = null
+
+const DEPT_COLORS = { '技术中心': '#409EFF', '应用中心': '#E6A23C' }
+const LINE_COLORS = ['#5470c6', '#ee6666', '#91cc75']
 
 function fmt2(v) {
   const n = Number(v) || 0
@@ -531,6 +701,172 @@ async function exportExcel() {
   }
 }
 
+// ---------- 数据挖掘分析 ----------
+async function loadAnalysis() {
+  anaLoading.value = true
+  try {
+    const params = {}
+    if (anaYear.value) params.year = anaYear.value
+    if (anaDept.value) params.dept = anaDept.value
+    const res = await api.get('/work-cost/analysis', params)
+    const d = res.data || {}
+    anaKpis.value = d.kpis || anaKpis.value
+    anaInsights.value = d.insights || []
+    anaDeptMonthly.value = d.dept_monthly || []
+    anaProjects.value = d.project_costs || []
+    anaComposition.value = d.cost_composition || []
+    if (activeTab.value === 'analysis') nextTick(renderAnalysisCharts)
+  } catch (e) {
+    ElMessage.error('加载数据分析失败')
+  } finally {
+    anaLoading.value = false
+  }
+}
+
+function renderAnalysisCharts() {
+  renderCostChart()
+  renderPieChart()
+  renderProjChart()
+}
+
+// 部门月度人力成本（柱）+ 单工时成本（折线，双Y轴）
+function renderCostChart() {
+  if (!anaCostChart.value) return
+  if (!anaCostIns) anaCostIns = echarts.init(anaCostChart.value)
+  const rows = anaDeptMonthly.value
+  const months = [...new Set(rows.map(r => r.month))].sort()
+  const depts = [...new Set(rows.map(r => r.dept))]
+  const series = []
+  depts.forEach(dep => {
+    series.push({
+      name: `${dep} 人力成本`, type: 'bar', yAxisIndex: 0, barMaxWidth: 26,
+      itemStyle: { color: DEPT_COLORS[dep] || '#909399' },
+      data: months.map(m => {
+        const r = rows.find(x => x.month === m && x.dept === dep)
+        return r ? r.total_cost : null
+      }),
+    })
+  })
+  depts.forEach((dep, i) => {
+    series.push({
+      name: `${dep} 单工时成本`, type: 'line', yAxisIndex: 1, smooth: true, symbolSize: 6,
+      lineStyle: { type: 'dashed', width: 2 }, itemStyle: { color: LINE_COLORS[i % LINE_COLORS.length] },
+      data: months.map(m => {
+        const r = rows.find(x => x.month === m && x.dept === dep)
+        return r ? r.unit_cost : null
+      }),
+    })
+  })
+  anaCostIns.setOption({
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: v => (v == null ? '-' : Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })),
+    },
+    legend: { type: 'scroll', top: 0 },
+    grid: { left: 70, right: 60, top: 40, bottom: 30 },
+    xAxis: { type: 'category', data: months },
+    yAxis: [
+      { type: 'value', name: '成本(元)', axisLabel: { formatter: v => Number(v).toLocaleString('zh-CN') } },
+      { type: 'value', name: '单工时成本(元)' },
+    ],
+    series,
+  }, true)
+  anaCostIns.resize()
+}
+
+// 人力成本构成占比（饼图）
+function renderPieChart() {
+  if (!anaPieChart.value) return
+  if (!anaPieIns) anaPieIns = echarts.init(anaPieChart.value)
+  const data = anaComposition.value.map(c => ({ name: c.name, value: c.amount }))
+  anaPieIns.setOption({
+    tooltip: {
+      trigger: 'item',
+      formatter: p => `${p.name}<br/>${Number(p.value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 元（${p.percent}%）`,
+    },
+    legend: { type: 'scroll', orient: 'vertical', right: 10, top: 20, bottom: 20 },
+    series: [{
+      type: 'pie', radius: ['42%', '68%'], center: ['38%', '52%'],
+      avoidLabelOverlap: true,
+      label: { formatter: '{b}\n{d}%', fontSize: 11 },
+      data,
+    }],
+  }, true)
+  anaPieIns.resize()
+}
+
+// 项目工时成本 Top20（横向柱状）
+function renderProjChart() {
+  if (!anaProjChart.value) return
+  if (!anaProjIns) anaProjIns = echarts.init(anaProjChart.value)
+  const top = [...anaProjects.value].sort((a, b) => b.total_cost - a.total_cost).slice(0, 20).reverse()
+  const names = top.map(p => (p.contract_name || '').length > 16 ? p.contract_name.slice(0, 16) + '…' : p.contract_name)
+  anaProjIns.setOption({
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' },
+      formatter: ps => {
+        const p = top[ps[0].dataIndex]
+        return `<b>${p.contract_name}</b><br/>工时成本：${fmt2(p.total_cost)} 元<br/>累计工时：${fmt2(p.total_hours)}<br/>合同额：${fmt2(p.total_amt)} 元<br/>成本率：${p.cost_rate}%`
+      },
+    },
+    grid: { left: 140, right: 90, top: 20, bottom: 20 },
+    xAxis: { type: 'value', name: '工时成本(元)', axisLabel: { formatter: v => Number(v).toLocaleString('zh-CN') } },
+    yAxis: { type: 'category', data: names, axisLabel: { fontSize: 11 } },
+    series: [{
+      type: 'bar', barMaxWidth: 16,
+      itemStyle: { color: '#409EFF' },
+      label: { show: true, position: 'right', fontSize: 11, formatter: p => fmt2(p.value) },
+      data: top.map(p => p.total_cost),
+    }],
+  }, true)
+  anaProjIns.resize()
+}
+
+function anaMonthlySummary({ columns }) {
+  return columns.map((col, i) => {
+    if (i === 0) return '合计'
+    const keys = ['total_hours', 'total_cost', 'allocated_hours', 'allocated_cost', 'unallocated_cost']
+    if (keys.includes(col.property)) {
+      const s = anaDeptMonthly.value.reduce((acc, r) => acc + (Number(r[col.property]) || 0), 0)
+      return fmt2(s)
+    }
+    return ''
+  })
+}
+
+function anaProjectSummary({ columns }) {
+  return columns.map((col, i) => {
+    if (i === 0) return '合计'
+    if (col.property === 'total_amt') {
+      return fmt2(anaProjects.value.reduce((s, r) => s + (Number(r.total_amt) || 0), 0))
+    }
+    if (col.property === 'total_hours') {
+      return fmt2(anaProjects.value.reduce((s, r) => s + (Number(r.total_hours) || 0), 0))
+    }
+    if (col.property === 'total_cost') {
+      return fmt2(anaProjects.value.reduce((s, r) => s + (Number(r.total_cost) || 0), 0))
+    }
+    return ''
+  })
+}
+
+function onAnaResize() {
+  [anaCostIns, anaPieIns, anaProjIns].forEach(c => c && c.resize())
+}
+
+watch(activeTab, val => {
+  if (val === 'analysis') {
+    if (!anaDeptMonthly.value.length) loadAnalysis()
+    else nextTick(renderAnalysisCharts)
+  }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onAnaResize)
+  ;[anaCostIns, anaPieIns, anaProjIns].forEach(c => { if (c) c.dispose() })
+  anaCostIns = anaPieIns = anaProjIns = null
+})
+
 // ---------- 合计行 ----------
 function monthsSummary({ columns }) {
   return columns.map((col, i) => {
@@ -556,6 +892,8 @@ function summaryTotal({ columns }) {
 onMounted(() => {
   loadMonths()
   loadSummary()
+  loadAnalysis()
+  window.addEventListener('resize', onAnaResize)
 })
 </script>
 
@@ -573,4 +911,35 @@ onMounted(() => {
 .alloc-hint { font-size: 12px; color: #909399; }
 .alloc-cost { color: #f56c6c; font-weight: 600; }
 .alloc-footer { margin-top: 14px; display: flex; justify-content: flex-end; gap: 10px; }
+
+/* ---------- 数据挖掘分析 ---------- */
+.ana-hint { font-size: 12px; color: #909399; }
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+.kpi-card {
+  background: linear-gradient(135deg, #f7f9fc, #eef3fa);
+  border: 1px solid #e4eaf2; border-radius: 8px; padding: 14px 16px;
+}
+.kpi-label { font-size: 13px; color: #606266; margin-bottom: 6px; }
+.kpi-value { font-size: 22px; font-weight: 700; color: #1f4e79; line-height: 1.3; }
+.kpi-unit { font-size: 12px; font-weight: 400; color: #909399; margin-left: 4px; }
+.kpi-sub { font-size: 12px; color: #909399; margin-top: 6px; }
+.insight-card {
+  background: #fdf6ec; border: 1px solid #f5dab1; border-radius: 8px;
+  padding: 12px 16px; margin-bottom: 14px;
+}
+.insight-title { font-weight: 700; color: #e6a23c; margin-bottom: 6px; }
+.insight-list { margin: 0; padding-left: 20px; }
+.insight-list li { font-size: 13px; color: #606266; line-height: 1.9; }
+.chart-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
+.chart-card {
+  background: #fff; border: 1px solid #ebeef5; border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 14px;
+}
+.chart-title { font-size: 13px; font-weight: 600; color: #303133; margin-bottom: 4px; }
+.chart { width: 100%; height: 320px; }
+.table-title { font-size: 13px; font-weight: 600; color: #303133; margin: 6px 0 8px; }
+@media (max-width: 1200px) {
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .chart-row { grid-template-columns: 1fr; }
+}
 </style>

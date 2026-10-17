@@ -114,6 +114,17 @@
             placeholder="正数验收，负数核减"
           />
         </el-form-item>
+        <el-form-item label="税额(元)">
+          <el-input-number
+            v-model="addForm.tax_amount"
+            :precision="2"
+            :step="100"
+            :min="0"
+            controls-position="right"
+            style="width: 100%;"
+            placeholder="选填，本条验收记录的税额（留空且为首条记录时继承合同税额）"
+          />
+        </el-form-item>
         <el-form-item label="验收情况" prop="note">
           <el-input
             v-model="addForm.note"
@@ -162,7 +173,7 @@
             :min="0"
             controls-position="right"
             style="width: 100%;"
-            placeholder="合同税额"
+            placeholder="本条验收记录的税额"
           />
         </el-form-item>
         <el-form-item label="业务方向" prop="business_direction">
@@ -211,7 +222,7 @@
           4. 每行将创建一笔验收记录，收入即本次验收金额，金额单位为"元"<br>
           5. 系统会检测重复：同一合同+同一验收日期已存在则该行标红，导入时自动跳过<br>
           6. 文件内重复也会被检测（同一合同+日期出现多次）<br>
-          7. 税额/业务方向为合同级字段，导入时会同步更新到合同
+          7. 税额随本条验收记录保存（仅作用于该记录）；业务方向为合同级字段，导入时同步更新到合同
         </p>
       </div>
 
@@ -308,6 +319,7 @@ const addForm = reactive({
   contract_id: null,
   acceptance_date: '',
   acceptance_amount: 0,
+  tax_amount: null,
   note: ''
 })
 const addRules = {
@@ -404,6 +416,7 @@ const openAddModal = () => {
   addForm.contract_id = null
   addForm.acceptance_date = ''
   addForm.acceptance_amount = 0
+  addForm.tax_amount = null
   addForm.note = ''
   showAddModal.value = true
   fetchContractOptions()
@@ -424,6 +437,7 @@ const submitAdd = async () => {
       const res = await api.post(`/contracts/${addForm.contract_id}/acceptances`, {
         acceptance_date: addForm.acceptance_date,
         acceptance_amount: amountYuan,
+        tax_amount: addForm.tax_amount == null ? null : Number(addForm.tax_amount),
         note: addForm.note || '',
         commissions: []
       })

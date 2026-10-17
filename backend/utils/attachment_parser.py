@@ -112,11 +112,27 @@ def _parse_xlsx(file_path: str) -> str:
     return '\n'.join(texts).strip()
 
 
+def _parse_txt(file_path: str) -> str:
+    """纯文本文件，按常见编码依次尝试。"""
+    for enc in ('utf-8', 'gbk', 'utf-16'):
+        try:
+            with open(file_path, 'r', encoding=enc) as f:
+                return f.read().strip()
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+        except Exception as e:
+            logger.error(f'读取文本文件失败 {file_path}: {e}')
+            return ''
+    logger.warning(f'文本文件编码无法识别，跳过: {file_path}')
+    return ''
+
+
 # 注册解析器
 register_parser('.pdf', _parse_pdf)
 register_parser('.docx', _parse_docx)
 register_parser('.xlsx', _parse_xlsx)
 register_parser('.xls', _parse_xlsx)  # openpyxl 对 .xls 支持有限，降级处理
+register_parser('.txt', _parse_txt)
 
 
 def download_and_parse(url: str, source_name: str = '', save_dir: str = None) -> dict:

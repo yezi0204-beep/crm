@@ -732,9 +732,9 @@ def _import_one_row(cursor, module, row_data, field_map, is_wan, username):
                 content_parts.append(f'{label}：{val}')
         content = '；'.join(content_parts)
 
-        # 去重：有链接按链接哈希，否则按 公司+项目+电话
+        # 去重：有链接按链接哈希（md5，与采集/其它导入入口保持一致），否则按 公司+项目+电话
         if link:
-            url_hash = hashlib.sha256(link.encode()).hexdigest()
+            url_hash = hashlib.md5(link.encode()).hexdigest()
         else:
             url_hash = hashlib.sha256(
                 f'{company}|{opp_name}|{row_data.get("phone", "")}'.encode()

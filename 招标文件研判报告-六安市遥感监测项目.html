@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>招标文件研判报告 - 2026年度六安市重要生态环境敏感区及农村黑臭水体遥感监测项目</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #f3f4f6; color: #1f2937; line-height: 1.7; }
+  .page { max-width: 900px; margin: 24px auto; background: #fff; padding: 48px 56px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+  .report-head { text-align: center; border-bottom: 3px solid #1e40af; padding-bottom: 20px; margin-bottom: 24px; }
+  .report-head h1 { font-size: 24px; color: #1e40af; margin-bottom: 8px; }
+  .report-head .sub { font-size: 13px; color: #6b7280; }
+  .conclusion-banner { display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #059669, #34d399); color: #fff; border-radius: 12px; padding: 20px 28px; margin: 24px 0; }
+  .conclusion-banner .rec { font-size: 26px; font-weight: 700; }
+  .conclusion-banner .fs { text-align: right; }
+  .conclusion-banner .fs .num { font-size: 34px; font-weight: 700; }
+  .conclusion-banner .fs .lbl { font-size: 12px; opacity: .9; }
+  .conclusion-reason { background: #ecfdf5; border-left: 4px solid #059669; padding: 12px 16px; border-radius: 0 8px 8px 0; font-size: 14px; margin-bottom: 28px; }
+  h2 { font-size: 17px; color: #111827; border-left: 5px solid #1e40af; padding-left: 10px; margin: 30px 0 14px; }
+  h3 { font-size: 14px; color: #374151; margin: 14px 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 14px; }
+  th, td { border: 1px solid #d1d5db; padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f3f4f6; font-weight: 600; color: #374151; }
+  .kv td:first-child { width: 150px; background: #f9fafb; font-weight: 600; color: #4b5563; }
+  ul.plain { padding-left: 22px; font-size: 13.5px; }
+  ul.plain li { margin-bottom: 5px; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .tag-green { background: #d1fae5; color: #065f46; }
+  .tag-red { background: #fee2e2; color: #b91c1c; }
+  .tag-orange { background: #fef3c7; color: #b45309; }
+  .match-cols { display: flex; gap: 16px; }
+  .match-cols > div { flex: 1; border-radius: 8px; padding: 12px 14px; }
+  .match-ok { background: #ecfdf5; border: 1px solid #a7f3d0; }
+  .match-miss { background: #fef2f2; border: 1px solid #fecaca; }
+  .match-cols h4 { font-size: 13.5px; margin-bottom: 8px; }
+  .match-ok h4 { color: #065f46; }
+  .match-miss h4 { color: #b91c1c; }
+  .summary-box { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 10px 14px; font-size: 13.5px; color: #0c4a6e; margin-top: 10px; }
+  .cat-head { background: #e5e7eb; font-weight: 700; }
+  .score-overview { display: flex; align-items: center; gap: 18px; margin: 12px 0 16px; }
+  .score-bar-wrap { flex: 1; height: 24px; background: #e5e7eb; border-radius: 12px; overflow: hidden; }
+  .score-bar { height: 100%; background: linear-gradient(90deg, #10b981, #34d399); }
+  .score-num { font-size: 30px; font-weight: 700; color: #059669; }
+  .score-num small { font-size: 16px; color: #6b7280; font-weight: 400; }
+  .score-good { color: #059669; font-weight: 700; }
+  .score-mid { color: #d97706; font-weight: 700; }
+  .score-bad { color: #dc2626; font-weight: 700; }
+  .risk { border-left: 5px solid; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; font-size: 13.5px; }
+  .risk-high { border-color: #dc2626; background: #fef2f2; }
+  .risk-medium { border-color: #d97706; background: #fffbeb; }
+  .risk-low { border-color: #6b7280; background: #f9fafb; }
+  .risk .head { margin-bottom: 4px; }
+  .risk .suggest { color: #374151; margin-top: 4px; }
+  .price-banner { background: linear-gradient(135deg, #ecfdf5, #d1fae5); border-radius: 10px; padding: 14px 20px; margin: 10px 0; }
+  .footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; text-align: center; }
+  @media print { body { background: #fff; } .page { box-shadow: none; margin: 0; max-width: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="report-head">
+    <h1>招标文件研判报告</h1>
+    <div class="sub">2026年度六安市重要生态环境敏感区及农村黑臭水体遥感监测项目</div>
+    <div class="sub">研判时间：2026-10-12 17:39 &nbsp;|&nbsp; 依据文件：竞争性磋商-服务类-2026年度六安市重要生态环境敏感区及农村黑臭水体遥感监测项目1008.docx</div>
+  </div>
+
+  <div class="conclusion-banner">
+    <div>
+      <div class="rec">✅ 建议投标</div>
+      <div style="font-size:13px;opacity:.92;margin-top:4px;">综合研判结论</div>
+    </div>
+    <div class="fs">
+      <div class="num">85<span style="font-size:16px;"> / 100</span></div>
+      <div class="lbl">综合可行性评分</div>
+    </div>
+  </div>
+  <div class="conclusion-reason">
+    我方资质（乙级测绘含摄影测量与遥感）完全符合硬性门槛，且在生态环境、遥感、GIS 等核心技术领域具备成熟能力，信息安全体系完善，技术标得分潜力大。主要风险在于人员专业匹配（计算机 vs 测绘）及涉密证书缺失，需立即调整人员配置方案以规避失分。结合知识库中我方与安徽省内农业农村/水利部门的交流背景，对六安市生态项目有较好的理解基础，中标概率较高。
+  </div>
+
+  <h2>一、项目概况</h2>
+  <table class="kv">
+    <tr><td>项目名称</td><td>2026年度六安市重要生态环境敏感区及农村黑臭水体遥感监测项目</td></tr>
+    <tr><td>采购人</td><td>六安市生态环境局</td></tr>
+    <tr><td>预算金额</td><td>招标文件未公布（详见“建议报价”章节测算）</td></tr>
+    <tr><td>采购方式</td><td>竞争性磋商</td></tr>
+    <tr><td>响应截止时间</td><td><b style="color:#dc2626;">2026年10月19日 9:30</b></td></tr>
+    <tr><td>服务期</td><td>1年（按报价单“项/年”推断）</td></tr>
+    <tr><td>项目地点</td><td>六安市</td></tr>
+  </table>
+
+  <h2>二、资格要求与符合性</h2>
+  <h3>硬性资格要求</h3>
+  <ul class="plain">
+    <li>具有行政主管部门颁发的测绘乙级及以上资质证书（须包含摄影测量与遥感专业类别）</li>
+  </ul>
+  <h3>符合性判断</h3>
+  <p style="font-size:13.5px;"><span class="tag tag-green">符合</span> 我方持有“乙级测绘资质”，证书范围明确包含“摄影测量与遥感”专业类别，满足特定资格要求。</p>
+
+  <h2>三、能力匹配分析</h2>
+  <div class="match-cols">
+    <div class="match-ok">
+      <h4>✅ 我方能覆盖的需求点</h4>
+      <ul class="plain">
+        <li>生态环境监测（成熟能力，对应项目“生态环境敏感区”监测需求）</li>
+        <li>遥感数据处理（成熟能力，对应“遥感监测”核心需求）</li>
+        <li>无人机遥感应用（一般能力，对应“农村黑臭水体”巡查及高分辨率数据获取）</li>
+        <li>GIS 地理信息系统开发（成熟能力，用于监测成果的空间分析与展示）</li>
+      </ul>
+    </div>
+    <div class="match-miss">
+      <h4>⚠️ 明显缺失或存疑</h4>
+      <ul class="plain">
+        <li>针对“农村黑臭水体”的专项水环境监测算法或特定指标监测经验（知识库中虽有生态环境监测，但水体黑臭专项需方案细化）</li>
+      </ul>
+    </div>
+  </div>
+  <div class="summary-box">我方在生态环境监测、遥感数据处理及 GIS 应用方面具备成熟能力，完全覆盖项目核心需求。无人机能力可作为补充手段。需重点在技术方案中强化针对“黑臭水体”的遥感识别算法与指标体系描述，以体现针对性。</div>
+
+  <h2>四、评分要点与得分策略</h2>
+  <table>
+    <tr><th style="width:170px;">评分项</th><th style="width:80px;">分值</th><th>得分策略</th></tr>
+    <tr><td>项目人员配备</td><td>16分</td><td>充分利用我方人员资质库，确保项目负责人、技术负责人均具备测绘/遥感中级以上职称，并挖掘具有无人机执照人员，争取拿满16分。</td></tr>
+    <tr><td>信息安全保障</td><td>4分</td><td>直接引用我方“信息安全管理体系认证证书”及“信息技术服务管理体系认证证书”，展示完善的制度与培训记录。</td></tr>
+    <tr><td>方案可行性与针对性</td><td>10分</td><td>结合知识库中“合肥市农业农村局”及“芜湖市农业农村局”的交流经验，提出本地化实施方案，突出对六安市生态敏感区的深刻理解。</td></tr>
+  </table>
+
+  <h2>五、完整评分表（招标文件原文）</h2>
+  <table>
+    <tr class="cat-head"><td colspan="3">技术标（90分）</td></tr>
+    <tr><th style="width:170px;">子项</th><th style="width:70px;">满分</th><th>评分细则</th></tr>
+    <tr><td>对项目的了解程度</td><td>10</td><td>至少包含项目现状分析、基础资料掌握、项目熟悉程度、面临的问题、合理化建议。理解准确、方案优于需求得5分；基本准确得3分；有待提升得1分；不可行得0分。</td></tr>
+    <tr><td>进度计划</td><td>5</td><td>包含进度目标、设备保障、人员保障、制度保障、应急处理预案。理解准确、方案优于需求得5分；基本准确得3分；有待提升得1分；不可行得0分。</td></tr>
+    <tr><td>信息安全保障</td><td>4</td><td>包含人员培训、管理体系、保障制度、档案管理、督查制度。理解准确、方案优于需求得4分；基本准确得2分；有待提升得1分；不可行得0分。</td></tr>
+    <tr><td>项目人员配备</td><td>16</td><td>1.项目负责人：测绘/遥感中级以上职称(3分)+承担过遥感监测项目(1分)；2.技术负责人：测绘/遥感中级以上职称(3分)+承担过遥感监测项目(1分)；3.其他成员：测绘类初级以上职称(每人2分，最高4分)；4.涉密/保密证书(每人1分，最高2分)；5.无人机执照(每人2分，最高2分)。</td></tr>
+    <tr class="cat-head"><td colspan="3">价格标（10分）</td></tr>
+    <tr><th>子项</th><th>满分</th><th>评分细则</th></tr>
+    <tr><td>价格分</td><td>10</td><td>低价优先法。满足要求且报价最低为基准价得满分。得分=(基准价/报价)×10。</td></tr>
+  </table>
+
+  <h2>六、得分失分预估</h2>
+  <div class="score-overview">
+    <div class="score-bar-wrap"><div class="score-bar" style="width:86%"></div></div>
+    <div class="score-num">86<small> / 100 分</small></div>
+  </div>
+
+  <h3>🟢 得分项</h3>
+  <table>
+    <tr><th style="width:150px;">评分项</th><th style="width:60px;">满分</th><th style="width:80px;">预估得分</th><th style="width:60px;">把握</th><th>得分依据</th></tr>
+    <tr><td>对项目的了解程度</td><td>10</td><td class="score-mid">5</td><td><span class="tag tag-green">高</span></td><td>我方拥有成熟的“生态环境”和“遥感”能力，且知识库显示与安徽省内农业农村及水利部门有交流经验，可撰写深度现状分析与合理化建议，争取“优于需求”档。</td></tr>
+    <tr><td>进度计划</td><td>5</td><td class="score-good">5</td><td><span class="tag tag-green">高</span></td><td>我方具备“业务连续性管理体系”和“环境/职业健康安全管理体系”，可编制完善的设备、人员及应急保障方案。</td></tr>
+    <tr><td>信息安全保障</td><td>4</td><td class="score-good">4</td><td><span class="tag tag-green">高</span></td><td>我方持有“信息安全管理体系认证证书”和“信息技术服务管理体系认证证书”，范围完全覆盖项目数据处理服务，可直接引用体系文件得分。</td></tr>
+    <tr><td>项目人员配备</td><td>16</td><td class="score-good">14</td><td><span class="tag tag-orange">中</span></td><td>柴蕾蕾（测绘摄影测量中级）、茹菲/刘宜猛/杨文韬/毛召武（测绘地理信息中级）可担任技术负责人或成员；钱海明持无人机执照（2分）。谢伟等计算机高级人员若无测绘职称，负责人“职称分”可能受限；涉密证书清单未明确。预估负责人/技术负责人职称分受限，无人机满分，涉密证书缺失。</td></tr>
+  </table>
+
+  <h3>🔴 失分项</h3>
+  <table>
+    <tr><th style="width:190px;">失分项</th><th style="width:80px;">预估失分</th><th>失分原因</th><th>减损措施</th></tr>
+    <tr><td>项目人员配备 - 涉密/保密证书</td><td class="score-bad">-2</td><td>我方人员资质清单中未明确列出“地理信息安全保密培训合格证书”或“涉密人员资格证书”，此项最高2分可能无法获取。</td><td>立即核查内部是否有未录入清单的证书，或安排相关人员紧急参加培训（若时间允许），或在响应文件中说明具备同等保密管理能力（风险较大，建议优先核查证书）。</td></tr>
+    <tr><td>项目人员配备 - 负责人/技术负责人专业匹配</td><td class="score-bad">-2</td><td>要求“测绘、遥感等相关专业”。我方多名高级人员为“计算机技术与软件”专业，若评审严格认定，可能无法获得负责人/技术负责人职称分（共6分）。</td><td>优先选派柴蕾蕾（测绘中级）或茹菲（测绘中级）担任技术负责人，或确认计算机高级职称是否被认可为“相关专业”；若不行，需调整人员配置方案。</td></tr>
+  </table>
+
+  <div class="summary-box"><b>预估汇总：</b>预计总分 86 分。主要得分点在于技术方案（利用成熟能力）、信息安全（资质齐全）和进度计划。主要失分风险在于人员配置：一是缺乏明确的测绘/遥感专业负责人（计算机专业可能不被认可），二是缺乏涉密/保密培训证书。价格分取决于最终报价策略。</div>
+
+  <h2>七、建议报价</h2>
+  <div class="price-banner">
+    <div style="font-size:14px;"><b>招标文件未公布预算金额。</b>参考同类安徽省生态环境遥感监测项目，通常年度监测费用在 <b>50万 ~ 150万元</b> 之间（视监测面积和频次而定）。</div>
+  </div>
+  <table class="kv">
+    <tr><td>报价依据</td><td>招标文件未公布预算金额。参考同类安徽省生态环境遥感监测项目，通常年度监测费用在50万-150万之间（视监测面积和频次而定）。</td></tr>
+    <tr><td>报价策略</td><td>采用低价优先法且技术分预估较高（86分），建议采取“成本加成微利”策略：先测算无人机外业、数据处理、报告编制及人员成本；调研六安市同类项目历史中标价，报价略低于市场平均水平以争取价格分满分，同时确保不亏本。</td></tr>
+    <tr><td>预估价格分</td><td><span class="score-good">10</span> / 10 分</td></tr>
+  </table>
+
+  <h2>八、关键要求</h2>
+  <h3>技术要求</h3>
+  <ul class="plain">
+    <li>必须包含摄影测量与遥感专业的乙级及以上测绘资质</li>
+    <li>方案需包含项目现状分析、基础资料掌握、问题及建议</li>
+    <li>方案需包含进度目标、设备/人员/制度保障及应急预案</li>
+    <li>方案需包含信息安全培训、管理体系、制度、档案及督查制度</li>
+    <li>人员需满足：负责人/技术负责人测绘/遥感中级以上职称且有遥感监测业绩；其他成员测绘初级以上；部分成员需涉密/保密证书；部分成员需无人机执照</li>
+  </ul>
+  <h3>商务要求</h3>
+  <ul class="plain">
+    <li>付款方式：合同签订付40%，提交数据及报告获认可后付60%</li>
+    <li>服务期：1年</li>
+    <li>响应文件需包含无重大违法记录声明、无不良信用记录承诺</li>
+    <li>进场前需核查人员身份，虚假响应作废标处理</li>
+  </ul>
+
+  <h2>九、风险点（4项）</h2>
+  <div class="risk risk-high">
+    <div class="head"><span class="tag tag-red">高风险</span> <span class="tag">资质风险</span> <b>人员资质专业匹配风险</b></div>
+    <div>招标文件要求项目负责人和技术负责人具有“测绘、遥感等相关专业”职称。我方核心高级人员多为“计算机技术与软件”专业，若评审专家严格界定专业范围，可能导致负责人/技术负责人职称分（共6分）丢失。</div>
+    <div class="suggest"><b>应对：</b>立即核实柴蕾蕾、茹菲等测绘中级人员是否可担任技术负责人，并确认其业绩是否满足“承担过遥感监测类项目”要求。若计算机高级不被认可，需调整人员配置。</div>
+  </div>
+  <div class="risk risk-high">
+    <div class="head"><span class="tag tag-red">高风险</span> <span class="tag">资质风险</span> <b>涉密/保密证书缺失</b></div>
+    <div>招标文件要求提供“地理信息安全保密培训合格证书”或“涉密人员资格证书”，我方清单中未体现，可能导致该项2分全失。</div>
+    <div class="suggest"><b>应对：</b>紧急核查公司内部是否有员工持有此类证书但未录入清单。若无，需评估是否能在截标前组织培训获取证书，或提供强有力的替代证明材料（存在不被认可风险）。</div>
+  </div>
+  <div class="risk risk-medium">
+    <div class="head"><span class="tag tag-orange">中风险</span> <span class="tag">商务风险</span> <b>付款方式风险</b></div>
+    <div>合同款40%预付，60%验收后支付。若项目周期长或验收标准严苛，可能影响现金流。</div>
+    <div class="suggest"><b>应对：</b>在合同谈判阶段争取更优的验收节点或进度款支付比例，或在报价中预留足够的资金周转成本。</div>
+  </div>
+  <div class="risk risk-medium">
+    <div class="head"><span class="tag tag-orange">中风险</span> <span class="tag">技术风险</span> <b>黑臭水体监测针对性不足</b></div>
+    <div>我方虽有生态环境监测能力，但针对“农村黑臭水体”的专项遥感识别指标和算法需在方案中重点阐述，否则可能被视为“针对性不强”而失分。</div>
+    <div class="suggest"><b>应对：</b>在技术方案中专门设立“农村黑臭水体遥感监测”章节，引用知识库中“合肥市/芜湖市”的交流经验，提出具体的水体黑臭指数反演算法和监测流程。</div>
+  </div>
+
+  <div class="footer">
+    本报告由 CRM 系统「AI情报中心 · 招标文件研判」自动生成 &nbsp;|&nbsp; 综合资质管理、能力标签库、知识库三路数据研判 &nbsp;|&nbsp; 生成时间：2026-10-12
+  </div>
+</div>
+</body>
+</html>

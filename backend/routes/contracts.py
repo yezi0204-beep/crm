@@ -609,27 +609,30 @@ def save_contract_commissions(contract_id):
 # ==================== 框架合同验收记录 ====================
 
 def _sync_contract_acceptance_fields(cur, contract_id):
-    """根据验收记录同步合同的 income/待验收额/验收日期，确保合同管理与验收管理数据联动。
-    含税收入(累计验收额 + 税额) = SUM(acceptance_amount) + tax_amount
+    """根据验收记录同步合同的 income/待验收额/验收日期/税额，确保合同管理与验收管理数据联动。
+    税额为验收记录级字段：合同税额 = SUM(记录税额)
+    含税收入 = SUM(acceptance_amount) + SUM(记录税额)
     待验收合同额 = 合同额 - 含税收入
     验收日期 = 最近一次验收日期
     """
     cur.execute(
-        "SELECT COALESCE(SUM(acceptance_amount), 0), MAX(acceptance_date) "
+        "SELECT COALESCE(SUM(acceptance_amount), 0), COALESCE(SUM(tax_amount), 0), MAX(acceptance_date) "
         "FROM contract_acceptances WHERE contract_id=?",
         (contract_id,)
     )
     row = cur.fetchone()
     acc_total = float(row[0] or 0)
-    latest_date = row[1]
-    cur.execute("SELECT COALESCE(total_amt, 0), COALESCE(tax_amount, 0) FROM contracts WHERE id=?", (contract_id,))
+    acc_tax = float(row[1] or 0)
+    latest_date = row[2]
+    cur.execute("SELECT COALESCE(total_amt, 0) FROM contracts WHERE id=?", (contract_id,))
     crow = cur.fetchone()
+    if not crow:
+        return
     total_amt = float(crow[0] or 0)
-    tax_amount = float(crow[1] or 0)
-    income_with_tax = acc_total + tax_amount
+    income_with_tax = acc_total + acc_tax
     cur.execute(
-        "UPDATE contracts SET income=?, pending_acceptance_amount=?, acceptance_date=? WHERE id=?",
-        (income_with_tax, total_amt - income_with_tax, latest_date, contract_id)
+        "UPDATE contracts SET income=?, pending_acceptance_amount=?, acceptance_date=?, tax_amount=? WHERE id=?",
+        (income_with_tax, total_amt - income_with_tax, latest_date, acc_tax, contract_id)
     )
 
 
@@ -713,11 +716,25 @@ def add_acceptance(contract_id):
 
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     operator = payload['username']
+    # 记录级税额：显式传入则用传入值；未传入且为该合同首条验收时继承合同现有税额，避免丢失
+    tax_in = data.get('tax_amount')
+    try:
+        acc_tax = float(tax_in) if tax_in not in (None, '') else None
+    except (TypeError, ValueError):
+        acc_tax = None
+    if acc_tax is None:
+        cur.execute("SELECT COUNT(*) AS n FROM contract_acceptances WHERE contract_id=?", (contract_id,))
+        is_first = int(cur.fetchone()['n'] or 0) == 0
+        if is_first:
+            cur.execute("SELECT COALESCE(tax_amount, 0) AS t FROM contracts WHERE id=?", (contract_id,))
+            acc_tax = float(cur.fetchone()['t'] or 0)
+        else:
+            acc_tax = 0.0
     try:
         cur.execute(
-            "INSERT INTO contract_acceptances (contract_id, acceptance_date, acceptance_amount, note, created_by, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (contract_id, acc_date, acc_amt, data.get('note', ''), operator, now)
+            "INSERT INTO contract_acceptances (contract_id, acceptance_date, acceptance_amount, tax_amount, note, created_by, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (contract_id, acc_date, acc_amt, acc_tax, data.get('note', ''), operator, now)
         )
         acc_id = cur.lastrowid
         # 写入验收级分成
@@ -800,7 +817,7 @@ def update_acceptance(acc_id):
             "UPDATE contract_acceptances SET acceptance_date=?, acceptance_amount=?, note=? WHERE id=?",
             (acc_date, acc_amt, note, acc_id)
         )
-        # 可选：同步更新合同的税额、业务方向
+        # 可选：同步更新税额（记录级）与合同的业务方向（合同级）
         tax_amount = data.get('tax_amount')
         business_direction = (data.get('business_direction') or '').strip()
         if tax_amount is not None:
@@ -808,16 +825,11 @@ def update_acceptance(acc_id):
                 tax_amount = float(tax_amount)
             except (TypeError, ValueError):
                 tax_amount = None
-        set_clauses, params = [], []
+        # 税额仅修改当前这条验收记录，不影响同合同其他记录
         if tax_amount is not None:
-            set_clauses.append("tax_amount=?")
-            params.append(tax_amount)
+            cur.execute("UPDATE contract_acceptances SET tax_amount=? WHERE id=?", (tax_amount, acc_id))
         if business_direction:
-            set_clauses.append("business_direction=?")
-            params.append(business_direction)
-        if set_clauses:
-            params.append(contract_id)
-            cur.execute(f"UPDATE contracts SET {', '.join(set_clauses)} WHERE id=?", params)
+            cur.execute("UPDATE contracts SET business_direction=? WHERE id=?", (business_direction, contract_id))
         # 传入 commissions 时整体替换该验收的分成
         if commissions is not None:
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1311,9 +1323,9 @@ def get_acceptance_list():
     cursor = db.cursor()
     cursor.execute("""
         SELECT ca.id AS acceptance_id, ca.acceptance_date, ca.acceptance_amount, ca.note,
-               ca.created_by, ca.created_at,
+               ca.tax_amount, ca.created_by, ca.created_at,
                c.id AS contract_id, c.contract_name, c.contract_no, c.party_a,
-               c.total_amt, c.income, c.tax_amount, c.business_direction, c.status,
+               c.total_amt, c.income, c.business_direction, c.status,
                (SELECT COALESCE(SUM(ca2.acceptance_amount), 0)
                 FROM contract_acceptances ca2
                 WHERE ca2.contract_id = c.id) AS cumulative_accepted
@@ -1332,7 +1344,7 @@ def get_acceptance_list():
 @contracts_bp.route('/api/acceptances/import', methods=['POST'])
 @token_required
 def import_acceptances():
-    """导入验收数据：每行创建一笔验收记录，并可选更新合同级字段(收入/税额/业务方向)。
+    """导入验收数据：每行创建一笔验收记录（税额随记录保存），并可选更新合同级字段(业务方向)。
     必填：合同编号、验收日期、验收金额(元)。可选：验收情况、收入(元)、税额(元)、业务方向。
     """
     payload = request.current_user
@@ -1416,30 +1428,30 @@ def import_acceptances():
         note = str(row_data.get('note') or row_data.get('acceptance_note') or '').strip()
 
         try:
-            # 1) 创建验收记录
+            # 记录级税额：显式传入则用传入值；未传入且为该合同首条验收时继承合同现有税额，避免丢失
+            tax_yuan = _parse_amt(row_data.get('tax_amount'))
+            if tax_yuan is None:
+                cursor.execute("SELECT COUNT(*) AS n FROM contract_acceptances WHERE contract_id=?", (contract_id,))
+                if int(cursor.fetchone()['n'] or 0) == 0:
+                    cursor.execute("SELECT COALESCE(tax_amount, 0) AS t FROM contracts WHERE id=?", (contract_id,))
+                    tax_yuan = float(cursor.fetchone()['t'] or 0)
+                else:
+                    tax_yuan = 0.0
+
+            # 1) 创建验收记录（税额随记录保存）
             cursor.execute(
-                "INSERT INTO contract_acceptances (contract_id, acceptance_date, acceptance_amount, note, created_by, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (contract_id, acc_date, acc_amt_yuan, note, username, now)
+                "INSERT INTO contract_acceptances (contract_id, acceptance_date, acceptance_amount, tax_amount, note, created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (contract_id, acc_date, acc_amt_yuan, tax_yuan, note, username, now)
             )
             existing.add((contract_id, acc_date))
             affected_contracts.add(contract_id)
 
-            # 2) 可选：更新合同级字段（税额/业务方向）。
-            # 收入/待验收额/验收日期由下方 _sync_contract_acceptance_fields 自动联动
-            contract_updates = {}
-            for field, parser in [
-                ('tax_amount', _parse_amt),
-                ('business_direction', lambda v: str(v).strip() if v else None),
-            ]:
-                if field in row_data:
-                    parsed = parser(row_data[field])
-                    if parsed is not None:
-                        contract_updates[field] = parsed
-            if contract_updates:
-                set_clauses = ', '.join(f'{k}=?' for k in contract_updates)
-                params = list(contract_updates.values()) + [contract_id]
-                cursor.execute(f"UPDATE contracts SET {set_clauses} WHERE id=?", params)
+            # 2) 可选：更新合同级字段（业务方向）。
+            # 收入/待验收额/验收日期/合同税额由下方 _sync_contract_acceptance_fields 自动联动
+            bd = str(row_data.get('business_direction') or '').strip()
+            if bd:
+                cursor.execute("UPDATE contracts SET business_direction=? WHERE id=?", (bd, contract_id))
 
             success_count += 1
             results.append({'row_index': row_index, 'success': True, 'message': '验收记录已创建'})

@@ -447,6 +447,221 @@ def detail():
     return jsonify({'code': 200, 'message': 'success', 'data': {'items': items, 'totals': totals}})
 
 
+# ============================================================
+# 数据挖掘分析
+# ============================================================
+@workcost_bp.route('/analysis', methods=['GET'])
+@require_permission(('workhour.view', 'workhour.manage'))
+def analysis():
+    """工时分摊数据挖掘分析。
+
+    汇总展示：各部门月度人力成本（总成本 / 单工时成本 / 分摊率）与项目工时成本
+    （累计工时、分摊成本、成本率、工时使用率），并输出自动洞察。可按 year/dept 筛选。
+    """
+    db = get_db()
+    year = request.args.get('year', '').strip()
+    dept = request.args.get('dept', '').strip()
+
+    # ---------- 1. 部门月度人力成本（含10项成本构成、已分配工时） ----------
+    breakdown_cols = ', '.join(f"m.{f} as {f}" for f, _ in COST_FIELDS)
+    sql = f"""
+        SELECT m.id, m.dept, m.month, m.total_hours,
+               ({COST_SUM_SQL}) as month_total_cost,
+               {breakdown_cols},
+               COALESCE(SUM(a.hours), 0) as allocated_hours
+        FROM dept_month_costs m
+        LEFT JOIN dept_hour_allocations a ON a.cost_id = m.id
+        WHERE 1=1
+    """
+    params = []
+    if year:
+        sql += " AND m.month LIKE ?"
+        params.append(f'{year}-%')
+    if dept:
+        sql += " AND m.dept = ?"
+        params.append(dept)
+    sql += " GROUP BY m.id ORDER BY m.month, m.dept"
+
+    dept_monthly = []
+    for r in db.execute(sql, params).fetchall():
+        total_cost = round(float(r['month_total_cost'] or 0), 2)
+        th = float(r['total_hours'] or 0)
+        unit = total_cost / th if th > 0 else 0          # 全精度，用于金额计算
+        alloc_hours = round(float(r['allocated_hours'] or 0), 2)
+        alloc_cost = round(alloc_hours * unit, 2)
+        dept_monthly.append({
+            'id': r['id'], 'dept': r['dept'], 'month': r['month'],
+            'total_hours': round(th, 2), 'total_cost': total_cost, 'unit_cost': round(unit, 4),
+            'allocated_hours': alloc_hours, 'allocated_cost': alloc_cost,
+            'unallocated_hours': round(th - alloc_hours, 2),
+            'unallocated_cost': round(total_cost - alloc_cost, 2),
+            'allocation_rate': round(alloc_hours / th * 100, 2) if th > 0 else 0,
+            'cost_breakdown': {f: round(float(r[f] or 0), 2) for f, _ in COST_FIELDS},
+        })
+
+    # ---------- 2. 部门汇总 ----------
+    dept_agg = {}
+    for d in dept_monthly:
+        s = dept_agg.setdefault(d['dept'], {
+            'dept': d['dept'], 'months': 0, 'total_hours': 0.0, 'total_cost': 0.0,
+            'allocated_hours': 0.0, 'allocated_cost': 0.0,
+            'cost_breakdown': {f: 0.0 for f, _ in COST_FIELDS},
+        })
+        s['months'] += 1
+        s['total_hours'] += d['total_hours']
+        s['total_cost'] += d['total_cost']
+        s['allocated_hours'] += d['allocated_hours']
+        s['allocated_cost'] += d['allocated_cost']
+        for f, _ in COST_FIELDS:
+            s['cost_breakdown'][f] += d['cost_breakdown'][f]
+
+    dept_summary = []
+    for s in dept_agg.values():
+        th = s['total_hours']
+        s['total_hours'] = round(th, 2)
+        s['total_cost'] = round(s['total_cost'], 2)
+        s['allocated_hours'] = round(s['allocated_hours'], 2)
+        s['allocated_cost'] = round(s['allocated_cost'], 2)
+        s['unit_cost'] = round(s['total_cost'] / th, 4) if th > 0 else 0
+        s['unallocated_cost'] = round(s['total_cost'] - s['allocated_cost'], 2)
+        s['allocation_rate'] = round(s['allocated_hours'] / th * 100, 2) if th > 0 else 0
+        s['cost_breakdown'] = {k: round(v, 2) for k, v in s['cost_breakdown'].items()}
+        dept_summary.append(s)
+    dept_summary.sort(key=lambda x: x['total_cost'], reverse=True)
+
+    # ---------- 3. 项目（合同）工时成本 ----------
+    psql = f"""
+        SELECT c.id as contract_id, c.contract_name, c.contract_no, c.status,
+               c.total_amt, c.estimated_hours,
+               cu.company as customer_name, u.name as owner_name,
+               COALESCE(SUM(a.hours), 0) as total_hours,
+               COALESCE(SUM(a.hours * ({COST_SUM_SQL}) / NULLIF(m.total_hours, 0)), 0) as total_cost,
+               COUNT(DISTINCT m.month) as month_count
+        FROM dept_hour_allocations a
+        JOIN dept_month_costs m ON a.cost_id = m.id
+        JOIN contracts c ON a.contract_id = c.id
+        LEFT JOIN customers cu ON c.cust_id = cu.id
+        LEFT JOIN users u ON c.owner_id = u.username
+        WHERE 1=1
+    """
+    pparams = []
+    if year:
+        psql += " AND m.month LIKE ?"
+        pparams.append(f'{year}-%')
+    if dept:
+        psql += " AND m.dept = ?"
+        pparams.append(dept)
+    psql += " GROUP BY c.id ORDER BY total_cost DESC"
+
+    project_costs = []
+    for r in db.execute(psql, pparams).fetchall():
+        hours = round(float(r['total_hours'] or 0), 2)
+        cost = round(float(r['total_cost'] or 0), 2)
+        amt = float(r['total_amt'] or 0)
+        est = r['estimated_hours']
+        est_f = None
+        try:
+            est_f = float(est) if est not in (None, '') else None
+        except (TypeError, ValueError):
+            est_f = None
+        project_costs.append({
+            'contract_id': r['contract_id'], 'contract_name': r['contract_name'],
+            'contract_no': r['contract_no'] or '', 'status': r['status'] or '',
+            'customer_name': r['customer_name'] or '', 'owner_name': r['owner_name'] or '',
+            'total_amt': round(amt, 2), 'total_hours': hours, 'total_cost': cost,
+            'unit_cost': round(cost / hours, 4) if hours > 0 else 0,
+            'cost_rate': round(cost / amt * 100, 2) if amt > 0 else 0,
+            'estimated_hours': round(est_f, 2) if est_f is not None else None,
+            'hours_usage_rate': round(hours / est_f * 100, 2) if est_f else None,
+            'month_count': r['month_count'],
+        })
+
+    # ---------- 4. 成本构成（整体） ----------
+    overall_breakdown = {
+        f: round(sum(d['cost_breakdown'][f] for d in dept_monthly), 2)
+        for f, _ in COST_FIELDS
+    }
+    total_cost = round(sum(d['total_cost'] for d in dept_monthly), 2)
+    cost_composition = [
+        {'key': f, 'name': name, 'amount': overall_breakdown[f],
+         'percent': round(overall_breakdown[f] / total_cost * 100, 2) if total_cost else 0}
+        for f, name in COST_FIELDS if overall_breakdown[f] > 0
+    ]
+    cost_composition.sort(key=lambda x: x['amount'], reverse=True)
+
+    total_hours = round(sum(d['total_hours'] for d in dept_monthly), 2)
+    allocated_cost = min(round(sum(d['allocated_cost'] for d in dept_monthly), 2), total_cost)
+    kpis = {
+        'month_count': len({d['month'] for d in dept_monthly}),
+        'dept_count': len(dept_agg),
+        'total_hours': total_hours,
+        'total_cost': total_cost,
+        'avg_unit_cost': round(total_cost / total_hours, 4) if total_hours else 0,
+        'allocated_cost': allocated_cost,
+        'unallocated_cost': round(total_cost - allocated_cost, 2),
+        'allocation_rate': round(allocated_cost / total_cost * 100, 2) if total_cost else 0,
+        'project_count': len(project_costs),
+        'project_hours': round(sum(p['total_hours'] for p in project_costs), 2),
+        'project_cost': round(sum(p['total_cost'] for p in project_costs), 2),
+    }
+
+    # ---------- 5. 自动洞察 ----------
+    insights = []
+    if total_cost > 0 and allocated_cost < total_cost:
+        gap = round(total_cost - allocated_cost, 2)
+        insights.append(
+            f'未分摊人力成本 {gap:.2f} 元，占总成本 {round(gap / total_cost * 100, 2)}%，'
+            f'说明仍有工时未分配到项目，建议补全分配以还原真实项目成本。'
+        )
+    if len(dept_summary) >= 2:
+        hi = max(dept_summary, key=lambda x: x['unit_cost'])
+        lo = min(dept_summary, key=lambda x: x['unit_cost'])
+        if lo['unit_cost'] > 0 and hi['dept'] != lo['dept']:
+            insights.append(
+                f'{hi["dept"]} 单工时成本 {hi["unit_cost"]:.2f} 元，为 {lo["dept"]}'
+                f'（{lo["unit_cost"]:.2f} 元）的 {hi["unit_cost"] / lo["unit_cost"]:.2f} 倍，'
+                f'两部门人力成本结构差异明显。'
+            )
+    if project_costs:
+        top = project_costs[0]
+        insights.append(
+            f'工时成本最高的项目为「{top["contract_name"]}」，累计 {top["total_hours"]:.2f} 工时 / '
+            f'{top["total_cost"]:.2f} 元，成本率 {top["cost_rate"]:.2f}%。'
+        )
+        risky = [p for p in project_costs if p['total_amt'] > 0 and p['cost_rate'] >= 30]
+        if risky:
+            insights.append(
+                f'有 {len(risky)} 个项目工时成本率≥30%，最高为「{risky[0]["contract_name"]}」'
+                f'（{risky[0]["cost_rate"]:.2f}%），需关注项目毛利。'
+            )
+        over = [p for p in project_costs if p['hours_usage_rate'] and p['hours_usage_rate'] > 100]
+        if over:
+            insights.append(
+                f'有 {len(over)} 个项目累计分配工时已超预计工时，最高「{over[0]["contract_name"]}」'
+                f'达 {over[0]["hours_usage_rate"]:.1f}%，存在工时超支风险。'
+            )
+    months = sorted({d['month'] for d in dept_monthly})
+    if len(months) >= 2:
+        cur_cost = sum(d['total_cost'] for d in dept_monthly if d['month'] == months[-1])
+        prev_cost = sum(d['total_cost'] for d in dept_monthly if d['month'] == months[-2])
+        if prev_cost > 0:
+            chg = (cur_cost - prev_cost) / prev_cost * 100
+            insights.append(
+                f'{months[-1]} 人力成本合计 {cur_cost:.2f} 元，环比 {months[-2]} {chg:+.2f}%。'
+            )
+    if not insights:
+        insights.append('暂无可分析数据，请先在「月度成本管理」录入部门月度成本并完成工时分配。')
+
+    return jsonify({'code': 200, 'message': 'success', 'data': {
+        'kpis': kpis,
+        'dept_monthly': dept_monthly,
+        'dept_summary': dept_summary,
+        'cost_composition': cost_composition,
+        'project_costs': project_costs,
+        'insights': insights,
+    }})
+
+
 @workcost_bp.route('/summary/export', methods=['GET'])
 @require_permission(('workhour.view', 'workhour.manage'))
 def export_summary():

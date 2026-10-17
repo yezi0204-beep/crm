@@ -217,6 +217,11 @@ const routes = [
         path: 'market-tasks',
         name: 'MarketTasks',
         component: () => import('../views/MarketTasks.vue')
+      },
+      {
+        path: 'tender-analysis',
+        name: 'TenderAnalysis',
+        component: () => import('../views/TenderAnalysis.vue')
       }
     ]
   }
@@ -277,7 +282,7 @@ router.beforeEach(async (to, from, next) => {
       // 营销管理
       '/marketing',
       // AI情报中心
-      '/cockpit', '/intelligence', '/customer-profiles', '/competitor-analysis',
+      '/cockpit', '/intelligence', '/tender-analysis', '/customer-profiles', '/competitor-analysis',
       '/task-monitor', '/daily-report', '/business-tags', '/enterprises',
       // 资源管理
       '/pool',
