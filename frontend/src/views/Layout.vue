@@ -73,6 +73,10 @@
             <span class="menu-icon">💰</span>
             <span>{{ t('menuItem.payments') }}</span>
           </el-menu-item>
+          <el-menu-item index="/receivables">
+            <span class="menu-icon">🧾</span>
+            <span>两金明细表</span>
+          </el-menu-item>
           <el-menu-item index="/visits">
             <span class="menu-icon">📅</span>
             <span>{{ t('menuItem.visits') }}</span>
@@ -160,6 +164,10 @@
           <el-menu-item index="/project-cost" v-if="!isRestrictedDirector && (has('workhour.view') || has('workhour.manage') || has('data.view_all') || has('cost.view') || has('cost.actual.manage'))">
             <span class="menu-icon">💰</span>
             <span>项目成本核算</span>
+          </el-menu-item>
+          <el-menu-item index="/opportunity-cost" v-if="!isRestrictedDirector">
+            <span class="menu-icon">📐</span>
+            <span>商机成本评估</span>
           </el-menu-item>
         </div>
 
@@ -402,6 +410,7 @@ const pageTitleMap = computed(() => ({
   '/workhours': t('menuItem.workhours'),
   '/work-cost': '工时分摊',
   '/project-cost': '项目成本核算',
+  '/opportunity-cost': '商机成本评估',
   '/projects': t('menuItem.projects'),
   '/users': t('menuItem.users'),
   '/alerts': t('menuItem.alerts'),
@@ -794,6 +803,8 @@ onUnmounted(() => {
   margin-left: 260px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  min-width: 0;
   transition: margin-left 0.3s ease;
 }
 
@@ -912,6 +923,8 @@ onUnmounted(() => {
 .content-wrapper {
   flex: 1;
   padding: 24px;
+  min-height: 0;
+  min-width: 0;
 }
 
 /* ==================== 语言切换器 ==================== */

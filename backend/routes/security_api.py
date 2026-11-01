@@ -33,6 +33,7 @@
 
 from flask import request, jsonify
 from datetime import datetime
+import re
 
 from extensions import get_db, token_required, admin_required, record_operation_log
 from security import (
@@ -376,6 +377,20 @@ def sign_operation_log():
                     'data': signed})
 
 
+def _fmt_utc_display(v):
+    """timestamp_utc 显示格式化：UTC ISO 串 → 北京时间 'YYYY-MM-DD HH:MM:SS'。
+
+    仅影响展示；存储值保持签名时的原始 UTC 串（验签依赖）。
+    """
+    if not v or not isinstance(v, str):
+        return v
+    from db import _normalize_iso_string
+    norm = _normalize_iso_string(v)
+    if isinstance(norm, str) and re.match(r'^\d{4}-\d{2}-\d{2}$', norm):
+        return norm + ' 00:00:00'
+    return norm
+
+
 @security_bp.route('/api/security/operation/logs', methods=['GET'])
 @token_required
 def get_signed_operation_logs():
@@ -404,8 +419,12 @@ def get_signed_operation_logs():
             LIMIT ?
         """, (payload['username'], limit))
     rows = cursor.fetchall()
-    return jsonify({'code': 200, 'message': 'success',
-                    'data': [dict(r) for r in rows]})
+    out = []
+    for r in rows:
+        d = dict(r)
+        d['timestamp_utc'] = _fmt_utc_display(d.get('timestamp_utc'))
+        out.append(d)
+    return jsonify({'code': 200, 'message': 'success', 'data': out})
 
 
 @security_bp.route('/api/security/operation/verify', methods=['POST'])
@@ -460,7 +479,7 @@ def verify_operation_log():
             'non_repudiable': bool(signature_ok),
             'digest_algorithm': 'SHA-256',
             'signature_algorithm': 'RSA-2048-PSS-SHA256',
-            'log': dict(row),
+            'log': {**dict(row), 'timestamp_utc': _fmt_utc_display(row.get('timestamp_utc'))},
         },
     })
 

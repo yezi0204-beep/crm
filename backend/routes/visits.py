@@ -383,6 +383,75 @@ def complete_visit(visit_id):
             record_operation_log(username, '完成', '拜访排班',
                 f'完成拜访(ID:{visit_id})，创建客户跟进(ID:{follow_id})，关联{len(business_ids)}个商机跟进')
 
+        # ===== 事项完成后自动沉淀到知识库 =====
+        knowledge_id = None
+        try:
+            visit_full = dict(visit)
+            result_text = data.get('result') or ''
+            follow_text = data.get('follow_content') or ''
+            next_action = data.get('next_action', '')
+            actual_date = data.get('actual_date', today)
+
+            cust_label = ''
+            if visit_full.get('cust_id'):
+                cursor.execute("SELECT company, name FROM customers WHERE id = ?", (visit_full['cust_id'],))
+                crow = cursor.fetchone()
+                if crow:
+                    cust_label = crow['company'] or crow['name'] or ''
+
+            cursor.execute("SELECT name FROM users WHERE username = ?", (visit_full.get('visitor_id') or username,))
+            urow = cursor.fetchone()
+            visitor_name = urow['name'] if urow else (visit_full.get('visitor_id') or username)
+
+            if visit_full.get('work_type') == 'visit':
+                kb_title = f"拜访纪要：{cust_label or '客户'}（{actual_date}）"
+            else:
+                kb_title = f"工作记录：{(visit_full.get('work_content') or '其它工作')[:20]}（{actual_date}）"
+
+            content_parts = [
+                f"日期：{actual_date} {data.get('actual_time', current_time)}",
+                f"执行人：{visitor_name}",
+            ]
+            if cust_label:
+                content_parts.append(f"客户：{cust_label}")
+            if visit_full.get('location'):
+                content_parts.append(f"地点：{visit_full['location']}")
+            if visit_full.get('purpose'):
+                content_parts.append(f"拜访目的：{visit_full['purpose']}")
+            if visit_full.get('work_content'):
+                content_parts.append(f"工作内容：{visit_full['work_content']}")
+            if follow_text:
+                content_parts.append(f"跟进内容：{follow_text}")
+            if result_text:
+                content_parts.append(f"完成结果：{result_text}")
+            if next_action:
+                content_parts.append(f"下一步行动：{next_action}" + (f"（{data.get('next_date')}）" if data.get('next_date') else ""))
+            kb_content = '\n'.join(content_parts)
+
+            cursor.execute("""
+                INSERT INTO knowledge_base (title, content, category, cust_id, visit_id, owner_id, tags, summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                kb_title, kb_content, 'visit_summary',
+                visit_full.get('cust_id'), visit_id, username,
+                '拜访排班,自动沉淀', (result_text or follow_text or '')[:100]
+            ))
+            knowledge_id = cursor.lastrowid
+
+            # 向量索引（失败不影响主流程）
+            try:
+                from vector_search import index_document
+                index_document(knowledge_id, f"{kb_title}\n{kb_content}")
+            except Exception:
+                pass
+
+            record_operation_log(username, '创建', '知识库',
+                                 f'排班完成自动沉淀知识条目：{kb_title}（ID:{knowledge_id}）')
+        except Exception as ke:
+            import traceback
+            traceback.print_exc()
+            print(f"[visits] 知识库自动沉淀失败（不影响完成流程）: {ke}")
+
         db.commit()
 
         record_operation_log(username, '完成', '拜访排班', f'完成拜访计划 ID:{visit_id}')
@@ -393,7 +462,8 @@ def complete_visit(visit_id):
             'data': {
                 'visit_id': visit_id,
                 'customer_follow_created': visit_dict.get('work_type') == 'visit' and visit_dict.get('cust_id') is not None,
-                'business_follow_count': biz_follow_count if visit_dict.get('work_type') == 'visit' else 0
+                'business_follow_count': biz_follow_count if visit_dict.get('work_type') == 'visit' else 0,
+                'knowledge_id': knowledge_id
             }
         })
     except Exception as e:
@@ -789,6 +859,116 @@ def export_weekly_report():
         download_name=filename,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
+
+
+@visits_bp.route('/api/visits/analyze-plan', methods=['POST'])
+@token_required
+def analyze_visit_plan():
+    """AI 计划分析：基于某人近期的排班计划，由大模型推测拜访目标与所需资源。
+
+    请求体：
+      - visitor_id: 可选，默认当前用户；无 data.view_all 权限只能分析自己
+      - days: 可选，分析未来 N 天计划，默认 7
+    返回：{'analysis': markdown 文本}
+    """
+    from datetime import timedelta
+    from qa_engine import call_llm
+
+    payload = request.current_user
+    username = payload['username']
+    data = request.get_json(silent=True) or {}
+
+    visitor_id = (data.get('visitor_id') or '').strip() or username
+    if visitor_id != username and not user_can(username, 'data.view_all'):
+        return jsonify({'code': 403, 'message': '权限不足，只能分析自己的计划', 'data': None})
+    try:
+        days = max(1, min(int(data.get('days', 7) or 7), 31))
+    except (TypeError, ValueError):
+        days = 7
+
+    db = get_db()
+    cursor = db.cursor()
+
+    cursor.execute("SELECT username, name, role FROM users WHERE username = ?", (visitor_id,))
+    user = cursor.fetchone()
+    if not user:
+        return jsonify({'code': 404, 'message': '用户不存在', 'data': None})
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    end = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
+
+    cursor.execute("""
+        SELECT v.plan_date, v.plan_time, v.work_type, v.purpose, v.work_content,
+               v.location, v.notes, v.cust_id,
+               c.company as customer_company, c.name as customer_name, c.level as customer_level
+        FROM visits v
+        LEFT JOIN customers c ON v.cust_id = c.id
+        WHERE v.visitor_id = ? AND v.plan_date >= ? AND v.plan_date <= ? AND v.status = 'planned'
+        ORDER BY v.plan_date, v.plan_time
+    """, (visitor_id, today, end))
+    plans = [dict(r) for r in cursor.fetchall()]
+
+    if not plans:
+        return jsonify({'code': 200, 'message': 'success',
+                        'data': {'analysis': f'{user["name"]} 未来 {days} 天暂无排班计划，无需分析。',
+                                 'plan_count': 0}})
+
+    # 关联客户活跃商机，辅助判断拜访目标
+    biz_map = {}
+    cust_ids = [p['cust_id'] for p in plans if p.get('cust_id')]
+    if cust_ids:
+        ph = ','.join('?' * len(cust_ids))
+        cursor.execute(f"""
+            SELECT cust_id, title, stage, amount FROM business
+            WHERE cust_id IN ({ph}) AND status NOT IN ('converted', 'rejected')
+            ORDER BY amount DESC
+        """, tuple(cust_ids))
+        for r in cursor.fetchall():
+            biz_map.setdefault(r['cust_id'], []).append(
+                f"{r['title']}（阶段:{r['stage']}，预算:{round(r['amount'] or 0, 2)}元）")
+
+    plan_lines = []
+    for p in plans:
+        if p['work_type'] == 'visit':
+            cust = p['customer_company'] or p['customer_name'] or '未指定客户'
+            line = f"- {p['plan_date']} {p['plan_time'] or ''} 【拜访】{cust}：{p['purpose'] or '（未填目的）'}"
+            if p.get('location'):
+                line += f"，地点:{p['location']}"
+            bizs = biz_map.get(p['cust_id'])
+            if bizs:
+                line += f"；该客户在途商机：{'、'.join(bizs[:3])}"
+        else:
+            line = f"- {p['plan_date']} {p['plan_time'] or ''} 【其它工作】{p['work_content'] or '（未填内容）'}"
+        plan_lines.append(line)
+
+    system_prompt = (
+        '你是一名事业单位"应用中心"的销售总监助理。基于员工未来的排班计划，'
+        '结合客户在途商机信息，为每项计划智能分析：\n'
+        '1. **可能的拜访目标**：推测本次拜访最可能要达成的业务目标（如推进商机阶段、催办回款、'
+        '需求调研、方案汇报、合同谈判、关系维护等），并说明依据。\n'
+        '2. **资源需求建议**：拜访前需要准备的资源（方案/PPT、报价单、售前支持、技术专家陪同、'
+        '演示环境、领导站台、礼品等）及建议提前准备的时间。\n'
+        '要求：逐条计划分析，语言精炼务实，严禁编造客户名称与商机；'
+        '其它工作类事项仅简要给出准备建议。输出 Markdown。'
+    )
+    user_prompt = (
+        f"员工：{user['name']}（{user['role']}）\n"
+        f"分析范围：{today} ~ {end}\n"
+        f"排班计划（共 {len(plans)} 项）：\n" + '\n'.join(plan_lines)
+    )
+    answer = call_llm(
+        [{'role': 'system', 'content': system_prompt},
+         {'role': 'user', 'content': user_prompt}],
+        max_tokens=4000, timeout=120, enable_thinking=False
+    )
+    if not answer:
+        return jsonify({'code': 500, 'message': 'LLM 服务未启用或调用失败', 'data': None})
+
+    record_operation_log(username, 'AI分析', '拜访排班',
+                         f'AI计划分析：{user["name"]} 未来{days}天（{len(plans)}项计划）')
+    return jsonify({'code': 200, 'message': 'success',
+                    'data': {'analysis': answer, 'plan_count': len(plans),
+                             'visitor_name': user['name'], 'range': f'{today} ~ {end}'}})
 
 
 def register_routes(app):

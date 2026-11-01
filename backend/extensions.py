@@ -81,7 +81,8 @@ EXPECTED_TABLES = [
     'monthly_targets', 'operation_logs', 'payment_plans', 'payment_records', 'permissions',
     'personnel_qualifications', 'products', 'project_assignments', 'projects',
     'quarterly_assessment_items', 'quarterly_assessments', 'quote_items', 'quotes',
-    'raw_intelligence', 'role_permissions', 'sales_alerts', 'scraped_leads',
+    'raw_intelligence', 'receivable_overrides', 'receivable_snapshots',
+    'role_permissions', 'sales_alerts', 'scraped_leads',
     'ticket_messages', 'ticket_surveys', 'tickets', 'tokens', 'user_hourly_rate',
     'user_preferences', 'user_roles', 'users', 'visits', 'work_hours',
 ]
@@ -176,6 +177,30 @@ def record_operation_log(username, operation, module, detail=''):
         ip_address = request.remote_addr if request else ''
         created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+        # ---- 丰富日志内容：操作人姓名/部门 + 请求接口 ----
+        try:
+            cursor.execute("SELECT name, department, role FROM users WHERE username=?", (username,))
+            u = cursor.fetchone()
+            if u:
+                user_label = u.get('name') or username
+                if u.get('department'):
+                    user_label += f"({u['department']}{('·' + u['role']) if u.get('role') else ''})"
+            else:
+                user_label = username
+        except Exception:
+            user_label = username
+
+        req_label = ''
+        try:
+            if request:
+                req_label = f"{request.method} {request.path}"
+        except Exception:
+            pass
+
+        detail_text = f"[{user_label}] {detail}" if detail else f"[{user_label}]"
+        if req_label:
+            detail_text = f"{detail_text} ｜ {req_label}"
+
         # ---- 7.1.4 不可抵赖性 + 7.1.2 完整性：操作签名 ----
         digest = ''
         signature = ''
@@ -188,7 +213,7 @@ def record_operation_log(username, operation, module, detail=''):
                 username=username,
                 operation=operation,
                 module=module,
-                detail=detail,
+                detail=detail_text,
                 extra={'ip': ip_address, 'created_at': created_at},
             )
             digest = signed['digest']
@@ -201,7 +226,7 @@ def record_operation_log(username, operation, module, detail=''):
             INSERT INTO operation_logs (username, operation, module, detail, ip_address, created_at, is_read,
                                         digest, signature, timestamp_utc)
             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-        """, (username, operation, module, detail, ip_address, created_at,
+        """, (username, operation, module, detail_text, ip_address, created_at,
               digest or None, signature or None, timestamp_utc or None))
         db.commit()
     except Exception as e:

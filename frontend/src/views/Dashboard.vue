@@ -56,7 +56,25 @@
         </div>
       </el-card>
     </div>
-    
+
+    <!-- AI 经营洞察 -->
+    <el-card class="ai-insight-card">
+      <template #header>
+        <div class="card-header">
+          <span>🧠 AI 经营洞察</span>
+          <div class="header-actions">
+            <span v-if="insightsMeta.generated_at" class="insight-time">{{ insightsMeta.generated_at }}</span>
+            <el-button size="small" type="primary" text :loading="insightsLoading" @click="fetchInsights(true)">刷新洞察</el-button>
+          </div>
+        </div>
+      </template>
+      <div v-loading="insightsLoading">
+        <ul class="insight-list">
+          <li v-for="(t, i) in aiInsights" :key="i">{{ t }}</li>
+        </ul>
+      </div>
+    </el-card>
+
     <!-- AI 商机驾驶舱 -->
     <el-card class="ai-cockpit-card">
       <template #header>
@@ -335,6 +353,26 @@ const recentContracts = ref([])
 const salesRanking = ref([])
 
 const alerts = ref([])
+
+// AI 经营洞察
+const aiInsights = ref([])
+const insightsMeta = ref({})
+const insightsLoading = ref(false)
+
+const fetchInsights = async (force = false) => {
+  insightsLoading.value = true
+  try {
+    const res = await api.longGet('/dashboard/insights')
+    if (res.code === 200 && res.data) {
+      aiInsights.value = res.data.insights || []
+      insightsMeta.value = { generated_at: res.data.generated_at, source: res.data.source }
+    }
+  } catch (e) {
+    aiInsights.value = aiInsights.value.length ? aiInsights.value : ['洞察加载失败，请稍后重试']
+  } finally {
+    insightsLoading.value = false
+  }
+}
 
 // 月度验收/回款统计
 const financeData = ref({})
@@ -824,6 +862,7 @@ onMounted(async () => {
   if (financeChart.value) chartFinance = echarts.init(financeChart.value)
   if (quarterChart.value) chartQuarter = echarts.init(quarterChart.value)
   fetchMonthlyFinance()
+  fetchInsights()
   window.addEventListener('resize', handleResize)
 })
 
@@ -1167,5 +1206,37 @@ onUnmounted(() => {
 .alert-time {
   font-size: 12px;
   color: #ff6b6b;
+}
+
+/* AI 经营洞察 */
+.ai-insight-card {
+  margin-bottom: 16px;
+  background: linear-gradient(135deg, #f5f9ff 0%, #eef4fb 100%);
+  border: 1px solid #dde8f5;
+}
+.ai-insight-card :deep(.el-card__header) {
+  border-bottom: 1px solid #dde8f5;
+  padding: 12px 16px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.insight-time {
+  font-size: 12px;
+  color: #909399;
+}
+.insight-list {
+  margin: 0;
+  padding-left: 20px;
+}
+.insight-list li {
+  font-size: 14px;
+  color: #303133;
+  line-height: 2.1;
+}
+.insight-list li::marker {
+  color: #409eff;
 }
 </style>

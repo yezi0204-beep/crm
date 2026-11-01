@@ -430,6 +430,8 @@ def process_question_llm_stream(question, cursor, username):
         'get_total_pending': lambda: get_total_pending_raw(cursor),
         'get_weekly_plan': lambda: get_weekly_plan_raw(cursor, username),
         'get_next_week_plan': lambda: get_next_week_plan_raw(cursor, username),
+        'get_pending_workhours': lambda: get_pending_workhours_raw(cursor, username),
+        'get_month_payments': lambda: get_month_payments_raw(cursor),
     }
 
     if func_name not in func_map:
@@ -531,6 +533,12 @@ def process_question_rule(question, cursor, payload):
 
     if '下周' in question and ('工作' in question or '计划' in question):
         return get_next_week_plan(cursor, username)
+
+    if '工时' in question and any(k in question for k in ['待审', '待审批', '审批', '积压']):
+        return get_pending_workhours(cursor, username)
+
+    if '回款' in question and any(k in question for k in ['本月', '这个月', '当月']):
+        return get_month_payments(cursor)
 
     return get_default_answer(question)
 
@@ -711,6 +719,83 @@ def get_next_week_plan(cursor, username):
     return result
 
 
+def _user_can_on_cursor(cursor, username, permission_code):
+    """在给定 cursor 上判断用户权限（不依赖 Flask g，可用于 SSE stream 独立连接）。"""
+    cursor.execute("SELECT role FROM user_roles WHERE username = ?", (username,))
+    roles = {r['role'] for r in cursor.fetchall()}
+    cursor.execute("SELECT role, department FROM users WHERE username = ?", (username,))
+    u = cursor.fetchone()
+    if u:
+        if u['role']:
+            roles.add(u['role'])
+        if u['department']:
+            roles.add(f"dept:{u['department']}")
+    perms = set()
+    for role in roles:
+        cursor.execute("SELECT permission_code FROM role_permissions WHERE role_code = ?", (role,))
+        for r in cursor.fetchall():
+            code = r['permission_code']
+            if isinstance(code, str) and code.startswith('-'):
+                perms.discard(code[1:])
+            else:
+                perms.add(code)
+    return permission_code in perms
+
+
+def get_pending_workhours(cursor, username):
+    is_manager = _user_can_on_cursor(cursor, username, 'workhour.manage')
+    base_sql = """
+        SELECT wh.id, COALESCE(b.title, c.contract_name) AS project_name,
+               uu.name AS user_name, wh.work_date, wh.hours
+        FROM work_hours wh
+        LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
+        LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+        LEFT JOIN users uu ON wh.user_id = uu.username
+        WHERE wh.status = 'pending'
+    """
+    if is_manager:
+        cursor.execute(base_sql + " ORDER BY wh.submit_time ASC LIMIT 20")
+    else:
+        cursor.execute(base_sql + """
+            AND ((wh.project_type='business' AND (b.project_manager=? OR b.owner_id=?))
+                 OR (wh.project_type='contract' AND c.owner_id=?))
+            ORDER BY wh.submit_time ASC LIMIT 20
+        """, (username, username, username))
+    rows = [dict(r) for r in cursor.fetchall()]
+    if not rows:
+        return '当前没有待您审批的工时记录。'
+    total_hours = round(sum(float(r.get('hours') or 0) for r in rows), 2)
+    result = f'<strong>待审批工时：{len(rows)} 条（合计 {total_hours} 小时）</strong><br><br>'
+    for r in rows:
+        result += f"• <strong>{r.get('project_name') or '未关联项目'}</strong> | {r.get('user_name') or r.get('user_id')} | {r.get('work_date') or ''} | {r.get('hours') or 0} 小时<br>"
+    return result
+
+
+def get_month_payments(cursor):
+    cursor.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS cnt
+        FROM payment_records
+        WHERE DATE_FORMAT(payment_date, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m')
+    """)
+    row = cursor.fetchone()
+    cursor.execute("""
+        SELECT pr.amount, pr.payment_date, ct.contract_name
+        FROM payment_records pr
+        LEFT JOIN contracts ct ON pr.contract_id = ct.id
+        WHERE DATE_FORMAT(pr.payment_date, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m')
+        ORDER BY pr.payment_date DESC LIMIT 10
+    """)
+    items = cursor.fetchall()
+    total = row['total'] or 0
+    count = row['cnt']
+    if not items:
+        return '本月暂无回款记录。'
+    result = f'<strong>本月回款：共 {count} 笔，合计 {total:,.2f} 元</strong><br><br>'
+    for it in items:
+        result += f"• {it.get('contract_name') or '未关联合同'} | {it.get('payment_date') or ''} | {it.get('amount') or 0:,.2f} 元<br>"
+    return result
+
+
 def get_contracts_near_expiry_raw(cursor):
     cursor.execute("""
         SELECT contract_name, expected_income_date, total_amt, (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=contracts.id), 0) + COALESCE(tax_amount, 0) - COALESCE(paid_amt, 0)) as pending_amt
@@ -815,6 +900,52 @@ def get_next_week_plan_raw(cursor, username):
     """, (username,))
     rows = cursor.fetchall()
     return json.dumps([dict(row) for row in rows], ensure_ascii=False)
+
+
+def get_pending_workhours_raw(cursor, username):
+    """待审批工时概览（数据级隔离：管理员看全部，项目经理看自己负责的）。"""
+    is_manager = _user_can_on_cursor(cursor, username, 'workhour.manage')
+    base_sql = """
+        SELECT wh.id, COALESCE(b.title, c.contract_name) AS project_name,
+               uu.name AS user_name, wh.work_date, wh.hours
+        FROM work_hours wh
+        LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
+        LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+        LEFT JOIN users uu ON wh.user_id = uu.username
+        WHERE wh.status = 'pending'
+    """
+    if is_manager:
+        cursor.execute(base_sql + " ORDER BY wh.submit_time ASC LIMIT 20")
+    else:
+        cursor.execute(base_sql + """
+            AND ((wh.project_type='business' AND (b.project_manager=? OR b.owner_id=?))
+                 OR (wh.project_type='contract' AND c.owner_id=?))
+            ORDER BY wh.submit_time ASC LIMIT 20
+        """, (username, username, username))
+    rows = [dict(r) for r in cursor.fetchall()]
+    total_hours = round(sum(float(r.get('hours') or 0) for r in rows), 2)
+    return json.dumps({'count': len(rows), 'total_hours': total_hours,
+                       'items': rows}, ensure_ascii=False, default=str)
+
+
+def get_month_payments_raw(cursor):
+    """本月回款概览。"""
+    cursor.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS cnt
+        FROM payment_records
+        WHERE DATE_FORMAT(payment_date, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m')
+    """)
+    row = cursor.fetchone()
+    cursor.execute("""
+        SELECT pr.amount, pr.payment_date, ct.contract_name
+        FROM payment_records pr
+        LEFT JOIN contracts ct ON pr.contract_id = ct.id
+        WHERE DATE_FORMAT(pr.payment_date, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m')
+        ORDER BY pr.payment_date DESC LIMIT 10
+    """)
+    rows = [dict(r) for r in cursor.fetchall()]
+    return json.dumps({'total': row['total'] or 0, 'count': row['cnt'],
+                       'items': rows}, ensure_ascii=False, default=str)
 
 
 def get_default_answer(question):

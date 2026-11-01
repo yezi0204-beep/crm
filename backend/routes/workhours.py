@@ -596,6 +596,66 @@ def list_pending():
                     'data': {'items': data, 'count': len(data)}})
 
 
+@workhours_bp.route('/batch-approve', methods=['POST'])
+@token_required
+def batch_approve():
+    """批量审批通过待审工时。
+
+    body: {ids: [int]}
+    仅审批当前用户有权审批的待审记录（workhour.manage 全部，workhour.approve 限自己负责项目）。
+    返回 {approved_count, skipped_count, details: [{id, ok, reason?}]}
+    """
+    payload = request.current_user
+    username = payload['username']
+    if not (user_can(username, 'workhour.manage') or
+            user_can(username, 'workhour.approve')):
+        return jsonify({'code': 403, 'message': '无审批权限', 'data': None})
+
+    body = request.get_json(silent=True) or {}
+    ids = body.get('ids') or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'code': 400, 'message': '请提供要审批的记录ID列表', 'data': None})
+    ids = [int(i) for i in ids if isinstance(i, (int, float, str)) and str(i).isdigit()]
+    if not ids:
+        return jsonify({'code': 400, 'message': '无有效的记录ID', 'data': None})
+
+    db = get_db()
+    ph = ','.join(['?'] * len(ids))
+    rows = db.execute(
+        f"SELECT id, status, project_type, project_id, work_date, hours FROM work_hours WHERE id IN ({ph})",
+        ids,
+    ).fetchall()
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    approved = 0
+    skipped = 0
+    details = []
+    for r in rows:
+        wid = r['id']
+        if r['status'] != 'pending':
+            skipped += 1
+            details.append({'id': wid, 'ok': False, 'reason': '非待审核状态'})
+            continue
+        if not _can_approve(username, r['project_type'], r['project_id']):
+            skipped += 1
+            details.append({'id': wid, 'ok': False, 'reason': '无权审批该项目工时'})
+            continue
+        db.execute(
+            "UPDATE work_hours SET status='approved', approver_id=?, approve_time=?, reject_reason=NULL WHERE id=?",
+            (username, now, wid),
+        )
+        approved += 1
+        details.append({'id': wid, 'ok': True})
+    db.commit()
+    if approved:
+        record_operation_log(
+            username, '批量审批', '研发工时',
+            f'批量通过 {approved} 条工时记录（跳过 {skipped} 条）')
+    return jsonify({'code': 200, 'message': f'已通过 {approved} 条，跳过 {skipped} 条',
+                    'data': {'approved_count': approved, 'skipped_count': skipped,
+                             'details': details}})
+
+
 @workhours_bp.route('/<int:wh_id>/approve', methods=['POST'])
 @token_required
 def approve(wh_id):

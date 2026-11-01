@@ -49,6 +49,11 @@ const routes = [
         component: () => import('../views/Payments.vue')
       },
       {
+        path: 'receivables',
+        name: 'Receivables',
+        component: () => import('../views/Receivables.vue')
+      },
+      {
         path: 'users',
         name: 'Users',
         component: () => import('../views/Users.vue')
@@ -77,6 +82,11 @@ const routes = [
         path: 'project-cost',
         name: 'ProjectCost',
         component: () => import('../views/ProjectCost.vue')
+      },
+      {
+        path: 'opportunity-cost',
+        name: 'OpportunityCost',
+        component: () => import('../views/OpportunityCost.vue')
       },
       {
         path: 'quarterly-assessment',
@@ -278,7 +288,7 @@ router.beforeEach(async (to, from, next) => {
     const blocked = [
       // 销售管理
       '/dashboard', '/reports', '/customers', '/business', '/contracts', '/acceptances',
-      '/quotes', '/products', '/payments', '/visits',
+      '/quotes', '/products', '/payments', '/visits', '/receivables',
       // 营销管理
       '/marketing',
       // AI情报中心

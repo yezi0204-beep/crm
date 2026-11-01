@@ -1269,3 +1269,73 @@ def mark_all_alerts_read():
     db.execute("UPDATE sales_alerts SET status='read', read_at=? WHERE status='unread'", (now,))
     db.commit()
     return jsonify({'code': 200, 'message': '全部已标记为已读'})
+
+
+@cockpit_bp.route('/schedule', methods=['GET'])
+@token_required
+def work_schedule():
+    """应用中心每人今日与明日工作计划（基于拜访排班 visits 表）。
+
+    返回：今日/明日日期 + 每人两日的排班事项列表（按时间排序）。
+    """
+    db = get_db()
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    today_s = today.strftime('%Y-%m-%d')
+    tomorrow_s = tomorrow.strftime('%Y-%m-%d')
+
+    # 应用中心在职人员
+    users = [dict(r) for r in db.execute("""
+        SELECT username, name, role FROM users
+        WHERE department = '应用中心' AND (status = '在职' OR status IS NULL OR status = '')
+        ORDER BY CASE role WHEN '主任' THEN 0 WHEN '院长' THEN 1 ELSE 2 END, name
+    """).fetchall()]
+    if not users:
+        return jsonify({'code': 200, 'data': {'today': today_s, 'tomorrow': tomorrow_s, 'users': []}})
+    usernames = [u['username'] for u in users]
+    ph = ','.join('?' * len(usernames))
+
+    # 今明两天的排班（排除已取消）
+    rows = db.execute(f"""
+        SELECT v.id, v.visitor_id, v.plan_date, v.plan_time, v.status,
+               v.work_type, v.purpose, v.work_content, v.location,
+               c.company as customer_company, c.name as customer_name
+        FROM visits v
+        LEFT JOIN customers c ON v.cust_id = c.id
+        WHERE v.visitor_id IN ({ph}) AND v.plan_date IN (?, ?) AND v.status != 'cancelled'
+        ORDER BY v.plan_date, v.plan_time
+    """, (*usernames, today_s, tomorrow_s)).fetchall()
+
+    def _item(r):
+        label = r['purpose'] or r['work_content'] or ''
+        if r['work_type'] == 'visit' and (r['customer_company'] or r['customer_name']):
+            label = f"{r['customer_company'] or r['customer_name']}：{label}" if label else \
+                    (r['customer_company'] or r['customer_name'])
+        return {
+            'id': r['id'],
+            'time': (r['plan_time'] or '').strip() or '全天',
+            'type': '拜访' if r['work_type'] == 'visit' else '其它工作',
+            'content': label,
+            'location': r['location'] or '',
+            'status': r['status'],
+        }
+
+    by_user_day = {}
+    for r in rows:
+        by_user_day.setdefault(r['visitor_id'], {}).setdefault(r['plan_date'], []).append(_item(r))
+
+    result = []
+    for u in users:
+        days = by_user_day.get(u['username'], {})
+        result.append({
+            'username': u['username'],
+            'name': u['name'],
+            'role': u['role'],
+            'today': days.get(today_s, []),
+            'tomorrow': days.get(tomorrow_s, []),
+        })
+
+    return jsonify({
+        'code': 200,
+        'data': {'today': today_s, 'tomorrow': tomorrow_s, 'users': result}
+    })

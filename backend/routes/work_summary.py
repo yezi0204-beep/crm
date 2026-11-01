@@ -78,7 +78,7 @@ def _collect_data(cursor, department, start, end):
     usernames = [u['username'] for u in users]
     ph = ','.join('?' * len(usernames)) if usernames else "''"
 
-    # ===== 维度1：客户拜访（visits）=====
+    # ===== 维度1：客户拜访（visits，仅统计 work_type='visit'，其它工作不计入拜访次数）=====
     cursor.execute(f"""
         SELECT v.visitor_id, u.name as visitor_name, v.plan_date, v.status,
                v.work_type, v.purpose, v.result, v.location, v.notes, v.work_content,
@@ -88,6 +88,7 @@ def _collect_data(cursor, department, start, end):
         LEFT JOIN customers c ON v.cust_id = c.id
         WHERE v.visitor_id IN ({ph}) AND v.plan_date >= ? AND v.plan_date <= ?
           AND v.status != 'cancelled'
+          AND (v.work_type = 'visit' OR v.work_type IS NULL OR v.work_type = '')
         ORDER BY v.visitor_id, v.plan_date
     """, (*usernames, start, end))
     visits = [dict(r) for r in cursor.fetchall()]
@@ -96,6 +97,18 @@ def _collect_data(cursor, department, start, end):
     data['visits_planned'] = sum(1 for v in visits if v['status'] == 'planned')
     data['customers_covered'] = len({v['customer_company'] or v['customer_name'] for v in visits
                                      if v['customer_company'] or v['customer_name']})
+
+    # 其它工作（work_type='other'）单独统计，不计入客户拜访次数
+    cursor.execute(f"""
+        SELECT v.visitor_id, COUNT(*) as cnt
+        FROM visits v
+        WHERE v.visitor_id IN ({ph}) AND v.plan_date >= ? AND v.plan_date <= ?
+          AND v.status != 'cancelled' AND v.work_type = 'other'
+        GROUP BY v.visitor_id
+    """, (*usernames, start, end))
+    other_work_rows = {r['visitor_id']: r['cnt'] for r in cursor.fetchall()}
+    data['other_work_total'] = sum(other_work_rows.values())
+    data['other_work_by_user'] = other_work_rows
     # 每人统计与明细（明细仅保留有内容的条目，控制 LLM 输入长度）
     per_user = []
     for u in users:
@@ -109,6 +122,7 @@ def _collect_data(cursor, department, start, end):
             'name': u['name'], 'role': u['role'], 'total': len(uv),
             'completed': sum(1 for v in uv if v['status'] == 'completed'),
             'planned': sum(1 for v in uv if v['status'] == 'planned'),
+            'other_work': other_work_rows.get(u['username'], 0),
             'details': details
         })
     data['visits_by_user'] = per_user
@@ -209,6 +223,7 @@ def generate_summary():
         '已完成拜访': data['visits_completed'],
         '进行中拜访': data['visits_planned'],
         '覆盖客户数': data['customers_covered'],
+        '其它工作事项数（非拜访）': data['other_work_total'],
         '新增商机数': data['business_new']['count'],
         '新增商机金额(元)': data['business_new']['amount'],
         '签约合同数': data['contracts_signed']['count'],
@@ -225,7 +240,9 @@ def generate_summary():
         '2. 【重要】输入最前方的"关键指标"是本周期核心数字，撰写"工作概览"与"签约与回款"两节时'
         '必须逐项准确引用这些数字（尤其是回款笔数与回款金额），不得写 0 或遗漏，除非指标本身为 0。\n'
         '3. 语言正式凝练，多用具体数字与客户/项目名称支撑，避免空话套话。\n'
-        '4. 输出为 Markdown，严格采用以下结构（## 为二级标题）：\n'
+        '4. 【口径】"客户拜访"仅指外出拜访客户的记录；"其它工作事项"为部门内部事务（单独统计），'
+        '可在"主要工作与成果"中简要提及，但严禁计入拜访次数或覆盖客户数。\n'
+        '5. 输出为 Markdown，严格采用以下结构（## 为二级标题）：\n'
         '## 一、工作概览\n'
         '## 二、主要工作与成果\n'
         '### （一）客户拜访与关系维护\n'
@@ -235,7 +252,7 @@ def generate_summary():
         '（此节用 Markdown 表格展示每人拜访完成情况：姓名/角色/拜访总数/已完成/进行中）\n'
         '## 四、存在问题与改进方向\n'
         '## 五、下阶段工作计划\n'
-        '5. 不要输出一级标题，从二级标题开始；不要使用代码块包裹全文。'
+        '6. 不要输出一级标题，从二级标题开始；不要使用代码块包裹全文。'
     )
     user_prompt = {
         '报告类型': f'{department}{period_cn}工作总结',

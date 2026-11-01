@@ -72,6 +72,49 @@
       </div>
     </el-card>
 
+    <!-- 应用中心工作计划（今日/明日） -->
+    <el-card shadow="hover" style="margin-bottom:16px">
+      <template #header>
+        <div class="card-header">
+          <span>📅 应用中心工作计划</span>
+          <span style="color:#909399;font-size:12px">数据来源：拜访排班（未取消）</span>
+        </div>
+      </template>
+      <el-table :data="schedule.users" size="small" border style="width:100%">
+        <el-table-column label="姓名" width="100" prop="name" />
+        <el-table-column label="角色" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.role === '主任' ? 'danger' : (row.role === '项目经理' ? 'warning' : '')">{{ row.role }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="`今日计划（${schedule.today || ''}）`">
+          <template #default="{ row }">
+            <div v-if="row.today && row.today.length">
+              <div v-for="item in row.today" :key="item.id" class="plan-item">
+                <el-tag size="small" :type="item.type === '拜访' ? 'success' : 'info'" effect="plain">{{ item.type }}</el-tag>
+                <span class="plan-time">{{ item.time }}</span>
+                <span class="plan-content" :class="{ done: item.status === 'completed' }">{{ item.content || '（未填写内容）' }}</span>
+                <el-tag v-if="item.status === 'completed'" size="small" type="success">已完成</el-tag>
+              </div>
+            </div>
+            <span v-else class="plan-empty">暂无安排</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="`明日计划（${schedule.tomorrow || ''}）`">
+          <template #default="{ row }">
+            <div v-if="row.tomorrow && row.tomorrow.length">
+              <div v-for="item in row.tomorrow" :key="item.id" class="plan-item">
+                <el-tag size="small" :type="item.type === '拜访' ? 'success' : 'info'" effect="plain">{{ item.type }}</el-tag>
+                <span class="plan-time">{{ item.time }}</span>
+                <span class="plan-content">{{ item.content || '（未填写内容）' }}</span>
+              </div>
+            </div>
+            <span v-else class="plan-empty">暂无安排</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- 图表行 -->
     <div class="chart-row">
       <el-card class="chart-card" shadow="hover">
@@ -127,6 +170,7 @@ const searching = ref(false)
 const radarMinScore = ref(0)
 const alerts = ref([])
 const alertUnread = ref(0)
+const schedule = ref({ today: '', tomorrow: '', users: [] })
 
 const trendChart = ref(null)
 const scoreChart = ref(null)
@@ -306,12 +350,20 @@ async function aiSearch() {
   }
 }
 
+async function loadSchedule() {
+  try {
+    const res = await api.get('/cockpit/schedule')
+    schedule.value = res.data || { today: '', tomorrow: '', users: [] }
+  } catch (e) { /* ignore */ }
+}
+
 onMounted(() => {
   loadOverview()
   loadTrend()
   loadDistribution()
   loadRadar()
   loadAlerts()
+  loadSchedule()
   window.addEventListener('resize', resizeCharts)
 })
 
@@ -349,4 +401,9 @@ onBeforeUnmount(() => {
 .alert-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alert-detail { color: #909399; font-size: 12px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alert-time { color: #c0c4cc; font-size: 12px; }
+.plan-item { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+.plan-time { color: #909399; font-size: 12px; min-width: 40px; }
+.plan-content { flex: 1; font-size: 13px; }
+.plan-content.done { color: #909399; text-decoration: line-through; }
+.plan-empty { color: #c0c4cc; font-size: 12px; }
 </style>

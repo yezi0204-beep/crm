@@ -46,6 +46,19 @@ def get_active_fields(cursor, object_type):
     return [_field_dict(r) for r in cursor.fetchall()]
 
 
+def _norm_ext_dates(obj):
+    """递归规范化 ext 值中的 ISO 8601 时间串（如 2026-09-28T16:00:00.000Z）
+    为 'YYYY-MM-DD' / 'YYYY-MM-DD HH:MM:SS'（北京时间）。"""
+    if isinstance(obj, str):
+        from db import _normalize_iso_string
+        return _normalize_iso_string(obj)
+    if isinstance(obj, list):
+        return [_norm_ext_dates(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _norm_ext_dates(v) for k, v in obj.items()}
+    return obj
+
+
 def parse_ext(row_dict):
     """将查询结果中的 ext_data JSON 字符串解析为对象（原地修改）。"""
     raw = row_dict.get('ext_data')
@@ -58,7 +71,7 @@ def parse_ext(row_dict):
         parsed = raw
     else:
         parsed = {}
-    row_dict['ext_data'] = parsed
+    row_dict['ext_data'] = _norm_ext_dates(parsed)
     return row_dict
 
 

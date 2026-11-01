@@ -269,13 +269,31 @@ def get_operation_logs():
     keyword = request.args.get('keyword', '')
     start_date = request.args.get('start_date', '')
     end_date = request.args.get('end_date', '')
+    module = request.args.get('module', '')
+    operation = request.args.get('operation', '')
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = min(200, max(10, int(request.args.get('page_size', 50))))
+    except (TypeError, ValueError):
+        page_size = 50
 
     conditions = []
     params = []
 
     if keyword:
-        conditions.append("(ol.username LIKE ? OR ol.operation LIKE ? OR ol.module LIKE ? OR ol.detail LIKE ?)")
-        params.extend([f'%{keyword}%', f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'])
+        conditions.append("(ol.username LIKE ? OR ol.detail LIKE ? OR u.name LIKE ?)")
+        params.extend([f'%{keyword}%', f'%{keyword}%', f'%{keyword}%'])
+
+    if module:
+        conditions.append("ol.module = ?")
+        params.append(module)
+
+    if operation:
+        conditions.append("ol.operation = ?")
+        params.append(operation)
 
     if start_date:
         conditions.append("ol.created_at >= ?")
@@ -288,19 +306,40 @@ def get_operation_logs():
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     cursor.execute(f"""
-        SELECT ol.*, u.name as user_name
+        SELECT COUNT(*) as c
         FROM operation_logs ol
         LEFT JOIN users u ON ol.username = u.username
         {where_clause}
-        ORDER BY ol.created_at DESC
     """, params)
+    total = cursor.fetchone()['c']
 
-    rows = cursor.fetchall()
-    logs = []
-    for row in rows:
-        logs.append(dict(row))
+    cursor.execute(f"""
+        SELECT ol.id, ol.username, ol.operation, ol.module, ol.detail,
+               ol.ip_address, ol.created_at, ol.is_read,
+               u.name as user_name, u.department as user_department
+        FROM operation_logs ol
+        LEFT JOIN users u ON ol.username = u.username
+        {where_clause}
+        ORDER BY ol.created_at DESC, ol.id DESC
+        LIMIT ? OFFSET ?
+    """, params + [page_size, (page - 1) * page_size])
 
-    return jsonify({'code': 200, 'message': 'success', 'data': logs})
+    logs = [dict(row) for row in cursor.fetchall()]
+
+    # 模块/操作类型下拉选项（供前端筛选）
+    cursor.execute("SELECT DISTINCT module FROM operation_logs WHERE module IS NOT NULL AND module != '' ORDER BY module")
+    modules = [r['module'] for r in cursor.fetchall()]
+    cursor.execute("SELECT DISTINCT operation FROM operation_logs WHERE operation IS NOT NULL AND operation != '' ORDER BY operation")
+    operations = [r['operation'] for r in cursor.fetchall()]
+
+    return jsonify({'code': 200, 'message': 'success', 'data': {
+        'list': logs,
+        'total': total,
+        'page': page,
+        'page_size': page_size,
+        'modules': modules,
+        'operations': operations,
+    }})
 
 
 @system_bp.route('/api/operation_logs/unread_count', methods=['GET'])

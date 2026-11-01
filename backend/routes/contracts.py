@@ -51,7 +51,7 @@ def get_contracts():
     if can_view_all:
         if sort_field == 'pending_amt':
             cursor.execute(
-                "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title, "
+                "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title, "
                 "(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) + COALESCE(c.tax_amount, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
@@ -61,7 +61,7 @@ def get_contracts():
             )
         else:
             cursor.execute(
-                "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title "
+                "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
                 "LEFT JOIN customers cu ON c.cust_id = cu.id "
@@ -71,7 +71,7 @@ def get_contracts():
     else:
         if sort_field == 'pending_amt':
             cursor.execute(
-                "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title, "
+                "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title, "
                 "(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) + COALESCE(c.tax_amount, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
@@ -83,7 +83,7 @@ def get_contracts():
             )
         else:
             cursor.execute(
-                "SELECT c.*, u.name as owner_name, cu.company as customer_name, b.title as business_title "
+                "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title "
                 "FROM contracts c "
                 "LEFT JOIN users u ON c.owner_id = u.username "
                 "LEFT JOIN customers cu ON c.cust_id = cu.id "
@@ -172,7 +172,7 @@ def get_contract(contract_id):
     db = get_db()
     cursor = db.cursor()
     cursor.execute(
-        "SELECT ct.*, u.name as owner_name, cu.company as customer_name, b.title as business_title "
+        "SELECT ct.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title "
         "FROM contracts ct "
         "LEFT JOIN users u ON ct.owner_id = u.username "
         "LEFT JOIN customers cu ON ct.cust_id = cu.id "
@@ -400,10 +400,18 @@ def update_contract_cost(contract_id):
 
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("SELECT id, contract_name, contract_no FROM contracts WHERE id=?", (contract_id,))
+    cursor.execute("SELECT id, contract_name, contract_no, cost_status, owner_id FROM contracts WHERE id=?", (contract_id,))
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+
+    # 审批进行中（pending_dept / pending_finance / approved）不可编辑；draft 或 rejected 可编辑
+    status = row.get('cost_status') or 'draft'
+    if status in ('pending_dept', 'pending_finance'):
+        return jsonify({'code': 400, 'message': f'成本核算正在{("部门" if status=="pending_dept" else "财务")}审核中，不可修改，请等审核完成', 'data': None})
+    if status == 'approved':
+        return jsonify({'code': 400, 'message': '成本核算已终审通过，如需修改请驳回或另发', 'data': None})
+    # 非 owner 且非管理角色：即使 draft 也只能看不能改（但 can_plan 权限判断已在上文拦住）
 
     set_clauses = []
     set_values = []
@@ -479,6 +487,487 @@ def update_contract_cost(contract_id):
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
+
+
+# ------------------------------------------------------------
+# 项目成本核算审批流程
+# 状态流转: draft → pending_dept → pending_finance → approved
+#                     ↓                ↓
+#                   rejected         rejected
+# ------------------------------------------------------------
+
+def _get_contract_cost_basics(contract_id):
+    """取合同的 owner_id + 部门负责人 + 财务人，用于审批权限判断。每次查询独立游标避免结果集覆盖。"""
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("SELECT id, owner_id, cost_status FROM contracts WHERE id=?", (contract_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None, None, None, None
+    owner = row['owner_id'] or ''
+    # 查 owner 所在部门
+    cursor.execute("SELECT department FROM users WHERE username=?", (owner,))
+    owner_row = cursor.fetchone()
+    dept = owner_row['department'] if owner_row else ''
+    # 部门负责人（同部门 + 主任）
+    cursor.execute("SELECT username, name FROM users WHERE department=? AND role='主任' AND status='在职' LIMIT 1", (dept,))
+    dept_leader = cursor.fetchone()
+    # 财务（role=财务）
+    cursor.execute("SELECT username, name FROM users WHERE role='财务' AND status='在职' LIMIT 1")
+    finance = cursor.fetchone()
+    return row, dept_leader, finance, owner
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/cost/submit', methods=['POST'])
+@token_required
+def submit_cost(contract_id):
+    """项目负责人（owner）提交成本核算进入部门负责人审核。状态 draft/rejected → pending_dept。"""
+    payload = request.current_user
+    username = payload['username']
+    db = get_db()
+    cursor = db.cursor()
+
+    row, dept_leader, finance, owner = _get_contract_cost_basics(contract_id)
+    if not row:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    if row['owner_id'] != username:
+        return jsonify({'code': 403, 'message': '仅项目负责人可提交成本核算', 'data': None})
+    if row['cost_status'] not in ('draft', 'rejected', None, ''):
+        return jsonify({'code': 400, 'message': f'当前状态 {row["cost_status"]} 不可提交', 'data': None})
+    if not dept_leader:
+        return jsonify({'code': 400, 'message': '无法定位该项目的部门负责人，请在用户管理中设置', 'data': None})
+
+    cursor.execute("""
+        UPDATE contracts SET
+          cost_status='pending_dept',
+          cost_submitted_by=?, cost_submitted_at=NOW(),
+          cost_dept_approved_by=NULL, cost_dept_approved_at=NULL, cost_dept_reject_reason=NULL,
+          cost_fin_approved_by=NULL, cost_fin_approved_at=NULL, cost_fin_reject_reason=NULL
+        WHERE id=?
+    """, (username, contract_id))
+    db.commit()
+    record_operation_log(username, '提交', '项目成本审核',
+                         f'提交审核：合同 #{contract_id}，项目负责人={owner}，送部门负责人={dept_leader["name"]}')
+    return jsonify({'code': 200, 'message': '已提交部门负责人审核', 'data': None})
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/cost/dept-approve', methods=['POST'])
+@token_required
+def dept_approve_cost(contract_id):
+    """部门负责人审核通过 → 进入财务审核：pending_dept → pending_finance。"""
+    payload = request.current_user
+    username = payload['username']
+    db = get_db()
+    cursor = db.cursor()
+
+    row, dept_leader, finance, owner = _get_contract_cost_basics(contract_id)
+    if not row:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    if not dept_leader or dept_leader['username'] != username:
+        return jsonify({'code': 403, 'message': '仅该项目所属部门的主任可审核', 'data': None})
+    if row['cost_status'] != 'pending_dept':
+        return jsonify({'code': 400, 'message': f'当前状态 {row["cost_status"]} 不可审核', 'data': None})
+
+    cursor.execute("""
+        UPDATE contracts SET
+          cost_status='pending_finance',
+          cost_dept_approved_by=?, cost_dept_approved_at=NOW(), cost_dept_reject_reason=NULL
+        WHERE id=?
+    """, (username, contract_id))
+    db.commit()
+    fin_name = finance['name'] if finance else '财务'
+    record_operation_log(username, '部门审核通过', '项目成本审核',
+                         f'部门负责人通过 → 送 {fin_name} 终审：合同 #{contract_id}')
+    return jsonify({'code': 200, 'message': f'已通过，送 {fin_name} 终审', 'data': None})
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/cost/dept-reject', methods=['POST'])
+@token_required
+def dept_reject_cost(contract_id):
+    """部门负责人驳回：pending_dept → rejected，退回项目负责人修改。"""
+    payload = request.current_user
+    username = payload['username']
+    data = request.get_json(silent=True) or {}
+    reason = (data.get('reason') or '').strip()
+    if not reason:
+        return jsonify({'code': 400, 'message': '请填写驳回理由', 'data': None})
+
+    db = get_db()
+    cursor = db.cursor()
+    row, dept_leader, finance, owner = _get_contract_cost_basics(contract_id)
+    if not row:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    if not dept_leader or dept_leader['username'] != username:
+        return jsonify({'code': 403, 'message': '仅该项目所属部门的主任可驳回', 'data': None})
+    if row['cost_status'] != 'pending_dept':
+        return jsonify({'code': 400, 'message': f'当前状态 {row["cost_status"]} 不可驳回', 'data': None})
+
+    cursor.execute("""
+        UPDATE contracts SET
+          cost_status='rejected',
+          cost_dept_approved_by=?, cost_dept_approved_at=NOW(),
+          cost_dept_reject_reason=?
+        WHERE id=?
+    """, (username, reason, contract_id))
+    db.commit()
+    record_operation_log(username, '部门驳回', '项目成本审核',
+                         f'部门负责人驳回：合同 #{contract_id}，理由={reason}')
+    return jsonify({'code': 200, 'message': '已驳回，请通知项目负责人修改', 'data': None})
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/cost/fin-approve', methods=['POST'])
+@token_required
+def fin_approve_cost(contract_id):
+    """财务终审通过：pending_finance → approved。"""
+    payload = request.current_user
+    username = payload['username']
+    db = get_db()
+    cursor = db.cursor()
+
+    row, dept_leader, finance, owner = _get_contract_cost_basics(contract_id)
+    if not row:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    if not finance or finance['username'] != username:
+        return jsonify({'code': 403, 'message': '仅财务人员可终审', 'data': None})
+    if row['cost_status'] != 'pending_finance':
+        return jsonify({'code': 400, 'message': f'当前状态 {row["cost_status"]} 不可终审', 'data': None})
+
+    cursor.execute("""
+        UPDATE contracts SET
+          cost_status='approved',
+          cost_fin_approved_by=?, cost_fin_approved_at=NOW(), cost_fin_reject_reason=NULL
+        WHERE id=?
+    """, (username, contract_id))
+    db.commit()
+    record_operation_log(username, '财务终审通过', '项目成本审核',
+                         f'财务终审通过：合同 #{contract_id}')
+    return jsonify({'code': 200, 'message': '终审通过', 'data': None})
+
+
+@contracts_bp.route('/api/contracts/<int:contract_id>/cost/fin-reject', methods=['POST'])
+@token_required
+def fin_reject_cost(contract_id):
+    """财务驳回：pending_finance → rejected，退回项目负责人修改。"""
+    payload = request.current_user
+    username = payload['username']
+    data = request.get_json(silent=True) or {}
+    reason = (data.get('reason') or '').strip()
+    if not reason:
+        return jsonify({'code': 400, 'message': '请填写驳回理由', 'data': None})
+
+    db = get_db()
+    cursor = db.cursor()
+    row, dept_leader, finance, owner = _get_contract_cost_basics(contract_id)
+    if not row:
+        return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
+    if not finance or finance['username'] != username:
+        return jsonify({'code': 403, 'message': '仅财务人员可终审驳回', 'data': None})
+    if row['cost_status'] != 'pending_finance':
+        return jsonify({'code': 400, 'message': f'当前状态 {row["cost_status"]} 不可终审驳回', 'data': None})
+
+    cursor.execute("""
+        UPDATE contracts SET
+          cost_status='rejected',
+          cost_fin_approved_by=?, cost_fin_approved_at=NOW(),
+          cost_fin_reject_reason=?
+        WHERE id=?
+    """, (username, reason, contract_id))
+    db.commit()
+    record_operation_log(username, '财务终审驳回', '项目成本审核',
+                         f'财务驳回：合同 #{contract_id}，理由={reason}')
+    return jsonify({'code': 200, 'message': '已驳回，请通知项目负责人修改', 'data': None})
+
+
+@contracts_bp.route('/api/contracts/cost/export', methods=['GET'])
+@token_required
+def export_contract_costs():
+    """导出项目成本核算 Excel。支持按单合同导出（contract_id）或全量。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    payload = request.current_user
+    username = payload['username']
+    contract_id = request.args.get('contract_id', type=int)
+
+    db = get_db()
+    cursor = db.cursor()
+
+    if contract_id:
+        cursor.execute("""
+            SELECT c.*, u.name AS owner_name
+            FROM contracts c LEFT JOIN users u ON c.owner_id = u.username
+            WHERE c.id=?
+        """, (contract_id,))
+        rows = [cursor.fetchone()] if cursor.rowcount > 0 else []
+    else:
+        # 列表权限：管理角色看全部；其他人只看自己负责的
+        if user_can(username, 'data.view_all') or user_can(username, 'contracts.view_all') \
+                or payload.get('role') in ('主任', '院长', '财务'):
+            cursor.execute("""
+                SELECT c.*, u.name AS owner_name
+                FROM contracts c LEFT JOIN users u ON c.owner_id = u.username
+                WHERE c.status <> '作废'
+                ORDER BY c.cost_status, c.id DESC
+            """)
+        else:
+            cursor.execute("""
+                SELECT c.*, u.name AS owner_name
+                FROM contracts c LEFT JOIN users u ON c.owner_id = u.username
+                WHERE c.status <> '作废' AND c.owner_id=?
+                ORDER BY c.cost_status, c.id DESC
+            """, (username,))
+        rows = cursor.fetchall()
+
+    if not rows:
+        return jsonify({'code': 400, 'message': '没有可导出的数据', 'data': None})
+
+    status_label = {
+        'draft': '草稿', 'pending_dept': '部门审核中',
+        'pending_finance': '财务终审中', 'approved': '已终审', 'rejected': '已驳回',
+        None: '草稿', '': '草稿'
+    }
+    thin = Side(style='thin', color='909399')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    head_font = Font(bold=True)
+    head_align = Alignment(horizontal='center', vertical='center')
+    label_align = Alignment(horizontal='center', vertical='center')
+    num_align = Alignment(horizontal='right', vertical='center')
+    remark_align = Alignment(horizontal='left', vertical='center', wrap_text=True)
+
+    def _f(v):
+        try:
+            return round(float(v or 0), 2)
+        except Exception:
+            return 0
+
+    def _parse_json(s):
+        if not s:
+            return {}
+        try:
+            v = json.loads(s)
+            return v if isinstance(v, dict) else {}
+        except Exception:
+            return {}
+
+    # 与页面 ProjectCost.vue rows 定义保持一致
+    SHEET_ROWS = [
+        ('cost_labor', 'actual_cost_labor', 'labor', '人工成本', '直接成本'),
+        ('cost_travel', 'actual_cost_travel', 'travel', '差旅费', '直接成本'),
+        ('cost_entertain', 'actual_cost_entertain', 'entertain', '业务招待费', '直接成本'),
+        ('cost_outsource', 'actual_cost_outsource', 'outsource', '外协费', '直接成本'),
+        ('cost_procurement', 'actual_cost_procurement', 'procurement', '采购费', '直接成本'),
+        ('cost_manage', 'actual_cost_manage', 'manage', '管理费', '间接成本'),
+        ('cost_other', 'actual_cost_other', 'other', '其他费用', '间接成本'),
+    ]
+
+    def _remark_text(key, plan_rk, actual_rk):
+        """备注列：计划备注 + 实际备注（人工行含工时/说明），与页面备注单元格内容对应。"""
+        parts = []
+        pv = plan_rk.get(key)
+        pv = pv.get('text') if isinstance(pv, dict) else pv
+        if pv and str(pv).strip():
+            parts.append(str(pv).strip())
+        av = actual_rk.get(key)
+        if key == 'labor':
+            seg = []
+            if isinstance(av, dict):
+                hours = av.get('hours')
+                if hours:
+                    try:
+                        seg.append(f"工时：{float(hours):g}")
+                    except Exception:
+                        pass
+                if av.get('desc'):
+                    seg.append(str(av['desc']).strip())
+                if av.get('text'):
+                    seg.append(str(av['text']).strip())
+            elif av and str(av).strip():
+                seg.append(str(av).strip())
+            if seg:
+                parts.append('实际：' + '，'.join(seg))
+        else:
+            t = av.get('text') if isinstance(av, dict) else av
+            if t and str(t).strip():
+                parts.append('实际：' + str(t).strip())
+        return '\n'.join(parts)
+
+    def _fmt_ts(v):
+        return str(v)[:19].replace('T', ' ') if v else ''
+
+    def _build_cost_sheet(ws, it):
+        """按页面「软件系统研发任务成本核算」竖版核算单格式填充一个工作表。"""
+        plan_rk = _parse_json(it.get('cost_remark'))
+        actual_rk = _parse_json(it.get('actual_cost_remark'))
+
+        plan_total = round(sum(_f(it.get(k[0])) for k in SHEET_ROWS), 2)
+        actual_total = round(sum(_f(it.get(k[1])) for k in SHEET_ROWS), 2)
+        investment = _f(it.get('total_amt'))
+        plan_tax = _f(it.get('cost_tax'))
+        actual_tax = _f(it.get('actual_cost_tax'))
+        plan_profit = round(investment - plan_total - plan_tax, 2)
+        actual_profit = round(investment - actual_total - actual_tax, 2)
+        plan_rate = f"{(plan_profit / investment * 100):.2f}%" if investment > 0 else '—'
+        actual_rate = f"{(actual_profit / investment * 100):.2f}%" if investment > 0 else '—'
+
+        # 第1行：标题
+        ws.merge_cells('A1:E1')
+        t = ws.cell(row=1, column=1, value='软件系统研发任务成本核算')
+        t.font = Font(bold=True, size=16)
+        t.alignment = head_align
+        # 第2行：单位
+        ws.merge_cells('A2:E2')
+        u = ws.cell(row=2, column=1, value='（单位：元）')
+        u.alignment = head_align
+        # 第3行：项目信息
+        ws.merge_cells('A3:E3')
+        info = (f"合同编号：{it.get('contract_no') or '—'}    "
+                f"项目名称：{it.get('contract_name') or '—'}    "
+                f"客户：{it.get('party_a') or '—'}    "
+                f"负责人：{it.get('owner_name') or it.get('owner_id') or '—'}    "
+                f"审批状态：{status_label.get(it.get('cost_status'), it.get('cost_status') or '草稿')}")
+        ic = ws.cell(row=3, column=1, value=info)
+        ic.alignment = Alignment(horizontal='left', vertical='center')
+        ic.font = Font(color='606266')
+
+        # 第4-5行：表头
+        ws.merge_cells('A4:B4')
+        ws.merge_cells('C4:D4')
+        ws.merge_cells('E4:E5')
+        for coord, val in [('A4', '要素'), ('C4', '总体情况'), ('E4', '备注'),
+                           ('A5', '大类'), ('B5', '明细'), ('C5', '计划'), ('D5', '实际')]:
+            c = ws[coord]
+            c.value = val
+            c.font = head_font
+            c.alignment = head_align
+            c.fill = PatternFill('solid', fgColor='f5f7fa')
+        for r in (4, 5):
+            for col in range(1, 6):
+                ws.cell(row=r, column=col).border = border
+
+        # 数据行（第6行起）：直接成本(5行合并大类) + 间接成本(2行合并大类)
+        row = 6
+        cat_start = {}
+        for idx, (pk, ak, rk, name, cat) in enumerate(SHEET_ROWS):
+            r = row + idx
+            if cat not in cat_start:
+                cat_start[cat] = r
+            ws.cell(row=r, column=2, value=name)
+            ws.cell(row=r, column=3, value=_f(it.get(pk))).number_format = '0.00'
+            ws.cell(row=r, column=4, value=_f(it.get(ak))).number_format = '0.00'
+            ws.cell(row=r, column=5, value=_remark_text(rk, plan_rk, actual_rk))
+        ws.merge_cells(start_row=cat_start['直接成本'], start_column=1,
+                       end_row=cat_start['直接成本'] + 4, end_column=1)
+        ws.merge_cells(start_row=cat_start['间接成本'], start_column=1,
+                       end_row=cat_start['间接成本'] + 1, end_column=1)
+        for cat, r0 in cat_start.items():
+            c = ws.cell(row=r0, column=1, value=cat)
+            c.alignment = label_align
+        for idx in range(7):
+            r = row + idx
+            ws.cell(row=r, column=2).alignment = label_align
+            for col in (3, 4):
+                ws.cell(row=r, column=col).alignment = num_align
+            ws.cell(row=r, column=5).alignment = remark_align
+            for col in range(1, 6):
+                ws.cell(row=r, column=col).border = border
+
+        # 汇总行：成本合计 / 投资金额 / 税费 / 净利润 / 净利润率
+        r = row + 7
+        summary = [
+            ('成本合计', plan_total, actual_total, '', '0.00'),
+            ('投资金额', investment, '—', '取合同总额', '0.00'),
+            ('税费', plan_tax, actual_tax,
+             _remark_text('tax', plan_rk, actual_rk), '0.00'),
+            ('净利润', plan_profit, actual_profit, '', '0.00'),
+            ('净利润率', plan_rate, actual_rate, '', None),
+        ]
+        for label, pv, av, remark, nf in summary:
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+            lc = ws.cell(row=r, column=1, value=label)
+            lc.font = head_font
+            lc.alignment = label_align
+            pc = ws.cell(row=r, column=3, value=pv)
+            ac = ws.cell(row=r, column=4, value=av)
+            for c in (pc, ac):
+                c.alignment = num_align
+                c.font = head_font
+                if nf:
+                    c.number_format = nf
+            # 净利润为负标红，与页面 neg 样式一致
+            if label in ('净利润', '净利润率'):
+                if isinstance(pv, (int, float)) and pv < 0:
+                    pc.font = Font(bold=True, color='f56c6c')
+                if isinstance(av, (int, float)) and av < 0:
+                    ac.font = Font(bold=True, color='f56c6c')
+            if remark:
+                rc = ws.cell(row=r, column=5, value=remark)
+                rc.alignment = remark_align
+            for col in range(1, 6):
+                ws.cell(row=r, column=col).border = border
+            r += 1
+
+        # 拟制/审核行
+        draft_by = it.get('cost_submitted_by') or it.get('owner_name') or it.get('owner_id') or '—'
+        audit_parts = []
+        if it.get('cost_dept_approved_by'):
+            audit_parts.append(f"部门-{it['cost_dept_approved_by']}（{_fmt_ts(it.get('cost_dept_approved_at'))}）")
+        if it.get('cost_fin_approved_by'):
+            audit_parts.append(f"财务-{it['cost_fin_approved_by']}（{_fmt_ts(it.get('cost_fin_approved_at'))}）")
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
+        sc = ws.cell(row=r, column=1,
+                     value=f"拟制：{draft_by}        审核：{'、'.join(audit_parts) if audit_parts else '—'}")
+        sc.alignment = Alignment(horizontal='left', vertical='center')
+        r += 1
+
+        # 说明行（与页面 sheet-hint 一致）
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
+        hc = ws.cell(row=r, column=1,
+                     value=('说明：成本合计 = 人工费 + 差旅费 + 业务招待费 + 外协费 + 管理费（不含税费）；'
+                            '净利润 = 投资金额 − 成本合计 − 税费；净利润率 = 净利润 ÷ 投资金额。'
+                            '金额单位元，精确到分（0.01元）。'))
+        hc.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+        hc.font = Font(color='909399', size=9)
+
+        # 列宽与行高
+        for col, w in zip('ABCDE', (10, 14, 14, 14, 45)):
+            ws.column_dimensions[col].width = w
+        ws.row_dimensions[3].height = 20
+        for idx in range(7):
+            ws.row_dimensions[row + idx].height = 30
+
+    wb = Workbook()
+    ws = wb.active
+    used_names = set()
+    for i, it in enumerate(rows):
+        if i == 0:
+            cur_ws = ws
+        else:
+            cur_ws = wb.create_sheet()
+        # Sheet 名：合同编号/名称，去非法字符，最长 28，保证唯一
+        base = (it.get('contract_no') or it.get('contract_name') or f"合同{it.get('id')}") or f"合同{it.get('id')}"
+        base = ''.join(ch for ch in str(base)[:28] if ch not in '[]:*?/\\')
+        name = base or f"合同{it.get('id')}"
+        while name in used_names:
+            name = f"{name[:24]}_{i}"
+        used_names.add(name)
+        cur_ws.title = name
+        _build_cost_sheet(cur_ws, it)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    if contract_id and rows:
+        no = str(rows[0].get('contract_no') or rows[0].get('id') or '')
+        no = ''.join(ch for ch in no if ch not in '[]:*?/\\')
+        filename = f'项目成本核算_{no}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+    else:
+        filename = f'项目成本核算_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+    from flask import send_file
+    return send_file(buf,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True,
+                     download_name=filename)
 
 
 @contracts_bp.route('/api/contracts/<int:contract_id>/owner', methods=['PATCH', 'POST'])
@@ -1662,3 +2151,4 @@ def parse_acceptance_excel():
 
     except Exception as e:
         return jsonify({'code': 500, 'message': f'解析失败：{str(e)}', 'data': None})
+

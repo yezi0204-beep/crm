@@ -5,6 +5,14 @@
     </div>
 
     <div class="toolbar">
+      <el-radio-group v-model="statusFilter" size="small" style="margin-right: 10px;">
+        <el-radio-button value="all">全部</el-radio-button>
+        <el-radio-button value="my_draft">我的草稿</el-radio-button>
+        <el-radio-button value="pending_dept">待部门审</el-radio-button>
+        <el-radio-button value="pending_finance">待财务审</el-radio-button>
+        <el-radio-button value="approved">已终审</el-radio-button>
+        <el-radio-button value="rejected">已驳回</el-radio-button>
+      </el-radio-group>
       <el-select
         v-model="contractId"
         filterable
@@ -13,25 +21,88 @@
         @change="onSelectContract"
       >
         <el-option
-          v-for="c in contracts"
+          v-for="c in filteredContracts"
           :key="c.id"
           :label="`${c.contract_name}（${c.contract_no || '无编号'}）`"
           :value="c.id"
         >
           <span>{{ c.contract_name }}</span>
           <span style="float: right; color: #909399; font-size: 12px;">
-            {{ c.contract_no }}<span v-if="hasCost(c)" class="done-tag">已核算</span>
+            {{ c.contract_no }}
+            <el-tag v-if="c.cost_status && c.cost_status !== 'draft'" :type="statusTagType(c.cost_status)" size="small" style="margin-left:6px;">
+              {{ statusLabel(c.cost_status) }}
+            </el-tag>
+            <span v-if="c.owner_name" style="margin-left: 6px;">· {{ c.owner_name }}</span>
           </span>
         </el-option>
       </el-select>
-      <el-button v-if="contractId && canSave" type="primary" :loading="saving" @click="save">保存核算</el-button>
+
+      <!-- 审批状态 + 操作按钮 -->
+      <template v-if="current">
+        <el-tag v-if="current.cost_status" :type="statusTagType(current.cost_status)" effect="dark" size="large">
+          {{ statusLabel(current.cost_status) }}
+        </el-tag>
+
+        <!-- 项目负责人：保存草稿 + 提交审核 -->
+        <template v-if="isOwner && canSave && (current.cost_status==='draft' || current.cost_status==='rejected' || !current.cost_status)">
+          <el-button type="primary" :loading="saving" @click="save">保存草稿</el-button>
+          <el-button type="success" :loading="submitting" @click="handleSubmit">提交审核</el-button>
+        </template>
+
+        <!-- 部门负责人审核 -->
+        <template v-else-if="isDeptLeader && current.cost_status==='pending_dept'">
+          <el-button type="success" :loading="approving" @click="handleDeptApprove">部门审核通过</el-button>
+          <el-button type="danger" :loading="rejecting" @click="openRejectDialog('dept')">部门驳回</el-button>
+        </template>
+
+        <!-- 财务终审 -->
+        <template v-else-if="isFinance && current.cost_status==='pending_finance'">
+          <el-button type="success" :loading="approving" @click="handleFinApprove">财务终审通过</el-button>
+          <el-button type="danger" :loading="rejecting" @click="openRejectDialog('finance')">财务终审驳回</el-button>
+        </template>
+
+        <!-- 审批中只读提示 -->
+        <el-tag v-if="isEditLocked" type="info" effect="plain">审批中，仅只读</el-tag>
+
+        <!-- 导出 Excel -->
+        <el-button :loading="exporting" @click="handleExport">导出 Excel</el-button>
+      </template>
+
       <div v-if="current" class="contract-meta">
         <span>编号：{{ current.contract_no || '—' }}</span>
         <span>客户：{{ current.party_a || '—' }}</span>
-        <span>负责人：{{ current.owner_name || '—' }}</span>
+        <span>负责人：{{ current.owner_name || current.owner_id || '—' }}</span>
         <span>状态：{{ current.status || '—' }}</span>
       </div>
     </div>
+
+    <!-- 审批轨迹 -->
+    <div v-if="current && (current.cost_submitted_by || current.cost_dept_approved_by || current.cost_fin_approved_by)" class="approval-trail">
+      <el-timeline>
+        <el-timeline-item v-if="current.cost_submitted_by" :timestamp="formatTS(current.cost_submitted_at)" placement="top" color="#e6a23c">
+          <b>{{ current.cost_submitted_by }}</b> 提交审核（项目负责人）
+        </el-timeline-item>
+        <el-timeline-item v-if="current.cost_dept_approved_by" :timestamp="formatTS(current.cost_dept_approved_at)" placement="top" :color="current.cost_dept_reject_reason ? '#f56c6c' : '#67c23a'">
+          <b>{{ current.cost_dept_approved_by }}</b>
+          <template v-if="current.cost_dept_reject_reason"> 部门驳回：{{ current.cost_dept_reject_reason }}</template>
+          <template v-else> 部门审核通过</template>
+        </el-timeline-item>
+        <el-timeline-item v-if="current.cost_fin_approved_by" :timestamp="formatTS(current.cost_fin_approved_at)" placement="top" :color="current.cost_fin_reject_reason ? '#f56c6c' : '#67c23a'">
+          <b>{{ current.cost_fin_approved_by }}</b>
+          <template v-if="current.cost_fin_reject_reason"> 财务驳回：{{ current.cost_fin_reject_reason }}</template>
+          <template v-else> 财务终审通过</template>
+        </el-timeline-item>
+      </el-timeline>
+    </div>
+
+    <!-- 驳回弹窗 -->
+    <el-dialog v-model="rejectDialog" :title="rejectStage==='dept' ? '部门审核驳回' : '财务终审驳回'" width="420px" :close-on-click-modal="false">
+      <el-input v-model="rejectReason" type="textarea" :rows="3" placeholder="请填写驳回理由，退回项目负责人修改" maxlength="200" show-word-limit />
+      <template #footer>
+        <el-button @click="rejectDialog = false">取消</el-button>
+        <el-button type="danger" :loading="rejecting" @click="confirmReject">确认驳回</el-button>
+      </template>
+    </el-dialog>
 
     <div v-if="!contractId" class="empty-tip">
       <el-empty description="请选择需要进行成本核算的项目（合同）" />
@@ -200,7 +271,45 @@ const contractId = ref(null)
 const current = ref(null)
 const loading = ref(false)
 const saving = ref(false)
-const drafter = ref(authStore.name || authStore.username || '')
+const submitting = ref(false)
+const approving = ref(false)
+const rejecting = ref(false)
+const exporting = ref(false)
+const statusFilter = ref('all')
+
+// 拟制人：优先取 cost_submitted_by（提交过的），否则 owner_name，否则 owner_id
+const drafter = computed(() =>
+  current.value?.cost_submitted_by
+  || current.value?.owner_name
+  || current.value?.owner_id
+  || authStore.name
+  || authStore.username
+  || ''
+)
+
+// 驳回弹窗
+const rejectDialog = ref(false)
+const rejectStage = ref('dept')
+const rejectReason = ref('')
+
+// 当前用户角色判断（审批权限）
+const isOwner = computed(() => current.value?.owner_id === authStore.username)
+const isDeptLeader = computed(() => {
+  // 同部门 + 主任；非同部门主任看不到审核按钮
+  if (authStore.role !== '主任') return false
+  const ownerDept = current.value?.owner_department
+  if (!ownerDept) return false
+  return authStore.department === ownerDept
+})
+const isFinance = computed(() => authStore.role === '财务')
+const isEditLocked = computed(() => {
+  const s = current.value?.cost_status
+  return s === 'pending_dept' || s === 'pending_finance' || s === 'approved'
+})
+
+const statusLabel = (s) => ({ draft: '草稿', pending_dept: '部门审核中', pending_finance: '财务终审中', approved: '已终审', rejected: '已驳回' }[s] || s || '草稿')
+const statusTagType = (s) => ({ draft: 'info', pending_dept: 'warning', pending_finance: 'warning', approved: 'success', rejected: 'danger' }[s] || 'info')
+const formatTS = (v) => v ? String(v).replace('T', ' ').slice(0, 19) : ''
 
 const emptyForm = () => ({
   cost_labor: 0,
@@ -274,13 +383,33 @@ const hasCost = (c) =>
   + (Number(c.cost_outsource) || 0) + (Number(c.cost_procurement) || 0) + (Number(c.cost_manage) || 0)
   + (Number(c.cost_other) || 0) + (Number(c.cost_tax) || 0) > 0
 
+// 状态筛选：主任默认看同部门的，财务默认看全部，其他人默认看自己的
+const filteredContracts = computed(() => {
+  const list = contracts.value
+  const s = statusFilter.value
+  if (s === 'all') return list
+  if (s === 'my_draft') {
+    return list.filter(c => c.owner_id === authStore.username && (!c.cost_status || c.cost_status === 'draft'))
+  }
+  return list.filter(c => c.cost_status === s)
+})
+
 const loadContracts = async () => {
   const res = await api.get('/contracts', { page: 1, page_size: 1000 })
   if (res.code === 200) {
     const data = res.data
     let list = Array.isArray(data) ? data : (data.list || data.records || [])
-    // 非全局查看权限的用户只看自己负责的项目
-    if (!authStore.has('data.view_all')) {
+    // 权限过滤：
+    // - 财务 / data.view_all / contracts.view_all → 全部
+    // - 主任 → 同部门所有（便于看到自己部门的待审合同）
+    // - 院长 → 全部
+    // - 其他 → 仅自己负责的
+    if (authStore.has('data.view_all') || authStore.has('contracts.view_all')
+        || authStore.role === '财务' || authStore.role === '院长') {
+      // 看全部
+    } else if (authStore.role === '主任') {
+      list = list.filter(c => c.owner_department === authStore.department)
+    } else {
       list = list.filter(c => c.owner_id === authStore.username)
     }
     contracts.value = list
@@ -397,6 +526,81 @@ const save = async () => {
   } finally {
     saving.value = false
   }
+}
+
+// 审批 & 导出方法
+const handleSubmit = async () => {
+  submitting.value = true
+  try {
+    const res = await api.post(`/contracts/${contractId.value}/cost/submit`, {})
+    if (res.code === 200) {
+      ElMessage.success(res.message || '已提交审核')
+      await onSelectContract(contractId.value)
+    } else {
+      ElMessage.error(res.message || '提交失败')
+    }
+  } finally { submitting.value = false }
+}
+
+const handleDeptApprove = async () => {
+  approving.value = true
+  try {
+    const res = await api.post(`/contracts/${contractId.value}/cost/dept-approve`, {})
+    if (res.code === 200) { ElMessage.success(res.message); await onSelectContract(contractId.value) }
+    else ElMessage.error(res.message || '审核失败')
+  } finally { approving.value = false }
+}
+
+const handleFinApprove = async () => {
+  approving.value = true
+  try {
+    const res = await api.post(`/contracts/${contractId.value}/cost/fin-approve`, {})
+    if (res.code === 200) { ElMessage.success(res.message); await onSelectContract(contractId.value) }
+    else ElMessage.error(res.message || '终审失败')
+  } finally { approving.value = false }
+}
+
+const openRejectDialog = (stage) => {
+  rejectStage.value = stage
+  rejectReason.value = ''
+  rejectDialog.value = true
+}
+
+const confirmReject = async () => {
+  if (!rejectReason.value.trim()) { ElMessage.warning('请填写驳回理由'); return }
+  rejecting.value = true
+  try {
+    const ep = rejectStage.value === 'dept' ? 'dept-reject' : 'fin-reject'
+    const res = await api.post(`/contracts/${contractId.value}/cost/${ep}`, { reason: rejectReason.value.trim() })
+    if (res.code === 200) {
+      ElMessage.success(res.message)
+      rejectDialog.value = false
+      await onSelectContract(contractId.value)
+    } else ElMessage.error(res.message || '驳回失败')
+  } finally { rejecting.value = false }
+}
+
+const handleExport = async () => {
+  exporting.value = true
+  try {
+    const params = {}
+    if (contractId.value) params.contract_id = contractId.value
+    const blob = await api.get('/contracts/cost/export', params, { responseType: 'blob' })
+    if (!(blob instanceof Blob)) { ElMessage.error(blob?.message || '导出失败'); return }
+    if (blob.type && blob.type.includes('application/json')) {
+      const err = JSON.parse(await blob.text())
+      ElMessage.error(err.message || '导出失败')
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `项目成本核算_${current.value?.contract_name || ''}_${new Date().toISOString().slice(0,10)}.xlsx`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
+  } catch (e) { ElMessage.error('导出失败: ' + (e.message || '')) }
+  finally { exporting.value = false }
 }
 
 onMounted(loadContracts)
@@ -559,5 +763,18 @@ onMounted(loadContracts)
   font-size: 12px;
   color: #909399;
   line-height: 1.7;
+}
+
+.approval-trail {
+  background: #fafbfc;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 14px 24px;
+  font-size: 13px;
+}
+
+.approval-trail :deep(.el-timeline-item__timestamp) {
+  color: #909399;
+  font-size: 12px;
 }
 </style>

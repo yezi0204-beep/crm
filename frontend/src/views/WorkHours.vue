@@ -66,7 +66,15 @@
 
       <el-tab-pane v-if="isApprover" :label="'待我审批 (' + pendingCount + ')'" name="approve">
         <el-card>
-          <el-table :data="pendingList" stripe max-height="60vh" v-loading="loadingPending">
+          <div class="toolbar" style="margin-bottom:10px">
+            <el-checkbox v-model="pendingAllChecked" @change="onPendingAllChange">全选</el-checkbox>
+            <el-button type="success" :disabled="selectedPending.length===0" @click="handleBatchApprove">
+              一键通过选中（{{ selectedPending.length }}）
+            </el-button>
+          </div>
+          <el-table ref="pendingTableRef" :data="pendingList" stripe max-height="60vh" v-loading="loadingPending"
+                    @selection-change="(rows)=>selectedPending=rows">
+            <el-table-column type="selection" width="46" />
             <el-table-column prop="user_name" label="填报人" width="90" />
             <el-table-column prop="date" label="日期" width="110" />
             <el-table-column prop="project_name" label="项目" min-width="200" show-overflow-tooltip />
@@ -212,6 +220,9 @@ const loadingAll = ref(false)
 const mineList = ref([])
 const pendingList = ref([])
 const allList = ref([])
+const selectedPending = ref([])
+const pendingAllChecked = ref(false)
+const pendingTableRef = ref(null)
 const pendingCount = ref(0)
 const stats = ref({ hours_approved: 0, hours_pending: 0, pending: 0, approved: 0 })
 const allStats = ref({ total: 0, approved: 0, pending: 0, rejected: 0, hours_approved: 0, hours_pending: 0, hours_rejected: 0 })
@@ -387,6 +398,33 @@ const handleApprove = async (row) => {
     fetchPending()
   } else {
     ElMessage.error(res.message || '操作失败')
+  }
+}
+
+const onPendingAllChange = (checked) => {
+  if (!pendingTableRef.value) return
+  pendingTableRef.value.clearSelection()
+  if (checked) pendingTableRef.value.toggleAllSelection()
+}
+
+const handleBatchApprove = async () => {
+  const ids = selectedPending.value.map(r => r.id)
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确认批量通过选中的 ${ids.length} 条待审工时？`,
+      '批量审批',
+      { type: 'warning', confirmButtonText: '通过', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  const res = await api.post('/work-hours/batch-approve', { ids })
+  if (res.code === 200) {
+    const d = res.data || {}
+    ElMessage.success(`已通过 ${d.approved_count || 0} 条，跳过 ${d.skipped_count || 0} 条`)
+    pendingAllChecked.value = false
+    fetchPending()
+  } else {
+    ElMessage.error(res.message || '批量审批失败')
   }
 }
 

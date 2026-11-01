@@ -85,6 +85,59 @@ class Row:
             return default
 
 
+# ISO 8601 时间串（前端 Date 对象经 JSON 序列化的产物）：
+#   2026-09-28T16:00:00.000Z / 2026-09-28T16:00:00+08:00 / 2026-09-28T00:00:00
+_ISO_DT_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:\.\d+)?'
+    r'(Z|[+-]\d{2}:?\d{2})?$'
+)
+_BJ_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def _normalize_iso_string(v):
+    """ISO 8601 时间串 → 'YYYY-MM-DD' / 'YYYY-MM-DD HH:MM:SS'（北京时间）。
+
+    前端 el-date-picker 未设置 value-format 时，Date 对象经 JSON 序列化产生
+    UTC 时间串（如 2026-09-28T16:00:00.000Z，即北京时间 2026-09-29 零点）。
+    统一换算为北京时间：零点时刻仅保留日期，其余保留时分秒；
+    非时间串原样返回。
+    """
+    m = _ISO_DT_RE.match(v)
+    if not m:
+        return v
+    date_part, time_part, tz = m.group(1), m.group(2), m.group(3)
+    try:
+        dt = datetime.datetime.strptime(f'{date_part} {time_part}', '%Y-%m-%d %H:%M:%S')
+        if tz:
+            if tz == 'Z':
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            else:
+                sign = 1 if tz[0] == '+' else -1
+                body = tz[1:].replace(':', '')
+                offset = datetime.timedelta(hours=int(body[:2]), minutes=int(body[2:4]))
+                dt = dt.replace(tzinfo=datetime.timezone(sign * offset))
+            dt = dt.astimezone(_BJ_TZ)
+    except ValueError:
+        return v
+    date_part, time_part = dt.strftime('%Y-%m-%d'), dt.strftime('%H:%M:%S')
+    return date_part if time_part == '00:00:00' else f'{date_part} {time_part}'
+
+
+def _normalize_param(v):
+    """写入参数规范化：整值 ISO 时间串 → 'YYYY-MM-DD [HH:MM:SS]'。"""
+    if isinstance(v, str) and len(v) >= 19 and v[4] == '-' and 'T' in v:
+        return _normalize_iso_string(v)
+    return v
+
+
+def _normalize_params(args):
+    if isinstance(args, dict):
+        return {k: _normalize_param(v) for k, v in args.items()}
+    if isinstance(args, (list, tuple)):
+        return tuple(_normalize_param(a) for a in args)
+    return _normalize_param(args)
+
+
 def _normalize_value(v):
     """把 PyMySQL 返回值规范为原 SQLite 习惯的 Python 类型。
 
@@ -93,6 +146,8 @@ def _normalize_value(v):
       （与 SQLite 中 REAL/INTEGER 聚合返回 float/int 的行为对齐）
     - datetime/date（DATETIME/DATE 列）→ 'YYYY-MM-DD HH:MM:SS' / 'YYYY-MM-DD'
       字符串：全库时间戳在 SQLite 时代即按文本存取，业务代码按字符串处理
+    - 整值 ISO 8601 时间串（历史前端 Date 序列化入库）→ 'YYYY-MM-DD'
+      / 'YYYY-MM-DD HH:MM:SS'（北京时间）
     - bytes（BLOB）保持不变（sqlite3 同样返回 bytes）
     """
     if isinstance(v, decimal.Decimal):
@@ -103,6 +158,8 @@ def _normalize_value(v):
         return v.strftime('%Y-%m-%d')
     if isinstance(v, datetime.timedelta):
         return v.total_seconds()
+    if isinstance(v, str) and len(v) >= 19 and v[4] == '-' and 'T' in v:
+        return _normalize_iso_string(v)
     return v
 
 
@@ -110,7 +167,12 @@ def _wrap_row(description, row_tuple):
     if row_tuple is None or description is None:
         return row_tuple
     keys = [d[0] for d in description]
-    values = [_normalize_value(v) for v in row_tuple]
+    values = [
+        # *_utc 列（如 operation_logs.timestamp_utc）是数字签名 payload 的
+        # 组成部分，必须保持原始 UTC 串，否则验签重算 payload 会失败
+        v if keys[i].endswith('_utc') else _normalize_value(v)
+        for i, v in enumerate(row_tuple)
+    ]
     return Row(keys, values)
 
 
@@ -177,12 +239,14 @@ class Cursor:
 
     def execute(self, sql, args=None):
         translated = translate_sql(sql, args is not None)
+        if args is not None:
+            args = _normalize_params(args)
         self._cur.execute(translated, args)
         return self
 
     def executemany(self, sql, seq_of_args):
         translated = translate_sql(sql, True)
-        self._cur.executemany(translated, seq_of_args)
+        self._cur.executemany(translated, [_normalize_params(a) for a in seq_of_args])
         return self
 
     def fetchone(self):

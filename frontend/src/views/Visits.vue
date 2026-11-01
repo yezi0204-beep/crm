@@ -32,6 +32,9 @@
         <el-button type="warning" @click="showWorkSummary = true">
           📝 AI工作总结
         </el-button>
+        <el-button type="danger" plain @click="openPlanAnalysis">
+          🤖 AI计划分析
+        </el-button>
       </div>
     </div>
 
@@ -648,6 +651,35 @@
       </template>
     </el-dialog>
 
+    <!-- AI 计划分析对话框 -->
+    <el-dialog v-model="planAnalysisVisible" title="🤖 AI 计划分析（拜访目标 & 资源需求）" width="720px" top="6vh"
+               :close-on-click-modal="false" :close-on-press-escape="false">
+      <div class="plan-analysis-bar">
+        <el-select v-model="planAnalysisVisitor" placeholder="选择人员" style="width:180px">
+          <el-option v-for="u in planAnalysisUsers" :key="u.username" :label="`${u.name}（${u.role}）`" :value="u.username" />
+        </el-select>
+        <el-select v-model="planAnalysisDays" style="width:140px">
+          <el-option label="未来 3 天" :value="3" />
+          <el-option label="未来 7 天" :value="7" />
+          <el-option label="未来 14 天" :value="14" />
+          <el-option label="未来 30 天" :value="30" />
+        </el-select>
+        <el-button type="primary" :loading="planAnalysisLoading" @click="runPlanAnalysis">开始分析</el-button>
+      </div>
+      <div v-loading="planAnalysisLoading" element-loading-text="AI 正在分析计划，请稍候...">
+        <div v-if="planAnalysisResult" class="plan-analysis-result">
+          <div class="plan-analysis-meta">
+            {{ planAnalysisResult.visitor_name }} · {{ planAnalysisResult.range }} · 共 {{ planAnalysisResult.plan_count }} 项计划
+          </div>
+          <div class="plan-analysis-text">{{ planAnalysisResult.analysis }}</div>
+        </div>
+        <el-empty v-else-if="!planAnalysisLoading" description="选择人员与时间范围后点击「开始分析」" />
+      </div>
+      <template #footer>
+        <el-button @click="planAnalysisVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <!-- AI 工作总结（周/月，LLM 生成 + Word 导出） -->
     <WorkSummaryDialog v-model="showWorkSummary" />
   </div>
@@ -689,6 +721,14 @@ const reviewDialogVisible = ref(false)
 const reviewLoading = ref(false)
 const reviewData = ref(null)
 const reviewKnowledgeId = ref(null)
+
+// AI 计划分析相关状态
+const planAnalysisVisible = ref(false)
+const planAnalysisLoading = ref(false)
+const planAnalysisVisitor = ref('')
+const planAnalysisDays = ref(7)
+const planAnalysisResult = ref(null)
+const planAnalysisUsers = ref([])
 
 const activePersonnelTab = ref('')
 
@@ -1170,6 +1210,9 @@ const handleComplete = async () => {
       if (data.data && data.data.customer_follow_created) {
         msg += '，客户跟进已创建'
       }
+      if (data.data && data.data.knowledge_id) {
+        msg += '，已沉淀至知识库'
+      }
       ElMessage.success(msg)
       completeDialogVisible.value = false
       detailDialogVisible.value = false
@@ -1182,6 +1225,58 @@ const handleComplete = async () => {
     ElMessage.error('操作失败')
   } finally {
     completing.value = false
+  }
+}
+
+// AI 计划分析：打开对话框（加载应用中心人员，默认选中当前用户）
+const openPlanAnalysis = async () => {
+  planAnalysisResult.value = null
+  planAnalysisVisible.value = true
+  if (!planAnalysisUsers.value.length) {
+    try {
+      const res = await fetch('/api/users', { headers: { 'Authorization': `Bearer ${token.value}` } })
+      const data = await res.json()
+      if (data.code === 200) {
+        planAnalysisUsers.value = (data.data || []).filter(u => u.department === '应用中心' && u.status !== '离职')
+      }
+    } catch (error) { /* 忽略，回退为空列表 */ }
+  }
+  const usernames = planAnalysisUsers.value.map(u => u.username)
+  planAnalysisVisitor.value = usernames.includes(authStore.username)
+    ? authStore.username
+    : (planAnalysisUsers.value[0]?.username || authStore.username || '')
+}
+
+// AI 计划分析：调用大模型推测拜访目标与资源需求
+const runPlanAnalysis = async () => {
+  if (!planAnalysisVisitor.value) {
+    ElMessage.warning('请选择人员')
+    return
+  }
+  planAnalysisLoading.value = true
+  planAnalysisResult.value = null
+  try {
+    const res = await fetch('/api/visits/analyze-plan', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token.value}`
+      },
+      body: JSON.stringify({
+        visitor_id: planAnalysisVisitor.value,
+        days: planAnalysisDays.value
+      })
+    })
+    const data = await res.json()
+    if (data.code === 200) {
+      planAnalysisResult.value = data.data
+    } else {
+      ElMessage.error(data.message || '分析失败')
+    }
+  } catch (error) {
+    ElMessage.error('请求失败，请稍后重试')
+  } finally {
+    planAnalysisLoading.value = false
   }
 }
 
@@ -1582,4 +1677,9 @@ onMounted(async () => {
 .review-tip { font-size: 12px; color: #94a3b8; margin-top: 16px; padding: 10px 12px; background: #fffbeb; border-radius: 6px; }
 .review-saved { font-size: 13px; color: #059669; margin-top: 12px; padding: 10px 12px; background: #d1fae5; border-radius: 6px; }
 .review-saved a { color: #059669; font-weight: 600; }
+
+.plan-analysis-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+.plan-analysis-result { border: 1px solid #ebeef5; border-radius: 8px; padding: 12px 16px; background: #fafafa; }
+.plan-analysis-meta { font-size: 12px; color: #909399; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed #e4e7ed; }
+.plan-analysis-text { white-space: pre-wrap; line-height: 1.8; font-size: 14px; color: #303133; max-height: 55vh; overflow-y: auto; }
 </style>

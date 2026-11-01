@@ -6,6 +6,7 @@ from extensions import DB_PATH
 
 logger = logging.getLogger(__name__)
 
+_last_receivable_snapshot_date = None
 scheduler_thread = None
 scheduler_running = False
 _last_cleanup = None  # 上次执行过期线索清理时间
@@ -282,7 +283,7 @@ def auto_convert_high_score_leads(min_score=80, max_count=20):
 
 def run_scheduler():
     global scheduler_running, _last_cleanup, _last_report_date, _last_analysis_date
-    global _last_agent_analysis_date, _last_auto_convert_date
+    global _last_agent_analysis_date, _last_auto_convert_date, _last_receivable_snapshot_date
     logger.info("定时任务调度器已启动")
 
     # 调度循环：每 1 小时检查一次情报采集；客户清理每 24 小时一次
@@ -362,6 +363,18 @@ def run_scheduler():
                     _last_auto_convert_date = today_str
             except Exception as e:
                 logger.error(f"高分商机自动入库任务失败: {e}")
+
+            # 2.9 两金明细表季度快照（每季度最后一天 3/31、6/30、9/30、12/31 自动生成一次）
+            try:
+                today_str = now.strftime('%Y-%m-%d')
+                if (now.month, now.day) in ((3, 31), (6, 30), (9, 30), (12, 31)) \
+                        and _last_receivable_snapshot_date != today_str:
+                    from routes.receivables import snapshot_quarter
+                    n = snapshot_quarter(today_str)
+                    logger.info(f"两金明细表季度快照已生成: {today_str} 共 {n} 条")
+                    _last_receivable_snapshot_date = today_str
+            except Exception as e:
+                logger.error(f"两金明细表季度快照任务失败: {e}")
 
         except Exception as e:
             logger.error(f"定时任务执行错误: {e}")

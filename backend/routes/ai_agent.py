@@ -112,10 +112,13 @@ def ai_agent():
             result = _exec_create_customer(cursor, entities, username, text, confirm)
         elif intent == 'update_business':
             result = _exec_update_business(cursor, entities, username, role, text, confirm)
+        elif intent == 'batch_approve_workhours':
+            result = _exec_batch_approve_workhours(cursor, username, confirm)
         else:
             result = {'status': 'none', 'data': {}, 'error': '不支持的意图'}
 
-        executed = result.get('status') == 'executed'
+        status = result.get('status')
+        executed = status == 'executed'
         if executed:
             db.commit()
             record_operation_log(username, 'AI智能体', '对话录入',
@@ -123,8 +126,13 @@ def ai_agent():
         else:
             db.rollback()
 
-        reply = generate_agent_reply(intent, executed, result.get('data', {}),
-                                     error=result.get('error'))
+        if status == 'pending':
+            # 待确认不是失败：生成确认引导文案
+            reason = result.get('data', {}).get('pending_reason') or '请确认操作信息'
+            reply = f'{reason}，确认后我将为您执行。'
+        else:
+            reply = generate_agent_reply(intent, executed, result.get('data', {}),
+                                         error=result.get('error'))
         result['reply'] = reply
         return jsonify({'code': 200, 'message': 'success',
                         'data': {'intent': intent, 'entities': entities, **result}})
@@ -316,6 +324,107 @@ def _prob_to_stage(prob):
     return '引导需求'
 
 
+def _list_approvable_pending_workhours(cursor, username):
+    """查询当前用户有权审批的全部待审工时（数据级隔离，与 workhours.list_pending 一致）。
+
+    返回 list[dict]。
+    """
+    if user_can(username, 'workhour.manage'):
+        cursor.execute("""
+            SELECT wh.id, wh.user_id, wh.work_date, wh.hours, wh.project_type, wh.project_id,
+                   COALESCE(b.title, c.contract_name) AS project_name,
+                   uu.name AS user_name
+            FROM work_hours wh
+            LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
+            LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+            LEFT JOIN users uu ON wh.user_id = uu.username
+            WHERE wh.status = 'pending'
+            ORDER BY wh.submit_time ASC
+        """)
+    else:
+        cursor.execute("""
+            SELECT wh.id, wh.user_id, wh.work_date, wh.hours, wh.project_type, wh.project_id,
+                   COALESCE(b.title, c.contract_name) AS project_name,
+                   uu.name AS user_name
+            FROM work_hours wh
+            LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
+            LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+            LEFT JOIN users uu ON wh.user_id = uu.username
+            WHERE wh.status = 'pending' AND (
+                (wh.project_type='business' AND (b.project_manager=? OR b.owner_id=?))
+                OR (wh.project_type='contract' AND c.owner_id=?)
+            )
+            ORDER BY wh.submit_time ASC
+        """, (username, username, username))
+    return [dict(r) for r in cursor.fetchall()]
+
+
+def _exec_batch_approve_workhours(cursor, username, confirm):
+    """批量审批工时执行器。
+
+    首次调用（confirm=False）：返回待审批工时预览（pending 状态，由用户确认）。
+    确认后（confirm=True）：批量通过当前用户有权审批的全部待审工时。
+    """
+    if not (user_can(username, 'workhour.manage') or
+            user_can(username, 'workhour.approve')):
+        return {'status': 'failed', 'data': {},
+                'error': '您没有工时审批权限，无法执行批量审批'}
+
+    items = _list_approvable_pending_workhours(cursor, username)
+    if not items:
+        return {'status': 'executed',
+                'data': {'approved_count': 0, 'skipped_count': 0, 'total_hours': 0},
+                'error': None} if confirm else {
+                'status': 'none', 'data': {},
+                'error': '当前没有待您审批的工时记录'}
+
+    if not confirm:
+        # 预览态：返回前 10 条供确认卡片展示
+        total_hours = round(sum(float(r.get('hours') or 0) for r in items), 2)
+        return {
+            'status': 'pending',
+            'data': {
+                'pending_reason': f'共 {len(items)} 条待审工时（合计 {total_hours} 小时），确认后将全部通过',
+                'pending_count': len(items),
+                'total_hours': total_hours,
+                'preview_items': [
+                    {
+                        'id': r['id'],
+                        'user_name': r.get('user_name') or r.get('user_id'),
+                        'project_name': r.get('project_name') or '未关联项目',
+                        'work_date': str(r.get('work_date') or '')[:10],
+                        'hours': float(r.get('hours') or 0),
+                    } for r in items[:10]
+                ],
+                'more_count': max(0, len(items) - 10),
+            },
+        }
+
+    # 确认态：批量通过（复用 workhours 的权限判断兜底）
+    from .workhours import _can_approve
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    approved = 0
+    skipped = 0
+    total_hours = 0.0
+    for r in items:
+        if not _can_approve(username, r.get('project_type'), r.get('project_id')):
+            skipped += 1
+            continue
+        cursor.execute(
+            "UPDATE work_hours SET status='approved', approver_id=?, approve_time=?, reject_reason=NULL WHERE id=? AND status='pending'",
+            (username, now, r['id']))
+        if cursor.rowcount > 0:
+            approved += 1
+            total_hours += float(r.get('hours') or 0)
+        else:
+            skipped += 1
+    return {
+        'status': 'executed',
+        'data': {'approved_count': approved, 'skipped_count': skipped,
+                 'total_hours': round(total_hours, 2)},
+    }
+
+
 # ==================== 2. 拜访复盘接口 ====================
 
 @ai_agent_bp.route('/api/ai/visit-summary', methods=['POST'])
@@ -446,6 +555,12 @@ def ai_agent_stream():
                 action_label = {'create_follow_log': '跟进记录', 'create_customer': '新增客户',
                                 'update_business': '商机更新'}[intent]
                 hint = f'检测到您要进行「{action_label}」操作，已切换到对话录入模式，请在确认卡片中确认后执行。'
+                yield f"data: {json.dumps({'answer': hint}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            if intent == 'batch_approve_workhours':
+                hint = '检测到您要「批量审批工时」，请切换到对话录入模式，我会列出待审工时由您确认后一键通过。'
                 yield f"data: {json.dumps({'answer': hint}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
                 return

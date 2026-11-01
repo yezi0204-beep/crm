@@ -474,5 +474,146 @@ def get_monthly_finance():
     }})
 
 
+# ============================================================
+# AI 经营洞察（LLM 生成关键结论，带内存缓存避免频繁调用）
+# ============================================================
+_INSIGHTS_CACHE = {}
+_INSIGHTS_CACHE_TTL = 300  # 5 分钟
+
+
+def _collect_insight_metrics(db, cursor, username, can_view_all):
+    """收集用于 LLM 洞察的核心指标（轻量、只读）。"""
+    owner_filter = "" if can_view_all else "AND c.owner_id = ?"
+    owner_params = [] if can_view_all else [username]
+    now = datetime.now()
+    month_start = now.strftime('%Y-%m-01')
+
+    m = {}
+    cursor.execute("SELECT COUNT(*) n FROM customers")
+    m['total_customers'] = cursor.fetchone()['n']
+    cursor.execute("SELECT COUNT(*) n FROM business WHERE status='active'")
+    m['active_business'] = cursor.fetchone()['n']
+    cursor.execute(
+        "SELECT COUNT(*) n, COALESCE(SUM(total_amt),0) amt FROM contracts c WHERE c.status != '已终止' " + owner_filter,
+        owner_params)
+    r = cursor.fetchone()
+    m['total_contracts'] = r['n']
+    m['contracts_amount'] = round(float(r['amt'] or 0), 2)
+
+    cursor.execute(
+        "SELECT COALESCE(SUM(amount),0) amt FROM payment_records "
+        + ("" if can_view_all else "WHERE contract_id IN (SELECT id FROM contracts c WHERE c.owner_id = ?)"),
+        owner_params)
+    m['total_payments'] = round(float(cursor.fetchone()['amt'] or 0), 2)
+
+    # 待回款 = 累计验收 + 税额 - 已回款（执行中合同）
+    cursor.execute(
+        "SELECT COALESCE(SUM(COALESCE(c.income,0) - COALESCE(c.paid_amt,0)),0) pending "
+        "FROM contracts c WHERE c.status = '执行中' " + owner_filter,
+        owner_params)
+    m['pending_payment'] = round(float(cursor.fetchone()['pending'] or 0), 2)
+
+    # 待验收合同额
+    cursor.execute(
+        "SELECT COALESCE(SUM(c.total_amt - COALESCE(c.income,0)),0) pending "
+        "FROM contracts c WHERE c.status = '执行中' " + owner_filter,
+        owner_params)
+    m['pending_acceptance'] = round(float(cursor.fetchone()['pending'] or 0), 2)
+
+    # 本月新增
+    cursor.execute("SELECT COUNT(*) n FROM customers WHERE created_at >= ?", (month_start,))
+    m['new_customers_month'] = cursor.fetchone()['n']
+    cursor.execute("SELECT COUNT(*) n FROM business WHERE status='active' AND created_at >= ?", (month_start,))
+    m['new_business_month'] = cursor.fetchone()['n']
+    cursor.execute("SELECT COUNT(*) n, COALESCE(SUM(total_amt),0) amt FROM contracts WHERE sign_date >= ?", (month_start,))
+    r = cursor.fetchone()
+    m['new_contracts_month'] = r['n']
+    m['new_contracts_amount_month'] = round(float(r['amt'] or 0), 2)
+    cursor.execute("SELECT COALESCE(SUM(amount),0) amt FROM payment_records WHERE payment_date >= ?", (month_start,))
+    m['payments_month'] = round(float(cursor.fetchone()['amt'] or 0), 2)
+
+    # 待办
+    try:
+        cursor.execute("SELECT COUNT(*) n FROM work_hours WHERE status='pending'")
+        m['pending_workhours'] = cursor.fetchone()['n']
+    except Exception:
+        m['pending_workhours'] = 0
+    return m
+
+
+@dashboard_bp.route('/api/dashboard/insights', methods=['GET'])
+@token_required
+def get_dashboard_insights():
+    """AI 经营洞察：聚合核心指标，用 LLM 生成 3-5 条关键结论。
+    缓存 5 分钟，LLM 不可用时返回规则生成的静态洞察。
+    """
+    payload = request.current_user
+    username = payload['username']
+    can_view_all = user_can(username, 'data.view_all')
+    cache_key = f'{username}|{int(can_view_all)}'
+    now_ts = datetime.now().timestamp()
+
+    cached = _INSIGHTS_CACHE.get(cache_key)
+    if cached and (now_ts - cached['ts']) < _INSIGHTS_CACHE_TTL:
+        return jsonify({'code': 200, 'message': 'success',
+                        'data': {**cached['data'], 'cached': True}})
+
+    db = get_db()
+    cursor = db.cursor()
+    metrics = _collect_insight_metrics(db, cursor, username, can_view_all)
+
+    insights = None
+    source = 'llm'
+    try:
+        from llm_gateway import gateway_chat
+        prompt = (
+            "你是 CRM 经营分析助手。请根据以下数据给出 3-5 条简洁、可执行的关键经营洞察"
+            "（每条不超过 35 字，用短句，不要客套话）。数据：\n"
+            f"客户总数 {metrics['total_customers']}；活跃商机 {metrics['active_business']}；"
+            f"有效合同 {metrics['total_contracts']} 个，总额 {metrics['contracts_amount']} 元；"
+            f"累计回款 {metrics['total_payments']} 元；"
+            f"待回款 {metrics['pending_payment']} 元；待验收 {metrics['pending_acceptance']} 元；"
+            f"本月新增客户 {metrics['new_customers_month']}、新增商机 {metrics['new_business_month']}、"
+            f"新签合同 {metrics['new_contracts_month']} 个（{metrics['new_contracts_amount_month']} 元）、"
+            f"本月回款 {metrics['payments_month']} 元；待审工时 {metrics['pending_workhours']} 条。"
+        )
+        resp = gateway_chat(
+            messages=[{'role': 'user', 'content': prompt}],
+            max_tokens=600, timeout=30, enable_thinking=False,
+            operation_type='dashboard_insights', data_source='dashboard', operator=username,
+        )
+        if resp:
+            lines = [ln.strip('•-* 0123456789.、') for ln in resp.splitlines()]
+            insights = [ln for ln in lines if len(ln) >= 6][:5] or None
+    except Exception:
+        insights = None
+
+    if not insights:
+        source = 'rule'
+        insights = []
+        if metrics['pending_payment'] > 0:
+            insights.append(f"待回款 {metrics['pending_payment']:.2f} 元，建议优先跟进回款计划")
+        if metrics['pending_acceptance'] > 0:
+            insights.append(f"待验收 {metrics['pending_acceptance']:.2f} 元，可推动项目验收释放收入")
+        if metrics['new_business_month'] > 0:
+            insights.append(f"本月新增商机 {metrics['new_business_month']} 个，注意及时跟进转化")
+        if metrics['pending_workhours'] > 0:
+            insights.append(f"有 {metrics['pending_workhours']} 条工时待审批，可在工时页一键批量通过")
+        if metrics['active_business'] > 0 and metrics['total_contracts'] > 0:
+            rate = round(metrics['total_contracts'] / max(metrics['active_business'], 1) * 100, 1)
+            insights.append(f"商机转合同比例约 {rate}%")
+        if not insights:
+            insights.append("暂无待处理事项，业务运行平稳")
+
+    data = {
+        'insights': insights,
+        'metrics': metrics,
+        'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'source': source,
+    }
+    _INSIGHTS_CACHE[cache_key] = {'ts': now_ts, 'data': data}
+    return jsonify({'code': 200, 'message': 'success', 'data': {**data, 'cached': False}})
+
+
 def register_routes(app):
     app.register_blueprint(dashboard_bp)

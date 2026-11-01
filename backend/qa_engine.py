@@ -125,6 +125,8 @@ def extract_query_function(question):
 9. get_total_pending → 待回款总额、所有待回款、总待回款
 10. get_weekly_plan → 本周工作计划、本周工作安排、这周计划
 11. get_next_week_plan → 下周工作计划、下周工作安排、下周计划
+12. get_pending_workhours → 待审批工时、有多少待审工时、工时审批积压、待我审批的工时
+13. get_month_payments → 本月回款、这个月回款、当月回款金额
 
 用户问题：{question}
 
@@ -140,17 +142,67 @@ def extract_query_function(question):
     if result:
         func_name = result.strip()
         valid_funcs = [
-            'get_contracts_near_expiry', 'get_top_pending_customer', 
+            'get_contracts_near_expiry', 'get_top_pending_customer',
             'get_top_pending_contract', 'get_business_to_follow',
             'get_my_customer_count', 'get_top_contract_by_amount',
             'get_business_count', 'get_total_payments', 'get_total_pending',
-            'get_weekly_plan', 'get_next_week_plan', 'none'
+            'get_weekly_plan', 'get_next_week_plan',
+            'get_pending_workhours', 'get_month_payments', 'none'
         ]
         for valid in valid_funcs:
             if valid in func_name:
                 return valid
         return 'none'
     return None
+
+
+def _extract_query_function_rule(question):
+    """查询意图的规则匹配（不调 LLM，毫秒级），供流式接口快速路由。
+
+    返回函数名（与 extract_query_function 的函数映射表一致），未命中返回 'none'。
+    """
+    q = question.strip()
+
+    # 待审批工时
+    if '工时' in q and any(k in q for k in ['待审', '待审批', '审批', '积压']):
+        return 'get_pending_workhours'
+    # 本月回款
+    if '回款' in q and any(k in q for k in ['本月', '这个月', '当月']):
+        return 'get_month_payments'
+    # 合同到期
+    if '合同' in q and ('到期' in q or '即将到期' in q):
+        return 'get_contracts_near_expiry'
+    # 待回款排名
+    if '回款' in q and any(k in q for k in ['最高', '最多', '金额', '排名']):
+        if '客户' in q:
+            return 'get_top_pending_customer'
+        return 'get_top_pending_contract'
+    # 商机跟进
+    if '商机' in q and any(k in q for k in ['跟进', '需要']):
+        return 'get_business_to_follow'
+    # 客户数量
+    if '客户' in q and any(k in q for k in ['多少', '数量', '几个']):
+        return 'get_my_customer_count'
+    # 合同总额/最高合同
+    if '合同' in q and any(k in q for k in ['总额', '最高', '最大']):
+        return 'get_top_contract_by_amount'
+    # 商机数量
+    if '商机' in q and any(k in q for k in ['多少', '数量', '几个']):
+        return 'get_business_count'
+    # 回款总额
+    if '回款' in q and any(k in q for k in ['总额', '合计', '累计']):
+        return 'get_total_payments'
+    # 待回款总额
+    if '待回款' in q and any(k in q for k in ['总额', '合计', '多少']):
+        return 'get_total_pending'
+    # 本周计划
+    if '本周' in q and any(k in q for k in ['工作', '计划', '安排']):
+        return 'get_weekly_plan'
+    # 下周计划
+    if '下周' in q and any(k in q for k in ['工作', '计划', '安排']):
+        return 'get_next_week_plan'
+
+    return 'none'
 
 
 def generate_answer(question, data_context, username):
@@ -203,8 +255,9 @@ WRITE_INTENT_PROMPT = """你是一个 CRM 智能体的意图识别器。分析�
 1. create_follow_log - 用户汇报了客户拜访、跟进、沟通情况（关键词：拜访/跟进/沟通/见面/联系了/谈了/汇报）
 2. create_customer - 用户要新增客户（关键词：新增客户/录入客户/添加客户/新建客户）
 3. update_business - 用户要更新商机状态/概率/阶段（关键词：商机/概率/阶段/成交/签约/推进）
-4. query - 用户在查询数据（关键词：多少/有哪些/查询/统计/列表/排名）
-5. none - 无法识别
+4. batch_approve_workhours - 用户要批量审批待审工时（关键词：批量审批工时/一键审批/通过待审/批量通过工时/审批所有工时）
+5. query - 用户在查询数据（关键词：多少/有哪些/查询/统计/列表/排名）
+6. none - 无法识别
 
 实体提取规则（entities 对象，仅提取文本中明确出现的字段，未提及的字段不要编造）：
 - customer_name: 客户公司名（如"江阴科技"、"华为"）
@@ -249,7 +302,8 @@ def extract_write_intent(question, username=None):
             cleaned = re.sub(r'\s*```$', '', cleaned)
         data = json.loads(cleaned)
         # 校验 intent 合法性
-        valid_intents = ['create_follow_log', 'create_customer', 'update_business', 'query', 'none']
+        valid_intents = ['create_follow_log', 'create_customer', 'update_business',
+                         'batch_approve_workhours', 'query', 'none']
         if data.get('intent') not in valid_intents:
             data['intent'] = 'none'
         if 'entities' not in data:
@@ -289,7 +343,10 @@ def _extract_write_intent_rule(question):
             entities['stage'] = s
             break
 
-    # 意图判断
+    # 意图判断（批量审批优先于其他动作类意图）
+    if ('工时' in question and any(k in question for k in ['批量审批', '一键审批', '批量通过', '一键通过', '审批所有', '全部通过', '待审通过'])) \
+            or any(k in question for k in ['批量审批工时', '一键审批工时', '批量通过工时', '通过待审工时']):
+        return {'intent': 'batch_approve_workhours', 'entities': {}, 'confidence': 0.85}
     if any(k in question for k in ['新增客户', '录入客户', '添加客户', '新建客户']):
         return {'intent': 'create_customer', 'entities': entities, 'confidence': 0.7}
     if any(k in question for k in ['商机', '概率', '阶段']) and any(k in question for k in ['提升', '更新', '进入', '推进', '改为', '调整']):
@@ -448,6 +505,14 @@ def _generate_agent_reply_template(intent, executed, data, error=None):
         if stage:
             parts.append(f"阶段调整为「{stage}」")
         return "，".join(parts) + "。"
+    if intent == 'batch_approve_workhours':
+        approved = data.get('approved_count', 0)
+        skipped = data.get('skipped_count', 0)
+        hours = data.get('total_hours', 0)
+        reply = f"已批量通过 {approved} 条待审工时（共 {hours} 小时）"
+        if skipped:
+            reply += f"，另有 {skipped} 条因状态或权限原因被跳过"
+        return reply + "。"
     if intent == 'query':
         return "已为您查询相关数据。"
     return "操作已完成。"

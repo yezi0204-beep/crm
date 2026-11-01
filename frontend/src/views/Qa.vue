@@ -89,6 +89,20 @@
                 <label>电话</label>
                 <el-input v-model="msg.editEntities.phone" size="small" />
               </div>
+              <div class="confirm-field" v-if="msg.intent === 'batch_approve_workhours' && msg.confirmData.preview_items?.length">
+                <label>待审批工时预览（{{ msg.confirmData.pending_count }} 条，共 {{ msg.confirmData.total_hours }} 小时）</label>
+                <div class="workhour-preview">
+                  <div v-for="it in msg.confirmData.preview_items" :key="it.id" class="workhour-preview-item">
+                    <span class="wh-user">{{ it.user_name }}</span>
+                    <span class="wh-project">{{ it.project_name }}</span>
+                    <span class="wh-date">{{ it.work_date }}</span>
+                    <span class="wh-hours">{{ it.hours }}h</span>
+                  </div>
+                  <div v-if="msg.confirmData.more_count > 0" class="workhour-preview-more">
+                    … 另有 {{ msg.confirmData.more_count }} 条未展示，确认后将一并审批通过
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="confirm-actions" v-if="msg.confirmData.status === 'pending'">
               <el-button type="primary" size="small" @click="confirmExecute(msg)" :loading="msg.executing">确认执行</el-button>
@@ -352,12 +366,13 @@ const bidResult = ref(null)
 
 // ========== 快捷问题 ==========
 const qaQuickQuestions = [
+  '本月回款多少？',
+  '待审批工时有积压吗？',
   '本月有哪些合同即将到期？',
-  '待回款金额最高的客户是谁？',
-  '最近一周有哪些商机需要跟进？',
-  '我负责的客户有多少个？'
+  '待回款金额最高的客户是谁？'
 ]
 const agentQuickQuestions = [
+  '批量审批工时',
   '今天拜访了江阴科技，客户对方案满意',
   '新增客户：航天信息科技，联系人张总',
   '银河航天商机概率提升到80%'
@@ -365,8 +380,8 @@ const agentQuickQuestions = [
 const currentQuickQuestions = computed(() => mode.value === 'qa' ? qaQuickQuestions : agentQuickQuestions)
 
 // ========== 工具函数 ==========
-const intentLabel = (intent) => ({ create_follow_log: '创建跟进', create_customer: '新增客户', update_business: '更新商机' }[intent] || '操作')
-const intentIcon = (intent) => ({ create_follow_log: '📝', create_customer: '👥', update_business: '🎯' }[intent] || '⚡')
+const intentLabel = (intent) => ({ create_follow_log: '创建跟进', create_customer: '新增客户', update_business: '更新商机', batch_approve_workhours: '批量审批工时' }[intent] || '操作')
+const intentIcon = (intent) => ({ create_follow_log: '📝', create_customer: '👥', update_business: '🎯', batch_approve_workhours: '⏱️' }[intent] || '⚡')
 const formatTime = () => {
   const n = new Date()
   return `${n.getHours().toString().padStart(2, '0')}:${n.getMinutes().toString().padStart(2, '0')}`
@@ -695,6 +710,28 @@ onMounted(() => { initSpeech(); scrollToBottom() })
 .confirm-field label { display: block; font-size: 12px; color: #718096; margin-bottom: 4px; }
 .confirm-reason { font-size: 13px; color: #744210; margin-bottom: 8px; }
 .confirm-actions { display: flex; gap: 8px; }
+
+.workhour-preview {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid #f6e05e;
+  border-radius: 6px;
+  background: #fffff0;
+}
+.workhour-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px dashed #faf089;
+}
+.workhour-preview-item:last-child { border-bottom: none; }
+.workhour-preview-item .wh-user { font-weight: 600; color: #2d3748; min-width: 48px; }
+.workhour-preview-item .wh-project { flex: 1; color: #4a5568; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workhour-preview-item .wh-date { color: #a0aec0; }
+.workhour-preview-item .wh-hours { color: #c05621; font-weight: 600; }
+.workhour-preview-more { padding: 6px 10px; font-size: 12px; color: #b7791f; }
 
 .input-container {
   display: flex;
