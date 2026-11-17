@@ -36,10 +36,47 @@ THEME_MID = RGBColor(0x2E, 0x75, 0xB6)     # 中蓝（三级标题）
 THEME_GRAY = RGBColor(0x59, 0x59, 0x59)    # 灰色（副标题/说明）
 
 
+def _ensure_tables():
+    """建表：工作总结历史记录（同一周期唯一，重新分析覆盖更新）。"""
+    db = get_db()
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS work_summary_records (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            period_type VARCHAR(10) NOT NULL,   -- week / month
+            period_label VARCHAR(50) NOT NULL,   -- 2026-11-03 ~ 2026-11-09（第45周）
+            start_date VARCHAR(12) NOT NULL,
+            end_date VARCHAR(12) NOT NULL,
+            department VARCHAR(50) DEFAULT '应用中心',
+            content MEDIUMTEXT,
+            generated_by VARCHAR(64),
+            generated_name VARCHAR(64),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_period_start (period_type, start_date),
+            INDEX idx_created (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    # 已存在的表补唯一键（MySQL 8 支持 IF NOT EXISTS，MySQL 5.7 会静默失败）
+    try:
+        cur = db.cursor()
+        cur.execute("""
+            ALTER TABLE work_summary_records
+            ADD UNIQUE INDEX uk_period_start (period_type, start_date)
+        """)
+        db.commit()
+    except Exception:
+        pass
+
+
 # ==================== 周期与数据聚合 ====================
 
-def _period_range(period_type, offset):
-    """计算周期起止日期（含首尾）。offset=0 当前周期，1 上一个周期。"""
+def _period_range(period_type, offset, force_start=None, force_end=None):
+    """计算周期起止日期（含首尾）。offset=0 当前周期，1 上一个周期。
+
+    force_start / force_end 存在时直接返回（用于"重新分析"历史指定周）。
+    """
+    if force_start and force_end:
+        return force_start, force_end
     today = date.today()
     if period_type == 'month':
         offset_month = today.month - int(offset or 0)
@@ -56,7 +93,12 @@ def _period_range(period_type, offset):
     return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
 
 
-def _period_label(period_type, offset):
+def _period_label(period_type, offset, force_start=None, force_end=None):
+    if force_start and force_end:
+        if period_type == 'month':
+            return force_start[:7].replace('-', '年') + '月'
+        iso_week = date(*map(int, force_start.split('-'))).isocalendar()[1]
+        return f'{force_start} ~ {force_end}（第{iso_week}周）'
     start, end = _period_range(period_type, offset)
     if period_type == 'month':
         return start[:7].replace('-', '年') + '月'
@@ -183,14 +225,16 @@ def summary_data():
     period_type = request.args.get('period_type', 'week')
     offset = int(request.args.get('offset', 0) or 0)
     department = request.args.get('department', DEFAULT_DEPARTMENT)
+    force_start = (request.args.get('start_date') or '').strip() or None
+    force_end = (request.args.get('end_date') or '').strip() or None
     if period_type not in ('week', 'month'):
         return jsonify({'code': 400, 'message': 'period_type 必须为 week 或 month', 'data': None})
 
-    start, end = _period_range(period_type, offset)
+    start, end = _period_range(period_type, offset, force_start, force_end)
     db = get_db()
     cursor = db.cursor()
     data = _collect_data(cursor, department, start, end)
-    data['period_label'] = _period_label(period_type, offset)
+    data['period_label'] = _period_label(period_type, offset, force_start, force_end)
     return jsonify({'code': 200, 'message': 'success', 'data': data})
 
 
@@ -205,17 +249,20 @@ def generate_summary():
     offset = int(body.get('offset', 0) or 0)
     department = body.get('department', DEFAULT_DEPARTMENT)
     extra_note = (body.get('extra_note') or '').strip()
+    force_start = (body.get('start_date') or '').strip() or None
+    force_end = (body.get('end_date') or '').strip() or None
+    force_label = (body.get('period_label') or '').strip() or None
 
     if period_type not in ('week', 'month'):
         return jsonify({'code': 400, 'message': 'period_type 必须为 week 或 month', 'data': None})
 
-    start, end = _period_range(period_type, offset)
+    start, end = _period_range(period_type, offset, force_start, force_end)
     db = get_db()
     cursor = db.cursor()
     data = _collect_data(cursor, department, start, end)
 
     period_cn = '周' if period_type == 'week' else '月'
-    period_label = _period_label(period_type, offset)
+    period_label = force_label or _period_label(period_type, offset, force_start, force_end)
 
     # 关键指标摘要：置于最前，确保 LLM 一定引用这些数字（尤其是回款/签约）
     key_metrics = {
@@ -272,11 +319,83 @@ def generate_summary():
 
     record_operation_log(payload['username'], '生成', '工作总结',
                          f'{department} {period_label} 工作总结（LLM）')
+
+    # 保存历史记录（同一周期唯一，重新分析覆盖更新）
+    saved_id = None
+    try:
+        cursor.execute("""
+            INSERT INTO work_summary_records
+              (period_type, period_label, start_date, end_date, department,
+               content, generated_by, generated_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              period_label = VALUES(period_label),
+              department = VALUES(department),
+              content = VALUES(content),
+              generated_by = VALUES(generated_by),
+              generated_name = VALUES(generated_name),
+              updated_at = CURRENT_TIMESTAMP
+        """, (period_type, period_label, start, end, department,
+              answer, payload['username'], payload.get('name', '')))
+        db.commit()
+        saved_id = cursor.lastrowid
+        # ON DUPLICATE KEY 时 lastrowid 会返回 0，手动查询一下
+        if not saved_id:
+            cursor.execute(
+                "SELECT id FROM work_summary_records WHERE period_type=? AND start_date=?",
+                (period_type, start))
+            saved_id = (cursor.fetchone() or {}).get('id')
+    except Exception:
+        saved_id = None
+
     return jsonify({
         'code': 200, 'message': 'success',
         'data': {'content': answer, 'period_label': period_label,
-                 'department': department, 'start': start, 'end': end}
+                 'department': department, 'start': start, 'end': end,
+                 'record_id': saved_id}
     })
+
+
+# ==================== 历史记录 ====================
+
+@work_summary_bp.route('/api/work-summary/records', methods=['GET'])
+@token_required
+def list_records():
+    """按周期类型过滤、按生成时间倒序列出历史总结。"""
+    period_type = request.args.get('period_type', 'all')  # all / week / month
+    limit = int(request.args.get('limit', 50) or 50)
+    if period_type in ('week', 'month'):
+        where = "WHERE period_type = ?"
+        args = (period_type,)
+    else:
+        where = ''
+        args = ()
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute(f"""
+        SELECT id, period_type, period_label, start_date, end_date,
+               department, generated_by, generated_name, created_at
+        FROM work_summary_records {where}
+        ORDER BY created_at DESC LIMIT ?
+    """, (*args, limit))
+    rows = [dict(r) for r in cursor.fetchall()]
+    return jsonify({'code': 200, 'message': 'success', 'data': rows})
+
+
+@work_summary_bp.route('/api/work-summary/records/<int:record_id>', methods=['GET'])
+@token_required
+def get_record(record_id):
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("""
+        SELECT id, period_type, period_label, start_date, end_date,
+               department, content, generated_by, generated_name, created_at
+        FROM work_summary_records WHERE id = ?
+    """, (record_id,))
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({'code': 404, 'message': '记录不存在', 'data': None})
+    return jsonify({'code': 200, 'message': 'success', 'data': dict(row)})
 
 
 # ==================== Word 导出 ====================
@@ -496,4 +615,6 @@ def export_word():
 
 
 def register_routes(app):
+    with app.app_context():
+        _ensure_tables()
     app.register_blueprint(work_summary_bp)

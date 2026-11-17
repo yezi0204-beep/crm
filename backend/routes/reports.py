@@ -41,6 +41,56 @@ def _get_stage_index(probability):
     return None
 
 
+def _get_legacy_summary(cursor):
+    """历史合同（is_legacy=1）单列汇总：总数 + 总额 + 已回款 + 按原负责人分组。
+
+    历史合同不计入个人业绩，仅在业绩报表中单列展示。
+    返回：{'count', 'amount', 'payment_amount', 'by_owner': [{owner_name, contract_count, contract_amount, payment_amount}]}
+    """
+    cursor.execute("""
+        SELECT COUNT(*) AS cnt, COALESCE(SUM(c.total_amt), 0) AS amount
+        FROM contracts c WHERE c.is_legacy = 1
+    """)
+    total_row = cursor.fetchone()
+
+    cursor.execute("""
+        SELECT COALESCE(u.name, c.owner_id, '未分配') AS owner_name,
+               COUNT(c.id) AS contract_count,
+               COALESCE(SUM(c.total_amt), 0) AS contract_amount
+        FROM contracts c LEFT JOIN users u ON c.owner_id = u.username
+        WHERE c.is_legacy = 1
+        GROUP BY c.owner_id, u.name
+        ORDER BY contract_amount DESC
+    """)
+    by_owner = {r['owner_name']: {'owner_name': r['owner_name'],
+                                  'contract_count': r['contract_count'],
+                                  'contract_amount': round(r['contract_amount'] or 0, 2),
+                                  'payment_amount': 0.0}
+                for r in cursor.fetchall()}
+
+    cursor.execute("""
+        SELECT COALESCE(u.name, c.owner_id, '未分配') AS owner_name,
+               COALESCE(SUM(pr.amount), 0) AS payment_amount
+        FROM contracts c
+        JOIN payment_records pr ON c.id = pr.contract_id
+        LEFT JOIN users u ON c.owner_id = u.username
+        WHERE c.is_legacy = 1
+        GROUP BY c.owner_id, u.name
+    """)
+    total_payment = 0.0
+    for r in cursor.fetchall():
+        total_payment += r['payment_amount'] or 0
+        if r['owner_name'] in by_owner:
+            by_owner[r['owner_name']]['payment_amount'] = round(r['payment_amount'] or 0, 2)
+
+    return {
+        'count': total_row['cnt'] or 0,
+        'amount': round(total_row['amount'] or 0, 2),
+        'payment_amount': round(total_payment, 2),
+        'by_owner': list(by_owner.values())
+    }
+
+
 def _compute_trend_comparison(db, cursor, role, username, time_range, year=None):
     """计算同比/环比：当前周期 vs 上一周期 5 个核心指标。
 
@@ -370,23 +420,23 @@ def get_team_performance():
     """)
     business_stats = {row['owner_name']: dict(row) for row in cursor.fetchall()}
 
-    # 合同统计
+    # 合同统计（历史合同 is_legacy=1 不计入个人业绩，单列汇总）
     cursor.execute("""
         SELECT u.name as owner_name,
                COUNT(c.id) as contract_count,
                COALESCE(SUM(c.total_amt), 0) as contract_amount
         FROM users u
-        LEFT JOIN contracts c ON u.username = c.owner_id
+        LEFT JOIN contracts c ON u.username = c.owner_id AND COALESCE(c.is_legacy, 0) = 0
         GROUP BY u.username, u.name
     """)
     contract_stats = {row['owner_name']: dict(row) for row in cursor.fetchall()}
 
-    # 回款统计
+    # 回款统计（历史合同回款不计入个人业绩）
     cursor.execute("""
         SELECT u.name as owner_name,
                COALESCE(SUM(pr.amount), 0) as payment_amount
         FROM users u
-        LEFT JOIN contracts c ON u.username = c.owner_id
+        LEFT JOIN contracts c ON u.username = c.owner_id AND COALESCE(c.is_legacy, 0) = 0
         LEFT JOIN payment_records pr ON c.id = pr.contract_id
         GROUP BY u.username, u.name
     """)
@@ -420,10 +470,13 @@ def get_team_performance():
     # 按商机金额降序
     members.sort(key=lambda x: x['business_amount'], reverse=True)
 
+    # 历史合同单列汇总（不计入个人业绩）
+    legacy = _get_legacy_summary(cursor)
+
     return jsonify({
         'code': 200,
         'message': 'success',
-        'data': {'members': members}
+        'data': {'members': members, 'legacy': legacy}
     })
 
 
@@ -701,7 +754,7 @@ def export_report():
                    COUNT(c.id) as contract_count,
                    COALESCE(SUM(c.total_amt), 0) as contract_amount
             FROM users u
-            LEFT JOIN contracts c ON u.username = c.owner_id
+            LEFT JOIN contracts c ON u.username = c.owner_id AND COALESCE(c.is_legacy, 0) = 0
             GROUP BY u.username, u.name
         """)
         contract_map = {row['owner_name']: dict(row) for row in cursor.fetchall()}
@@ -710,7 +763,7 @@ def export_report():
             SELECT u.name as owner_name,
                    COALESCE(SUM(pr.amount), 0) as payment_amount
             FROM users u
-            LEFT JOIN contracts c ON u.username = c.owner_id
+            LEFT JOIN contracts c ON u.username = c.owner_id AND COALESCE(c.is_legacy, 0) = 0
             LEFT JOIN payment_records pr ON c.id = pr.contract_id
             GROUP BY u.username, u.name
         """)
@@ -733,6 +786,16 @@ def export_report():
                 round((b.get('forecast', 0) or 0), 2),
                 win_rate
             ])
+
+        # 历史合同单列汇总（不计入个人业绩）
+        legacy = _get_legacy_summary(cursor)
+        if legacy['count'] > 0:
+            ws3.append([])
+            ws3.append(["历史合同（不计入个人业绩）", "", "", "",
+                        legacy['count'], legacy['amount'], legacy['payment_amount'], "", ""])
+            for r in legacy['by_owner']:
+                ws3.append([f"  原负责人：{r['owner_name']}", "", "", "",
+                            r['contract_count'], r['contract_amount'], r['payment_amount'], "", ""])
         _style_header(ws3)
 
     # Sheet 4: 洞察摘要

@@ -533,6 +533,8 @@ def ai_agent_stream():
     text = (data.get('text') or data.get('question') or '').strip()
     if not text:
         return jsonify({'code': 400, 'message': '请输入内容', 'data': None})
+    # 多轮对话上下文（前端传入最近若干轮 user/assistant 消息）
+    history = data.get('history') or []
 
     from config import USE_LLM
 
@@ -575,7 +577,7 @@ def ai_agent_stream():
 
             from .misc import process_question_llm_stream
             # process_question_llm_stream 是 generator，直接 yield 每一条 SSE 事件
-            for event in process_question_llm_stream(text, cursor, username):
+            for event in process_question_llm_stream(text, cursor, username, history):
                 yield event
 
         except Exception as e:

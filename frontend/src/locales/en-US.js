@@ -62,6 +62,7 @@ export default {
     products: 'Products',
     payments: 'Payments',
     visits: 'Visits',
+    sandbox: 'Battle Sandbox',
     marketing: 'Campaigns',
     service: 'Tickets',
     pool: 'Public Pool',

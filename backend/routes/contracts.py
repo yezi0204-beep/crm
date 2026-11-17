@@ -44,54 +44,42 @@ def get_contracts():
     sort_direction = 'DESC' if sort_order.lower() in ['desc', 'descending'] else 'ASC'
     order_by_clause = sort_field + " " + sort_direction
 
+    # 历史合同筛选：legacy=1 仅历史合同；legacy=0 仅正常合同；缺省全部
+    legacy = request.args.get('legacy', '')
+
     # 关联名：customer_name（客户公司名）、business_title（关联商机标题）
     # 权限：持有 data.view_all（主任/院长）或 contracts.view_all（默认含应用中心）→ 查全部；其他 → 仅自己
     can_view_all = user_can(username, 'data.view_all') or user_can(username, 'contracts.view_all')
 
-    if can_view_all:
-        if sort_field == 'pending_amt':
-            cursor.execute(
-                "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title, "
-                "(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) + COALESCE(c.tax_amount, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
-                "FROM contracts c "
-                "LEFT JOIN users u ON c.owner_id = u.username "
-                "LEFT JOIN customers cu ON c.cust_id = cu.id "
-                "LEFT JOIN business b ON c.b_id = b.id "
-                "ORDER BY pending_amt " + sort_direction
-            )
-        else:
-            cursor.execute(
-                "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title "
-                "FROM contracts c "
-                "LEFT JOIN users u ON c.owner_id = u.username "
-                "LEFT JOIN customers cu ON c.cust_id = cu.id "
-                "LEFT JOIN business b ON c.b_id = b.id "
-                "ORDER BY c." + order_by_clause
-            )
+    where_parts = []
+    params = []
+    if not can_view_all:
+        where_parts.append("c.owner_id = ?")
+        params.append(username)
+    if legacy == '1':
+        where_parts.append("c.is_legacy = 1")
+    elif legacy == '0':
+        where_parts.append("COALESCE(c.is_legacy, 0) = 0")
+    where_sql = ("WHERE " + " AND ".join(where_parts) + " ") if where_parts else ""
+
+    if sort_field == 'pending_amt':
+        extra_col = (", (COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) "
+                     "+ COALESCE(c.tax_amount, 0) - COALESCE(c.paid_amt, 0)) as pending_amt ")
+        order_sql = "ORDER BY pending_amt " + sort_direction
     else:
-        if sort_field == 'pending_amt':
-            cursor.execute(
-                "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title, "
-                "(COALESCE((SELECT SUM(acceptance_amount) FROM contract_acceptances WHERE contract_id=c.id), 0) + COALESCE(c.tax_amount, 0) - COALESCE(c.paid_amt, 0)) as pending_amt "
-                "FROM contracts c "
-                "LEFT JOIN users u ON c.owner_id = u.username "
-                "LEFT JOIN customers cu ON c.cust_id = cu.id "
-                "LEFT JOIN business b ON c.b_id = b.id "
-                "WHERE c.owner_id = ? "
-                "ORDER BY pending_amt " + sort_direction,
-                (username,)
-            )
-        else:
-            cursor.execute(
-                "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title "
-                "FROM contracts c "
-                "LEFT JOIN users u ON c.owner_id = u.username "
-                "LEFT JOIN customers cu ON c.cust_id = cu.id "
-                "LEFT JOIN business b ON c.b_id = b.id "
-                "WHERE c.owner_id = ? "
-                "ORDER BY c." + order_by_clause,
-                (username,)
-            )
+        extra_col = " "
+        order_sql = "ORDER BY c." + order_by_clause
+
+    cursor.execute(
+        "SELECT c.*, u.name as owner_name, u.department as owner_department, cu.company as customer_name, b.title as business_title"
+        + extra_col +
+        "FROM contracts c "
+        "LEFT JOIN users u ON c.owner_id = u.username "
+        "LEFT JOIN customers cu ON c.cust_id = cu.id "
+        "LEFT JOIN business b ON c.b_id = b.id "
+        + where_sql + order_sql,
+        params
+    )
 
     rows = cursor.fetchall()
     contracts = []
@@ -268,7 +256,7 @@ def update_contract(contract_id):
     cursor = db.cursor()
 
     # 检查权限：管理员 OR 合同负责人
-    cursor.execute("SELECT owner_id FROM contracts WHERE id=?", (contract_id,))
+    cursor.execute("SELECT owner_id, is_legacy FROM contracts WHERE id=?", (contract_id,))
     contract_row = cursor.fetchone()
     if not contract_row:
         return jsonify({'code': 404, 'message': '合同不存在', 'data': None})
@@ -339,9 +327,23 @@ def update_contract(contract_id):
             if eh is not None and eh < 0:
                 return jsonify({'code': 400, 'message': '预计工时不能为负数', 'data': None})
             cursor.execute("UPDATE contracts SET estimated_hours=? WHERE id=?", (eh, contract_id))
+        # 历史合同标记：仅管理员（主任/院长）可修改，普通负责人忽略该字段
+        legacy_change = None
+        if 'is_legacy' in data and is_admin:
+            new_legacy = 1 if data.get('is_legacy') else 0
+            old_legacy = 1 if contract_row.get('is_legacy') else 0
+            if new_legacy != old_legacy:
+                cursor.execute("UPDATE contracts SET is_legacy=? WHERE id=?", (new_legacy, contract_id))
+                legacy_change = new_legacy
         db.commit()
 
         record_operation_log(username, '编辑', '合同', f'编辑合同：{data.get("contract_name")}（ID:{contract_id}）')
+        if legacy_change is not None:
+            record_operation_log(
+                username,
+                '标记历史合同' if legacy_change else '取消历史合同标记',
+                '合同',
+                f'合同：{data.get("contract_name")}（ID:{contract_id}）{"标记为历史合同，不计入个人业绩" if legacy_change else "取消历史合同标记"}')
 
         return jsonify({'code': 200, 'message': '合同更新成功', 'data': None})
     except Exception as e:

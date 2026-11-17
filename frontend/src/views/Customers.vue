@@ -56,7 +56,16 @@
           </el-table-column>
           <el-table-column prop="source" label="来源" min-width="100" sortable />
           <el-table-column prop="address" label="地址" min-width="150" sortable show-overflow-tooltip />
-          <el-table-column prop="owner_name" label="负责人" min-width="90" sortable />
+          <el-table-column prop="owner_name" label="负责人" min-width="140" sortable>
+            <template #default="scope">
+              <template v-if="scope.row.owner_names">
+                <el-tag v-for="(n, i) in scope.row.owner_names.split('、')" :key="i"
+                        size="small" :effect="i === 0 ? 'dark' : 'plain'"
+                        :type="i === 0 ? 'primary' : 'info'" class="owner-tag">{{ n }}</el-tag>
+              </template>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="created_at" label="创建时间" min-width="140" sortable />
           <el-table-column
             v-for="f in customFields"
@@ -124,7 +133,8 @@
           <el-input v-model="customerForm.source" />
         </el-form-item>
         <el-form-item label="负责人">
-          <el-select v-model="customerForm.owner_id" :disabled="!canEditOwner" placeholder="请选择负责人">
+          <el-select v-model="customerForm.owner_ids" :disabled="!canEditOwner" multiple collapse-tags
+                     collapse-tags-tooltip placeholder="请选择负责人（可多选，第一个为主负责人）">
             <el-option v-for="user in users" :key="user.username" :label="user.name" :value="user.username" />
           </el-select>
         </el-form-item>
@@ -330,7 +340,7 @@
                 <el-tag :type="getLevelType(profileData.customer.level)" size="small">{{ getLevelLabel(profileData.customer.level) }}</el-tag>
               </el-descriptions-item>
               <el-descriptions-item label="来源">{{ profileData.customer.source || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="负责人">{{ profileData.customer.owner_name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="负责人">{{ profileData.customer.owner_names || profileData.customer.owner_name || '-' }}</el-descriptions-item>
               <el-descriptions-item label="创建时间">{{ profileData.customer.created_at || '-' }}</el-descriptions-item>
               <el-descriptions-item label="最后跟进">{{ profileData.customer.last_follow || '-' }}</el-descriptions-item>
             </el-descriptions>
@@ -571,6 +581,7 @@ const customerForm = reactive({
   level: 'B',
   source: '',
   owner_id: '',
+  owner_ids: [],
   last_follow: '',
   created_at: '',
   ext_data: {}
@@ -726,8 +737,13 @@ const saveCustomer = async () => {
   await formRef.value.validate(async (valid) => {
     if (valid) {
       if (!customerForm.id) {
-        customerForm.owner_id = authStore.username
+        // 新建客户：无选择负责人时默认当前用户；主任可多选
+        if (!customerForm.owner_ids || !customerForm.owner_ids.length) {
+          customerForm.owner_ids = [authStore.username]
+        }
       }
+      // 第一个负责人同步为主负责人 owner_id
+      customerForm.owner_id = customerForm.owner_ids?.length ? customerForm.owner_ids[0] : ''
       
       try {
         let response
@@ -752,6 +768,10 @@ const saveCustomer = async () => {
 
 const editCustomer = (row) => {
   Object.assign(customerForm, row)
+  // 负责人多选：优先使用 owner_ids，兼容旧数据
+  customerForm.owner_ids = Array.isArray(row.owner_ids) && row.owner_ids.length
+    ? [...row.owner_ids]
+    : (row.owner_id ? [row.owner_id] : [])
   // 拷贝自定义字段，避免表单直接改行数据
   customerForm.ext_data = { ...(row.ext_data || {}) }
   showAddModal.value = true
@@ -761,7 +781,7 @@ const openAddCustomer = () => {
   Object.assign(customerForm, {
     id: null, name: '', phone: '', company: '', contact_name: '', email: '',
     industry: '', region: '', address: '', level: 'B', source: '',
-    owner_id: '', last_follow: '', created_at: '', ext_data: {}
+    owner_id: '', owner_ids: [], last_follow: '', created_at: '', ext_data: {}
   })
   showAddModal.value = true
 }
@@ -1355,5 +1375,9 @@ onUnmounted(() => {
 .chart-box {
   width: 100%;
   height: 320px;
+}
+
+.owner-tag {
+  margin: 1px 3px 1px 0;
 }
 </style>

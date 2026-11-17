@@ -57,6 +57,51 @@
       </el-card>
     </div>
 
+    <!-- 应用中心工作计划（今日/明日） -->
+    <el-card class="schedule-card">
+      <template #header>
+        <div class="card-header">
+          <span>📅 应用中心工作计划</span>
+          <span class="schedule-hint">数据来源：拜访排班（未取消）· 按时间排序</span>
+        </div>
+      </template>
+      <el-table :data="schedule.users" size="small" border style="width:100%" empty-text="暂无应用中心排班数据">
+        <el-table-column label="姓名" width="90" prop="name" />
+        <el-table-column label="角色" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.role === '主任' ? 'danger' : (row.role === '项目经理' ? 'warning' : 'primary')">{{ row.role }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="`今日计划（${schedule.today || ''}）`">
+          <template #default="{ row }">
+            <div v-if="row.today && row.today.length">
+              <div v-for="item in row.today" :key="item.id" class="plan-item">
+                <span class="plan-time">{{ item.time }}</span>
+                <el-tag size="small" :type="item.type === '拜访' ? 'success' : 'info'" effect="plain">{{ item.type }}</el-tag>
+                <span class="plan-content" :class="{ done: item.status === 'completed' }">{{ item.content || '（未填写内容）' }}</span>
+                <el-tag v-if="item.status === 'completed'" size="small" type="success">已完成</el-tag>
+                <span v-if="item.location" class="plan-loc">📍{{ item.location }}</span>
+              </div>
+            </div>
+            <span v-else class="plan-empty">暂无安排</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="`明日计划（${schedule.tomorrow || ''}）`">
+          <template #default="{ row }">
+            <div v-if="row.tomorrow && row.tomorrow.length">
+              <div v-for="item in row.tomorrow" :key="item.id" class="plan-item">
+                <span class="plan-time">{{ item.time }}</span>
+                <el-tag size="small" :type="item.type === '拜访' ? 'success' : 'info'" effect="plain">{{ item.type }}</el-tag>
+                <span class="plan-content">{{ item.content || '（未填写内容）' }}</span>
+                <span v-if="item.location" class="plan-loc">📍{{ item.location }}</span>
+              </div>
+            </div>
+            <span v-else class="plan-empty">暂无安排</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- AI 经营洞察 -->
     <el-card class="ai-insight-card">
       <template #header>
@@ -353,6 +398,19 @@ const recentContracts = ref([])
 const salesRanking = ref([])
 
 const alerts = ref([])
+
+// 应用中心工作计划（今日/明日）
+const schedule = ref({ today: '', tomorrow: '', users: [] })
+const fetchSchedule = async () => {
+  try {
+    const res = await api.get('/cockpit/schedule')
+    if (res.code === 200 && res.data) {
+      schedule.value = res.data
+    }
+  } catch (e) {
+    console.error('获取应用中心工作计划失败', e)
+  }
+}
 
 // AI 经营洞察
 const aiInsights = ref([])
@@ -851,6 +909,7 @@ onMounted(async () => {
   await fetchDashboardData()
   fetchRecentContracts()
   fetchAlerts()
+  fetchSchedule()
   // AI 商机驾驶舱
   await nextTick()
   initAiCharts()
@@ -889,6 +948,54 @@ onUnmounted(() => {
 .stats-row {
   display: flex;
   gap: 16px;
+}
+
+/* 应用中心工作计划 */
+.schedule-card {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+.schedule-hint {
+  font-size: 12px;
+  color: #909399;
+}
+.plan-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0;
+}
+.plan-item + .plan-item {
+  border-top: 1px dashed #ebeef5;
+  margin-top: 2px;
+  padding-top: 4px;
+}
+.plan-time {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  color: #409eff;
+  font-weight: 600;
+  min-width: 46px;
+}
+.plan-content {
+  font-size: 12px;
+  color: #303133;
+  flex: 1;
+  min-width: 120px;
+}
+.plan-content.done {
+  text-decoration: line-through;
+  color: #b1b3b8;
+}
+.plan-loc {
+  font-size: 11px;
+  color: #909399;
+}
+.plan-empty {
+  font-size: 12px;
+  color: #c0c4cc;
 }
 
 /* ============ AI 商机驾驶舱 ============ */

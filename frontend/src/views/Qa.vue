@@ -4,6 +4,7 @@
       <div class="qa-title">
         <span class="qa-icon">🤖</span>
         <span>智能助手</span>
+        <span class="new-chat-btn" @click="newChat">＋ 新对话</span>
       </div>
       <div class="qa-desc">智能问答 / 对话录入 / 智能决策</div>
       <div class="mode-tabs">
@@ -34,8 +35,34 @@
           <div :class="['message-item', msg.role === 'user' ? 'user-message' : 'assistant-message']">
             <div class="message-avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
             <div class="message-content">
-              <div class="message-text">{{ msg.content }}</div>
-              <div class="message-time">{{ msg.time }}</div>
+              <!-- 深度思考过程（仿 DeepSeek 折叠面板：进度 + 模型推理） -->
+              <div v-if="msg.role === 'assistant' && msg.thinking && msg.thinking.length" class="thinking-panel">
+                <div class="thinking-head" @click="msg.thinkingOpen = !msg.thinkingOpen">
+                  <span class="thinking-title">
+                    <span class="thinking-dot" :class="{ active: msg.streaming }"></span>
+                    {{ msg.streaming ? '正在思考…' : '深度思考过程' }}
+                  </span>
+                  <span class="thinking-toggle">{{ msg.thinkingOpen ? '收起 ▴' : '展开 ▾' }}</span>
+                </div>
+                <div v-if="msg.thinkingOpen" class="thinking-body">
+                  <div v-for="(t, ti) in msg.thinking" :key="ti" class="thinking-line">{{ t.text }}</div>
+                </div>
+              </div>
+
+              <div :class="['message-text', { 'md-body': msg.role === 'assistant' && msg.type === 'text' }]">
+                <template v-if="msg.role === 'assistant' && msg.type === 'text'">
+                  <div v-if="msg.content" v-html="renderMarkdown(msg.content)"></div>
+                  <span v-if="msg.streaming" class="stream-cursor"></span>
+                </template>
+                <template v-else>{{ msg.content }}</template>
+              </div>
+
+              <div class="message-actions" v-if="msg.role === 'assistant' && msg.type === 'text' && !msg.streaming && msg.content">
+                <span class="msg-action" @click="copyMessage(msg)">📋 复制</span>
+                <span class="msg-action" :class="{ disabled: isLoading }" @click="regenerate(msg)">🔄 重新生成</span>
+                <span class="message-time">{{ msg.time }}</span>
+              </div>
+              <div v-else class="message-time">{{ msg.time }}</div>
             </div>
           </div>
 
@@ -111,7 +138,7 @@
           </div>
         </template>
 
-        <div v-if="isLoading" class="message-item assistant-message">
+        <div v-if="isLoading && !streamingMsgId" class="message-item assistant-message">
           <div class="message-avatar">🤖</div>
           <div class="message-content">
             <div class="typing-indicator">
@@ -311,7 +338,10 @@
       <div v-if="speechSupported" :class="['voice-btn', { recording: isRecording }]" @click="toggleVoice">
         <span>{{ isRecording ? '⏹' : '🎤' }}</span>
       </div>
-      <el-button type="primary" class="send-btn" @click="sendMessage" :disabled="isLoading || !inputText.trim()">
+      <el-button v-if="isLoading && mode === 'qa'" class="send-btn stop-btn" @click="stopGenerating">
+        <span>停止生成</span><span>⏹</span>
+      </el-button>
+      <el-button v-else type="primary" class="send-btn" @click="sendMessage" :disabled="isLoading || !inputText.trim()">
         <span>发送</span><span>➤</span>
       </el-button>
     </div>
@@ -331,6 +361,7 @@
 import { ref, reactive, nextTick, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { renderMarkdown } from '../utils/markdown'
 
 // ========== 基础状态 ==========
 const messages = ref([])
@@ -340,7 +371,11 @@ const chatContainer = ref(null)
 const mode = ref('qa')
 const isRecording = ref(false)
 const speechSupported = ref(false)
+const streamingMsgId = ref(null)
 let recognition = null
+let abortController = null
+
+const HISTORY_KEY = 'crm_qa_history'
 
 const stages = ['引导需求', '能力展示', '方案确定', '商务谈判', '合同签订', '销售实现']
 
@@ -421,19 +456,48 @@ const sendMessage = async () => {
   if (mode.value === 'qa') await sendQA(text)
   else await sendAgent(text)
   isLoading.value = false
+  streamingMsgId.value = null
+  persistHistory()
   scrollToBottom()
+}
+
+/** 构造多轮对话上下文：最近 6 轮（12 条）已完成的消息，排除本轮提问 */
+const buildHistory = () => {
+  const list = messages.value.filter(m => m.type === 'text' && m.content && !m.streaming)
+  // 最后一条是刚发出的本轮提问，不重复传给后端
+  const sliced = list[list.length - 1]?.role === 'user' ? list.slice(0, -1) : list
+  return sliced.slice(-12).map(m => ({ role: m.role, content: m.content }))
 }
 
 const sendQA = async (text) => {
   const assistantMsgId = Date.now() + 1
-  messages.value.push({ id: assistantMsgId, role: 'assistant', type: 'text', content: '正在思考中...', time: formatTime() })
+  messages.value.push({
+    id: assistantMsgId,
+    role: 'assistant',
+    type: 'text',
+    content: '',
+    time: formatTime(),
+    thinking: [],
+    thinkingOpen: true,
+    streaming: true
+  })
+  streamingMsgId.value = assistantMsgId
   const token = localStorage.getItem('crm_token')
+  abortController = new AbortController()
+
+  const patch = (fn) => {
+    const idx = messages.value.findIndex(m => m.id === assistantMsgId)
+    if (idx !== -1) fn(messages.value[idx])
+  }
+
   try {
     const resp = await fetch('/api/ai/agent/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text, history: buildHistory() }),
+      signal: abortController.signal
     })
+
     if (!resp.ok) throw new Error('网络错误')
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
@@ -451,30 +515,113 @@ const sendQA = async (text) => {
         if (payload === '[DONE]') continue
         try {
           const data = JSON.parse(payload)
-          if (data.answer) {
-            received = true
-            const idx = messages.value.findIndex(m => m.id === assistantMsgId)
-            if (idx !== -1) {
-              if (data.type === 'status') {
-                // 状态消息：显示为加载提示
-                messages.value[idx].content = data.answer
+          if (!data.answer) continue
+          received = true
+          if (data.type === 'status' || data.type === 'reasoning') {
+            // 进度/推理内容进入「深度思考」面板
+            patch(m => {
+              if (!m.thinking) m.thinking = []
+              if (data.type === 'reasoning') {
+                // 推理为流式增量，追加到最后一行
+                const last = m.thinking.length - 1
+                if (last >= 0 && m.thinking[last].__reasoning) m.thinking[last].text += data.answer
+                else m.thinking.push({ __reasoning: true, text: data.answer })
               } else {
-                // 实际回答内容：追加到完整内容
-                fullContent += data.answer
-                messages.value[idx].content = fullContent
+                m.thinking.push({ text: data.answer })
               }
-            }
-            scrollToBottom()
+            })
+          } else {
+            fullContent += data.answer
+            patch(m => { m.content = fullContent })
           }
+          scrollToBottom()
         } catch (e) { /* ignore */ }
       }
     }
-    const idx = messages.value.findIndex(m => m.id === assistantMsgId)
-    if (idx !== -1 && !received) messages.value[idx].content = '抱歉，查询失败，请稍后重试。'
+    patch(m => { if (!received) m.content = '抱歉，查询失败，请稍后重试。' })
   } catch (e) {
-    const idx = messages.value.findIndex(m => m.id === assistantMsgId)
-    if (idx !== -1) messages.value[idx].content = '网络连接异常，请稍后再试。'
+    if (e.name === 'AbortError') {
+      patch(m => { if (!m.content) m.content = '已停止生成。' })
+    } else {
+      patch(m => { m.content = '网络连接异常，请稍后再试。' })
+    }
+  } finally {
+    patch(m => { m.streaming = false; m.thinkingOpen = false })
+    streamingMsgId.value = null
+    abortController = null
+    persistHistory()
   }
+}
+
+const stopGenerating = () => {
+  if (abortController) abortController.abort()
+}
+
+/** 复制回答（Markdown 原文） */
+const copyMessage = async (msg) => {
+  try {
+    await navigator.clipboard.writeText(msg.content || '')
+    ElMessage.success('已复制到剪贴板')
+  } catch (e) {
+    ElMessage.warning('复制失败，请手动选择文本复制')
+  }
+}
+
+/** 重新生成：删除该轮问答后重发同一个问题 */
+const regenerate = async (msg) => {
+  if (isLoading.value) return
+  const idx = messages.value.findIndex(m => m.id === msg.id)
+  if (idx === -1) return
+  let uIdx = -1
+  for (let i = idx - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'user') { uIdx = i; break }
+  }
+  if (uIdx === -1) return
+  const userText = messages.value[uIdx].content
+  messages.value.splice(uIdx, 2)
+  await sendMessageWithText(userText)
+}
+
+/** 指定文本发送（重新生成用，不依赖输入框） */
+const sendMessageWithText = async (text) => {
+  messages.value.push({ id: Date.now(), role: 'user', type: 'text', content: text, time: formatTime() })
+  isLoading.value = true
+  scrollToBottom()
+  await sendQA(text)
+  isLoading.value = false
+  streamingMsgId.value = null
+  persistHistory()
+  scrollToBottom()
+}
+
+/** 新对话：清空消息（保留模式） */
+const newChat = () => {
+  if (isLoading.value) stopGenerating()
+  messages.value = []
+  streamingMsgId.value = null
+  persistHistory()
+  ElMessage.success('已开启新对话')
+}
+
+/** 会话持久化（页面切换/刷新不丢失） */
+const persistHistory = () => {
+  try {
+    const simple = messages.value
+      .filter(m => m.type === 'text')
+      .map(m => ({ id: m.id, role: m.role, content: m.content, time: m.time }))
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(simple.slice(-50)))
+  } catch (e) { /* ignore */ }
+}
+
+const restoreHistory = () => {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY)
+    if (!raw) return
+    const list = JSON.parse(raw)
+    if (Array.isArray(list) && list.length) {
+      messages.value = list.map(m => ({ ...m, type: 'text', streaming: false, thinking: [], thinkingOpen: false }))
+    }
+  } catch (e) { /* ignore */ }
 }
 
 const sendAgent = async (text) => {
@@ -581,7 +728,7 @@ function resetBidForm() {
   bidResult.value = null
 }
 
-onMounted(() => { initSpeech(); scrollToBottom() })
+onMounted(() => { initSpeech(); restoreHistory(); scrollToBottom() })
 </script>
 
 <style scoped>
@@ -680,6 +827,144 @@ onMounted(() => { initSpeech(); scrollToBottom() })
 .assistant-message .message-text { background: #f0fff4; }
 
 .message-time { font-size: 11px; color: #a0aec0; margin-top: 4px; }
+
+/* 新对话按钮 */
+.new-chat-btn {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  padding: 4px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.new-chat-btn:hover { background: rgba(255, 255, 255, 0.32); }
+
+/* 深度思考折叠面板 */
+.thinking-panel {
+  background: #f8f9fc;
+  border: 1px solid #e4e7ed;
+  border-left: 3px solid #a78bfa;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #606266;
+}
+.thinking-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.thinking-title { display: flex; align-items: center; gap: 6px; font-weight: 600; color: #7c3aed; }
+.thinking-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #c0c4cc;
+  display: inline-block;
+}
+.thinking-dot.active {
+  background: #7c3aed;
+  animation: pulse 1.2s infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
+.thinking-toggle { color: #909399; font-size: 11px; }
+.thinking-body {
+  padding: 0 12px 10px 12px;
+  border-top: 1px dashed #e4e7ed;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.thinking-line { padding: 4px 0; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+
+/* 流式光标 */
+.stream-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  background: #48bb78;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* 消息操作栏 */
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+.msg-action {
+  font-size: 12px;
+  color: #718096;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.msg-action:hover { color: #667eea; }
+.msg-action.disabled { color: #cbd5e0; cursor: not-allowed; }
+
+/* 停止生成按钮 */
+.stop-btn {
+  background: #fff5f5;
+  color: #e53e3e;
+  border: 1px solid #feb2b2;
+}
+.stop-btn:hover { background: #fed7d7; color: #c53030; border-color: #fc8181; }
+
+/* Markdown 渲染样式（v-html 内容需 :deep） */
+.md-body { white-space: normal !important; }
+.md-body :deep(.md-h2),
+.md-body :deep(.md-h3),
+.md-body :deep(.md-h4) {
+  margin: 10px 0 6px;
+  font-weight: 600;
+  color: #2d3748;
+  line-height: 1.4;
+}
+.md-body :deep(.md-h2) { font-size: 16px; }
+.md-body :deep(.md-h3) { font-size: 15px; }
+.md-body :deep(.md-h4) { font-size: 14px; }
+.md-body :deep(.md-p) { margin: 6px 0; line-height: 1.7; }
+.md-body :deep(.md-ul),
+.md-body :deep(.md-ol) { margin: 6px 0; padding-left: 20px; }
+.md-body :deep(.md-ul li),
+.md-body :deep(.md-ol li) { margin: 3px 0; line-height: 1.65; }
+.md-body :deep(.md-code) {
+  background: #edf2f7;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 12px;
+  color: #c7254e;
+}
+.md-body :deep(.md-pre) {
+  background: #1e1e2e;
+  color: #e2e8f0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.md-body :deep(.md-pre code) { font-family: Consolas, Monaco, monospace; font-size: 12px; }
+.md-body :deep(.md-table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.md-body :deep(.md-table th),
+.md-body :deep(.md-table td) {
+  border: 1px solid #e2e8f0;
+  padding: 6px 10px;
+  text-align: left;
+}
+.md-body :deep(.md-table th) { background: #f7fafc; font-weight: 600; }
+.md-body :deep(.md-hr) { border: none; border-top: 1px solid #e2e8f0; margin: 10px 0; }
+.md-body :deep(a) { color: #667eea; text-decoration: underline; }
 
 .typing-indicator { display: flex; gap: 4px; padding: 8px; }
 .typing-dot {

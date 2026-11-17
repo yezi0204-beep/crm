@@ -106,10 +106,34 @@ def _extract_json_from_text(text):
     return None
 
 
-def extract_query_function(question):
+def _history_context_text(history, limit=4, max_len=300):
+    """把最近几轮对话压成一段文本，供 LLM 做意图选择时参考。"""
+    if not history:
+        return ''
+    recent = [m for m in history if isinstance(m, dict)
+              and m.get('role') in ('user', 'assistant') and (m.get('content') or '').strip()]
+    if not recent:
+        return ''
+    lines = [f"{m['role']}: {str(m['content']).strip()[:max_len]}" for m in recent[-limit:]]
+    return '\n'.join(lines)
+
+
+def extract_query_function(question, history=None):
     if not USE_LLM:
         return None
-    
+
+    ctx = _history_context_text(history)
+    ctx_block = ''
+    if ctx:
+        ctx_block = f"""
+最近对话上下文：
+{ctx}
+
+注意：若当前问题是承接上文的追问（如「那它的合同总额是多少」），请沿用上文所问的业务对象对应的函数，
+而不是重新按关键词选择。示例：上文在查「待回款金额最高的合同」，用户追问「那它的合同总额是多少？」，
+应选择 get_top_pending_contract（该函数同时返回待回款金额与合同总额），而不是 get_top_contract_by_amount。
+"""
+
     prompt = f"""
 你是一个函数选择专家。请分析用户问题，从以下函数中选择最合适的一个：
 
@@ -127,7 +151,7 @@ def extract_query_function(question):
 11. get_next_week_plan → 下周工作计划、下周工作安排、下周计划
 12. get_pending_workhours → 待审批工时、有多少待审工时、工时审批积压、待我审批的工时
 13. get_month_payments → 本月回款、这个月回款、当月回款金额
-
+{ctx_block}
 用户问题：{question}
 
 请直接返回函数名称，不要包含任何其他文字。如果无法匹配，返回"none"。
@@ -156,12 +180,28 @@ def extract_query_function(question):
     return None
 
 
+def is_contextual_followup(question):
+    """判断问题是否为承接上文的追问（含指代词），此类问题需结合历史选择查询函数。"""
+    q = (question or '').strip()
+    if not q or len(q) > 40:
+        return False
+    if q.startswith(('那', '那么', '还有', '再')):
+        return True
+    markers = ('它', '该合同', '该项目', '该客户', '该商机', '这个合同', '那个合同',
+               '这份合同', '上述', '刚才', '前面提到', '这家', '那家')
+    return any(m in q for m in markers)
+
+
 def _extract_query_function_rule(question):
     """查询意图的规则匹配（不调 LLM，毫秒级），供流式接口快速路由。
 
     返回函数名（与 extract_query_function 的函数映射表一致），未命中返回 'none'。
     """
     q = question.strip()
+
+    # 承接上文的追问（如「那它的合同总额是多少」）交给 LLM 结合历史选择函数
+    if is_contextual_followup(q):
+        return 'none'
 
     # 待审批工时
     if '工时' in q and any(k in q for k in ['待审', '待审批', '审批', '积压']):
@@ -205,13 +245,29 @@ def _extract_query_function_rule(question):
     return 'none'
 
 
-def generate_answer(question, data_context, username):
+def _build_history_messages(history, limit=6):
+    """把前端传来的历史对话转换为 LLM messages（仅保留最近 limit 轮，过滤非法角色）。"""
+    if not history:
+        return []
+    msgs = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = item.get('role')
+        content = (item.get('content') or '').strip()
+        if role not in ('user', 'assistant') or not content:
+            continue
+        msgs.append({'role': role, 'content': content})
+    return msgs[-limit * 2:]
+
+
+def generate_answer(question, data_context, username, history=None):
     if not USE_LLM:
         return None
-    
-    messages = [
-        {'role': 'system', 'content': SYSTEM_PROMPT},
-        {'role': 'user', 'content': f"""
+
+    messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+    messages.extend(_build_history_messages(history))
+    messages.append({'role': 'user', 'content': f"""
 用户问题：{question}
 
 查询到的数据：
@@ -220,19 +276,18 @@ def generate_answer(question, data_context, username):
 用户信息：{username}
 
 请根据以上数据，用自然、友好的语言回答用户的问题。
-"""}
-    ]
-    
+"""})
+
     return call_llm(messages)
 
 
-def generate_answer_stream(question, data_context, username):
+def generate_answer_stream(question, data_context, username, history=None):
     if not USE_LLM:
         return None
 
-    messages = [
-        {'role': 'system', 'content': SYSTEM_PROMPT},
-        {'role': 'user', 'content': f"""
+    messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+    messages.extend(_build_history_messages(history))
+    messages.append({'role': 'user', 'content': f"""
 用户问题：{question}
 
 查询到的数据：
@@ -241,8 +296,7 @@ def generate_answer_stream(question, data_context, username):
 用户信息：{username}
 
 请根据以上数据，用自然、友好的语言回答用户的问题。
-"""}
-    ]
+"""})
 
     return call_llm(messages, stream=True)
 

@@ -85,6 +85,7 @@ EXPECTED_TABLES = [
     'role_permissions', 'sales_alerts', 'scraped_leads',
     'ticket_messages', 'ticket_surveys', 'tickets', 'tokens', 'user_hourly_rate',
     'user_preferences', 'user_roles', 'users', 'visits', 'work_hours',
+    'work_summary_records',
 ]
 
 

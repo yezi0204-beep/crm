@@ -81,6 +81,10 @@
             <span class="menu-icon">📅</span>
             <span>{{ t('menuItem.visits') }}</span>
           </el-menu-item>
+          <el-menu-item index="/sandbox">
+            <span class="menu-icon">🎖️</span>
+            <span>{{ t('menuItem.sandbox') }}</span>
+          </el-menu-item>
         </div>
 
         <div class="menu-group" v-if="!isHrRole && !isRestrictedDirector">
@@ -262,10 +266,55 @@
           <div class="settings-btn" @click="openSettings" :title="t('layout.settings')">
             <span>⚙️</span>
           </div>
-          <div class="notification-btn" @click="handleNotificationClick">
-            <span>🔔</span>
-            <span class="badge" v-if="totalUnread > 0">{{ totalUnread }}</span>
-          </div>
+          <el-popover v-model:visible="showNotifyPanel" placement="bottom-end" :width="400"
+                      trigger="click" popper-class="notify-popover" @show="onNotifyPanelShow">
+            <template #reference>
+              <div class="notification-btn" :class="{ shaking: notifyShaking }">
+                <span>🔔</span>
+                <span class="badge" v-if="totalUnread > 0">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
+              </div>
+            </template>
+            <div class="notify-panel">
+              <div class="notify-head">
+                <div class="notify-title">
+                  消息中心
+                  <span v-if="totalUnread > 0" class="notify-count">{{ totalUnread }} 条未读</span>
+                </div>
+                <el-button link type="primary" size="small" :disabled="totalUnread === 0"
+                           @click="markAllRead(notifyFilter)">全部已读</el-button>
+              </div>
+              <div class="notify-tabs">
+                <span v-for="tab in notifyTabs" :key="tab.type"
+                      class="notify-tab" :class="{ active: notifyFilter === tab.type }"
+                      @click="notifyFilter = tab.type">
+                  {{ tab.label }}
+                  <em v-if="notifyCounts[tab.type]">{{ notifyCounts[tab.type] }}</em>
+                </span>
+              </div>
+              <div class="notify-body" v-loading="notifyLoading">
+                <div v-for="msg in filteredNotifications" :key="msg.key" class="notify-item"
+                     @click="openNotification(msg)">
+                  <span class="notify-dot" :class="msg.priority"></span>
+                  <div class="notify-main">
+                    <div class="notify-item-title">
+                      {{ msg.title }}
+                      <em v-if="msg.count > 1" class="notify-group">×{{ msg.count }}</em>
+                    </div>
+                    <div class="notify-item-detail">{{ msg.detail }}</div>
+                    <div class="notify-item-meta">
+                      <span class="notify-type">{{ notifyTypeLabel(msg.type) }}</span>
+                      <span v-if="msg.time" class="notify-time">{{ msg.time }}</span>
+                    </div>
+                  </div>
+                  <span class="notify-read" title="标记已读" @click.stop="markOneRead(msg)">✓</span>
+                </div>
+                <div v-if="!filteredNotifications.length" class="notify-empty">
+                  🔔 暂无新消息
+                </div>
+              </div>
+              <div class="notify-foot" @click="goNotifyPage">查看全部消息 →</div>
+            </div>
+          </el-popover>
           <div class="header-user">
             <span>{{ authStore.name }}</span>
           </div>
@@ -354,7 +403,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAuthStore } from '../stores/auth'
 import { useSettingsStore } from '../stores/settings'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import { availableLocales, translate } from '../locales'
 import api from '../api'
 
@@ -431,7 +480,7 @@ const pageTitleMap = computed(() => ({
 const pageTitle = computed(() => pageTitleMap.value[route.path] || '')
 
 const totalUnread = computed(() => {
-  return unreadLogCount.value + alertCount.value
+  return notifyTotal.value || (unreadLogCount.value + alertCount.value)
 })
 
 // 响应式：检测屏幕宽度
@@ -441,34 +490,6 @@ const checkResponsive = () => {
   if (isMobile.value) {
     isCollapsed.value = false
     mobileSidebarOpen.value = false
-  }
-}
-
-const fetchUnreadCounts = async () => {
-  try {
-    const token = authStore.token
-    if (!token) return
-
-    const [logRes, alertRes] = await Promise.all([
-      fetch('/api/operation_logs/unread_count', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      }),
-      fetch('/api/alerts', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-    ])
-
-    const logData = await logRes.json()
-    if (logData.code === 200) {
-      unreadLogCount.value = logData.data.unread_count || 0
-    }
-
-    const alertData = await alertRes.json()
-    if (alertData.code === 200) {
-      alertCount.value = alertData.data.count || 0
-    }
-  } catch (error) {
-    console.error('Failed to fetch unread counts:', error)
   }
 }
 
@@ -501,7 +522,101 @@ const handleGlobalSearch = (e) => {
   }
 }
 
-const handleNotificationClick = () => {
+/* ---------------- 消息中心 ---------------- */
+const showNotifyPanel = ref(false)
+const notifyLoading = ref(false)
+const notifyItems = ref([])
+const notifyCounts = ref({ alert: 0, approval: 0, expiry: 0, oplog: 0 })
+const notifyFilter = ref('all')
+const notifyShaking = ref(false)
+const notifyTotal = ref(0)
+let lastTotalUnread = -1
+
+const notifyTabs = [
+  { type: 'all', label: '全部' },
+  { type: 'alert', label: '销售提醒' },
+  { type: 'approval', label: '审批待办' },
+  { type: 'expiry', label: '业务到期' },
+  { type: 'oplog', label: '系统日志' }
+]
+
+const notifyTypeLabel = (type) => ({
+  alert: '销售提醒', approval: '审批待办', expiry: '业务到期', oplog: '系统日志'
+}[type] || '消息')
+
+const filteredNotifications = computed(() => {
+  if (notifyFilter.value === 'all') return notifyItems.value
+  return notifyItems.value.filter(i => i.type === notifyFilter.value)
+})
+
+const loadNotifications = async (silent = false) => {
+  if (!authStore.token) return
+  if (!silent) notifyLoading.value = true
+  try {
+    const res = await api.get('/notifications')
+    if (res.code === 200 && res.data) {
+      notifyItems.value = res.data.items || []
+      notifyCounts.value = res.data.counts || { alert: 0, approval: 0, expiry: 0, oplog: 0 }
+      unreadLogCount.value = notifyCounts.value.oplog || 0
+      alertCount.value = notifyCounts.value.alert || 0
+      const total = res.data.total_unread || 0
+      notifyTotal.value = total
+      // 新消息到达时弹出提示
+      if (total > lastTotalUnread && lastTotalUnread >= 0) {
+        const newest = notifyItems.value[0]
+        ElNotification({
+          title: `您有 ${total} 条未读消息`,
+          message: newest ? newest.title : '点击右上角铃铛查看消息中心',
+          type: 'info',
+          duration: 4500,
+          position: 'bottom-right',
+          onClick: () => { showNotifyPanel.value = true }
+        })
+        notifyShaking.value = true
+        setTimeout(() => { notifyShaking.value = false }, 900)
+      }
+      lastTotalUnread = total
+    }
+  } catch (e) {
+    console.error('加载消息中心失败:', e)
+  } finally {
+    notifyLoading.value = false
+  }
+}
+
+const onNotifyPanelShow = () => {
+  loadNotifications()
+}
+
+const markOneRead = async (msg) => {
+  try {
+    const res = await api.post('/notifications/read', { key: msg.key })
+    if (res.code === 200) await loadNotifications(true)
+  } catch (e) {
+    ElMessage.error('标记已读失败')
+  }
+}
+
+const markAllRead = async (type) => {
+  try {
+    const res = await api.post('/notifications/read-all', { type })
+    if (res.code === 200) {
+      ElMessage.success('已全部标记为已读')
+      await loadNotifications(true)
+    }
+  } catch (e) {
+    ElMessage.error('操作失败')
+  }
+}
+
+const openNotification = async (msg) => {
+  await markOneRead(msg)
+  showNotifyPanel.value = false
+  if (msg.route) router.push(msg.route)
+}
+
+const goNotifyPage = () => {
+  showNotifyPanel.value = false
   router.push('/alerts')
 }
 
@@ -570,9 +685,9 @@ onMounted(async () => {
   checkResponsive()
   window.addEventListener('resize', checkResponsive)
   await settingsStore.loadPreferences()
-  fetchUnreadCounts()
+  loadNotifications(true)
   fetchTimezones()
-  refreshInterval = setInterval(fetchUnreadCounts, 30000)
+  refreshInterval = setInterval(() => loadNotifications(true), 60000)
 })
 
 onUnmounted(() => {
@@ -912,6 +1027,198 @@ onUnmounted(() => {
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 10px;
+}
+
+.notification-btn.shaking {
+  animation: bell-shake 0.8s ease-in-out;
+}
+
+@keyframes bell-shake {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-16deg); }
+  40% { transform: rotate(14deg); }
+  60% { transform: rotate(-10deg); }
+  80% { transform: rotate(8deg); }
+}
+
+:global(.notify-popover) {
+  padding: 0 !important;
+}
+
+.notify-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 520px;
+}
+
+.notify-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.notify-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.notify-count {
+  font-size: 12px;
+  color: #f56c6c;
+  font-weight: 500;
+  margin-left: 6px;
+}
+
+.notify-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f2f5;
+  flex-wrap: wrap;
+}
+
+.notify-tab {
+  font-size: 12px;
+  color: #606266;
+  padding: 3px 9px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.notify-tab:hover {
+  background: #f2f6fc;
+}
+
+.notify-tab.active {
+  background: #ecf5ff;
+  color: #409eff;
+  font-weight: 600;
+}
+
+.notify-tab em {
+  font-style: normal;
+  font-size: 10px;
+  background: #f56c6c;
+  color: #fff;
+  border-radius: 8px;
+  padding: 0 5px;
+  margin-left: 2px;
+}
+
+.notify-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 90px;
+}
+
+.notify-item {
+  display: flex;
+  gap: 9px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f7f8fa;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.notify-item:hover {
+  background: #f7fafd;
+}
+
+.notify-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+  background: #909399;
+}
+
+.notify-dot.urgent { background: #f56c6c; }
+.notify-dot.high { background: #e6a23c; }
+.notify-dot.normal { background: #409eff; }
+.notify-dot.low { background: #c0c4cc; }
+
+.notify-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.notify-item-title {
+  font-size: 13px;
+  color: #303133;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.notify-group {
+  font-style: normal;
+  font-size: 11px;
+  color: #f56c6c;
+  background: #fef0f0;
+  border-radius: 8px;
+  padding: 0 6px;
+  margin-left: 4px;
+}
+
+.notify-item-detail {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.notify-item-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #b1b3b8;
+}
+
+.notify-type {
+  color: #909399;
+  background: #f4f4f5;
+  border-radius: 3px;
+  padding: 0 5px;
+}
+
+.notify-read {
+  align-self: center;
+  color: #c0c4cc;
+  font-size: 14px;
+  padding: 2px 4px;
+}
+
+.notify-read:hover {
+  color: #67c23a;
+}
+
+.notify-empty {
+  text-align: center;
+  color: #b1b3b8;
+  font-size: 13px;
+  padding: 34px 0;
+}
+
+.notify-foot {
+  text-align: center;
+  font-size: 12px;
+  color: #409eff;
+  padding: 9px 0;
+  border-top: 1px solid #f0f2f5;
+  cursor: pointer;
+}
+
+.notify-foot:hover {
+  background: #f7fafd;
 }
 
 .header-user {

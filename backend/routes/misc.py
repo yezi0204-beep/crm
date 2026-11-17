@@ -236,10 +236,13 @@ def release_pool():
             SET previous_owner = owner_id, owner_id = '', last_follow = NULL
             WHERE id IN ({placeholders}) AND owner_id IS NOT NULL AND owner_id != ''
         """, (*customer_ids,))
+        released_count = cursor.rowcount
+        cursor.execute(f"DELETE FROM customer_owners WHERE customer_id IN ({placeholders})",
+                       (*customer_ids,))
 
         db.commit()
-        record_operation_log(payload['username'], '释放', '公海池', f'释放客户到公海池，数量:{cursor.rowcount}，ID:{customer_ids}')
-        return jsonify({'code': 200, 'message': f'成功释放 {cursor.rowcount} 条客户到公海池', 'data': {'released_count': cursor.rowcount}})
+        record_operation_log(payload['username'], '释放', '公海池', f'释放客户到公海池，数量:{released_count}，ID:{customer_ids}')
+        return jsonify({'code': 200, 'message': f'成功释放 {released_count} 条客户到公海池', 'data': {'released_count': released_count}})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': f'释放失败: {str(e)}', 'data': None})
@@ -377,29 +380,57 @@ def search():
 @token_required
 def qa():
     payload = request.current_user
-    data = request.get_json()
-    question = data.get('question', '')
-    stream = data.get('stream', False)
+    data = request.get_json(silent=True) or {}
+    question = (data.get('question') or '').strip()
+    stream = bool(data.get('stream', False))
+    history = data.get('history') or []
+    username = payload.get('username', '')
+
+    if stream:
+        # 流式：独立连接，避免请求上下文在生成器执行前释放
+        def generate():
+            from extensions import open_db
+            conn = open_db()
+            cursor = conn.cursor()
+            try:
+                for event in process_question_llm_stream(question, cursor, username, history):
+                    yield event
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return Response(generate(), content_type='text/event-stream')
 
     db = get_db()
     cursor = db.cursor()
-    username = payload.get('username', '')
+    # 非流式：消费流式事件，拼接正文（忽略进度/思考过程事件）
+    parts = []
+    for event in process_question_llm_stream(question, cursor, username, history):
+        if not event.startswith('data:'):
+            continue
+        body = event[5:].strip()
+        if body == '[DONE]':
+            continue
+        try:
+            obj = json.loads(body)
+        except Exception:
+            continue
+        if obj.get('type') in ('status', 'reasoning'):
+            continue
+        if obj.get('answer'):
+            parts.append(obj['answer'])
 
-    answer = process_question_llm(question, cursor, username, stream)
-    if stream:
-        return answer
-    if answer:
-        return jsonify({'code': 200, 'message': 'success', 'data': {'answer': answer}})
-
-    answer = process_question_rule(question, cursor, payload)
+    answer = ''.join(parts) if parts else process_question_rule(question, cursor, payload)
     return jsonify({'code': 200, 'message': 'success', 'data': {'answer': answer}})
 
 
-def process_question_llm_stream(question, cursor, username):
+def process_question_llm_stream(question, cursor, username, history=None):
     """流式问答生成器：先查数据，再生成回答，全程有进度反馈。
 
     作为 generator，每条 yield 直接是一条 SSE 事件字符串。
-    进度消息带 type: status，实际回答内容不带 type。
+    进度消息带 type: status/reasoning，实际回答内容不带 type。
+    history：多轮对话上下文（[{role, content}]），用于承接追问。
     """
     from qa_engine import _extract_query_function_rule, generate_answer_stream, generate_answer
 
@@ -408,12 +439,16 @@ def process_question_llm_stream(question, cursor, username):
 
     if not func_name or func_name == 'none':
         # 规则匹配没命中，尝试 LLM 选择（可能较慢）
-        yield f"data: {json.dumps({'answer': '正在分析意图...', 'type': 'status'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'answer': '正在分析问题意图...', 'type': 'status'}, ensure_ascii=False)}\n\n"
         from qa_engine import extract_query_function
-        func_name = extract_query_function(question)
+        func_name = extract_query_function(question, history)
         if not func_name or func_name == 'none':
-            answer = get_default_answer(question)
-            yield f"data: {json.dumps({'answer': answer}, ensure_ascii=False)}\n\n"
+            # 纯闲聊/无法映射到数据查询：直接用 LLM 结合历史对话作答
+            answer = generate_answer(question, '（本次未查询到结构化数据）', username, history)
+            if answer:
+                yield f"data: {json.dumps({'answer': answer}, ensure_ascii=False)}\n\n"
+            else:
+                yield f"data: {json.dumps({'answer': get_default_answer(question)}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
             return
 
@@ -440,12 +475,12 @@ def process_question_llm_stream(question, cursor, username):
         yield "data: [DONE]\n\n"
         return
 
-    yield f"data: {json.dumps({'answer': '正在查询数据...', 'type': 'status'}, ensure_ascii=False)}\n\n"
+    yield f"data: {json.dumps({'answer': '正在查询 CRM 数据...', 'type': 'status'}, ensure_ascii=False)}\n\n"
     data_context = func_map[func_name]()
 
     # 3. 尝试 LLM 流式生成回答
-    yield f"data: {json.dumps({'answer': '正在生成回答...', 'type': 'status'}, ensure_ascii=False)}\n\n"
-    lines = generate_answer_stream(question, data_context, username)
+    yield f"data: {json.dumps({'answer': '已获取数据，正在组织答案...', 'type': 'status'}, ensure_ascii=False)}\n\n"
+    lines = generate_answer_stream(question, data_context, username, history)
 
     if lines:
         received_content = False
@@ -457,6 +492,10 @@ def process_question_llm_stream(question, cursor, username):
                         data = json.loads(line[5:])
                         if 'choices' in data and data['choices']:
                             delta = data['choices'][0].get('delta', {})
+                            reasoning = delta.get('reasoning_content') or delta.get('reasoning')
+                            if reasoning:
+                                # 思考过程单元（前端折叠展示，仿 DeepSeek 深度思考）
+                                yield f"data: {json.dumps({'answer': reasoning, 'type': 'reasoning'}, ensure_ascii=False)}\n\n"
                             content = delta.get('content', '')
                             if content:
                                 received_content = True
@@ -468,7 +507,7 @@ def process_question_llm_stream(question, cursor, username):
             return
 
     # LLM 流式生成失败，尝试非流式
-    answer = generate_answer(question, data_context, username)
+    answer = generate_answer(question, data_context, username, history)
     if answer:
         yield f"data: {json.dumps({'answer': answer}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"

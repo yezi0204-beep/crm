@@ -12,6 +12,39 @@ from . import customers_bp
 from .custom_fields import validate_ext, parse_ext
 
 
+def _apply_owners(row):
+    """把客户行中的多负责人聚合字段转换为 owner_ids 列表。"""
+    d = parse_ext(dict(row))
+    raw_ids = d.pop('owner_ids_str', None) or ''
+    ids = [x for x in raw_ids.split(',') if x]
+    if not ids and d.get('owner_id'):
+        ids = [d['owner_id']]
+    d['owner_ids'] = ids
+    d['owner_names'] = d.get('owner_names') or d.get('owner_name') or ''
+    return d
+
+
+def _save_owners(cursor, cust_id, usernames):
+    """全量覆盖客户的负责人关联（按传入顺序，第一个为主负责人）。"""
+    cursor.execute("DELETE FROM customer_owners WHERE customer_id=?", (cust_id,))
+    for idx, uname in enumerate(usernames):
+        if not uname:
+            continue
+        cursor.execute(
+            "INSERT IGNORE INTO customer_owners (customer_id, username) VALUES (?, ?)",
+            (cust_id, uname))
+
+
+def _is_customer_owner(cursor, cust_id, username, owner_id=None):
+    """判断用户是否为该客户负责人（主负责人或附加负责人）。"""
+    if owner_id and owner_id == username:
+        return True
+    cursor.execute(
+        "SELECT 1 FROM customer_owners WHERE customer_id=? AND username=?",
+        (cust_id, username))
+    return cursor.fetchone() is not None
+
+
 @customers_bp.route('/api/customers', methods=['GET'])
 @token_required
 def get_customers():
@@ -30,8 +63,10 @@ def get_customers():
     params = []
 
     if not user_can(username, 'data.view_all'):
-        conditions.append("c.owner_id = ?")
-        params.append(username)
+        conditions.append(
+            "(c.owner_id = ? OR EXISTS (SELECT 1 FROM customer_owners co2 "
+            "WHERE co2.customer_id = c.id AND co2.username = ?))")
+        params.extend([username, username])
 
     if keyword:
         conditions.append("(c.company LIKE ? OR c.name LIKE ? OR c.contact_name LIKE ? OR c.phone LIKE ?)")
@@ -49,7 +84,12 @@ def get_customers():
     where_clause = ' AND '.join(conditions) if conditions else '1=1'
 
     cursor.execute(f"""
-        SELECT c.*, u.name as owner_name
+        SELECT c.*, u.name as owner_name,
+               (SELECT GROUP_CONCAT(u2.name ORDER BY co.id SEPARATOR '、')
+                FROM customer_owners co LEFT JOIN users u2 ON co.username = u2.username
+                WHERE co.customer_id = c.id) AS owner_names,
+               (SELECT GROUP_CONCAT(co.username ORDER BY co.id)
+                FROM customer_owners co WHERE co.customer_id = c.id) AS owner_ids_str
         FROM customers c
         LEFT JOIN users u ON c.owner_id = u.username
         WHERE {where_clause}
@@ -57,9 +97,7 @@ def get_customers():
     """, params)
 
     rows = cursor.fetchall()
-    customers = []
-    for row in rows:
-        customers.append(parse_ext(dict(row)))
+    customers = [_apply_owners(row) for row in rows]
 
     return jsonify({'code': 200, 'message': 'success', 'data': customers})
 
@@ -79,21 +117,31 @@ def create_customer():
         if ext_err:
             return jsonify({'code': 400, 'message': ext_err, 'data': None})
 
+        # 负责人支持多个：取 owner_ids 数组，第一个为主负责人（写入 customers.owner_id）
+        owner_ids = data.get('owner_ids')
+        if not isinstance(owner_ids, list):
+            owner_ids = [data.get('owner_id')] if data.get('owner_id') else []
+        owner_ids = [x for x in owner_ids if x]
+        primary_owner = owner_ids[0] if owner_ids else (data.get('owner_id') or '')
+
         cursor.execute("""
             INSERT INTO customers (name, company, phone, level, source, owner_id, contact_name, email, industry, region, address, ext_data, created_at, last_follow)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """, (
             data.get('name'), data.get('company'), data.get('phone'),
-            data.get('level'), data.get('source'), data.get('owner_id'),
+            data.get('level'), data.get('source'), primary_owner,
             data.get('contact_name'), data.get('email'), data.get('industry'),
             data.get('region'), data.get('address'),
             json.dumps(ext_cleaned, ensure_ascii=False) if ext_cleaned else None
         ))
+        new_id = cursor.lastrowid
+        _save_owners(cursor, new_id, owner_ids)
         db.commit()
 
-        record_operation_log(username, '创建', '客户', f'创建客户：{data.get("name")}（{data.get("company")}）')
+        record_operation_log(username, '创建', '客户',
+                             f'创建客户：{data.get("name")}（{data.get("company")}）负责人：{",".join(owner_ids) or "未指定"}')
 
-        return jsonify({'code': 200, 'message': '客户创建成功', 'data': {'id': cursor.lastrowid}})
+        return jsonify({'code': 200, 'message': '客户创建成功', 'data': {'id': new_id}})
     except Exception as e:
         db.rollback()
         return jsonify({'code': 500, 'message': str(e), 'data': None})
@@ -109,26 +157,26 @@ def get_customer(cust_id):
     db = get_db()
     cursor = db.cursor()
 
-    if user_can(username, 'data.view_all'):
-        cursor.execute("""
-            SELECT c.*, u.name as owner_name
-            FROM customers c
-            LEFT JOIN users u ON c.owner_id = u.username
-            WHERE c.id = ?
-        """, (cust_id,))
-    else:
-        cursor.execute("""
-            SELECT c.*, u.name as owner_name
-            FROM customers c
-            LEFT JOIN users u ON c.owner_id = u.username
-            WHERE c.id = ? AND c.owner_id = ?
-        """, (cust_id, username))
+    cursor.execute("""
+        SELECT c.*, u.name as owner_name,
+               (SELECT GROUP_CONCAT(u2.name ORDER BY co.id SEPARATOR '、')
+                FROM customer_owners co LEFT JOIN users u2 ON co.username = u2.username
+                WHERE co.customer_id = c.id) AS owner_names,
+               (SELECT GROUP_CONCAT(co.username ORDER BY co.id)
+                FROM customer_owners co WHERE co.customer_id = c.id) AS owner_ids_str
+        FROM customers c
+        LEFT JOIN users u ON c.owner_id = u.username
+        WHERE c.id = ?
+    """, (cust_id,))
 
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '客户不存在', 'data': None})
+    if not user_can(username, 'data.view_all') and \
+            not _is_customer_owner(cursor, cust_id, username, row['owner_id']):
+        return jsonify({'code': 403, 'message': '权限不足，只能查看自己的客户', 'data': None})
 
-    return jsonify({'code': 200, 'message': 'success', 'data': parse_ext(dict(row))})
+    return jsonify({'code': 200, 'message': 'success', 'data': _apply_owners(row)})
 
 
 @customers_bp.route('/api/customers/<int:cust_id>', methods=['DELETE'])
@@ -144,7 +192,8 @@ def delete_customer(cust_id):
     if not row:
         return jsonify({'code': 404, 'message': '客户不存在', 'data': None})
 
-    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and \
+            not _is_customer_owner(cursor, cust_id, username, row['owner_id']):
         return jsonify({'code': 403, 'message': '权限不足，只能删除自己的客户', 'data': None})
 
     db = get_db()
@@ -157,6 +206,7 @@ def delete_customer(cust_id):
 
         cursor.execute("UPDATE business SET cust_id = NULL WHERE cust_id = ?", (cust_id,))
         cursor.execute("UPDATE contracts SET cust_id = NULL WHERE cust_id = ?", (cust_id,))
+        cursor.execute("DELETE FROM customer_owners WHERE customer_id = ?", (cust_id,))
         cursor.execute("DELETE FROM customers WHERE id=?", (cust_id,))
         db.commit()
 
@@ -191,39 +241,57 @@ def update_customer(cust_id):
             ext_clause = ", ext_data=?"
             ext_param = json.dumps(ext_cleaned, ensure_ascii=False) if ext_cleaned else None
 
-        if can_change_owner and 'owner_id' in data:
+        # 负责人变更：优先使用 owner_ids 数组（第一个为主负责人），兼容旧的 owner_id 单值
+        owner_list = None
+        if can_change_owner:
+            if isinstance(data.get('owner_ids'), list):
+                owner_list = [x for x in data['owner_ids'] if x]
+            elif 'owner_id' in data:
+                owner_list = [data['owner_id']] if data['owner_id'] else []
+
+        if owner_list is not None:
+            primary_owner = owner_list[0] if owner_list else ''
+            params_list = [
+                data.get('name'), data.get('company'), data.get('phone'),
+                data.get('level'), data.get('source'),
+                data.get('contact_name'), data.get('email'),
+                data.get('industry'), data.get('region'),
+                data.get('address'), primary_owner,
+            ]
+            if ext_clause:
+                params_list.append(ext_param)
+            params_list.append(cust_id)
             cursor.execute(f"""
                 UPDATE customers SET
                     name=?, company=?, phone=?, level=?, source=?,
                     contact_name=?, email=?, industry=?, region=?,
                     address=?, owner_id=?, previous_owner=owner_id{ext_clause}
                 WHERE id=?
-            """, (
+            """, tuple(params_list))
+            _save_owners(cursor, cust_id, owner_list)
+        else:
+            params_list = [
                 data.get('name'), data.get('company'), data.get('phone'),
                 data.get('level'), data.get('source'),
                 data.get('contact_name'), data.get('email'),
                 data.get('industry'), data.get('region'),
-                data.get('address'), data.get('owner_id'),
-                ext_param, cust_id
-            ))
-        else:
+                data.get('address'),
+            ]
+            if ext_clause:
+                params_list.append(ext_param)
+            params_list.append(cust_id)
             cursor.execute(f"""
                 UPDATE customers SET
                     name=?, company=?, phone=?, level=?, source=?,
                     contact_name=?, email=?, industry=?, region=?,
                     address=?{ext_clause}
                 WHERE id=?
-            """, (
-                data.get('name'), data.get('company'), data.get('phone'),
-                data.get('level'), data.get('source'),
-                data.get('contact_name'), data.get('email'),
-                data.get('industry'), data.get('region'),
-                data.get('address'),
-                ext_param, cust_id
-            ))
+            """, tuple(params_list))
         db.commit()
 
-        record_operation_log(username, '编辑', '客户', f'编辑客户：{data.get("name")}（ID:{cust_id}）')
+        record_operation_log(username, '编辑', '客户',
+                             f'编辑客户：{data.get("name")}（ID:{cust_id}）'
+                             + (f' 负责人：{",".join(owner_list) or "未指定"}' if owner_list is not None else ''))
 
         return jsonify({'code': 200, 'message': '客户更新成功', 'data': None})
     except Exception as e:
@@ -244,7 +312,12 @@ def get_customer_profile(cust_id):
 
     # 1. 查询客户基本信息并做 404 + 权限校验
     cursor.execute("""
-        SELECT c.*, u.name as owner_name
+        SELECT c.*, u.name as owner_name,
+               (SELECT GROUP_CONCAT(u2.name ORDER BY co.id SEPARATOR '、')
+                FROM customer_owners co LEFT JOIN users u2 ON co.username = u2.username
+                WHERE co.customer_id = c.id) AS owner_names,
+               (SELECT GROUP_CONCAT(co.username ORDER BY co.id)
+                FROM customer_owners co WHERE co.customer_id = c.id) AS owner_ids_str
         FROM customers c
         LEFT JOIN users u ON c.owner_id = u.username
         WHERE c.id = ?
@@ -252,10 +325,11 @@ def get_customer_profile(cust_id):
     row = cursor.fetchone()
     if not row:
         return jsonify({'code': 404, 'message': '客户不存在', 'data': None})
-    if not user_can(username, 'data.view_all') and row['owner_id'] != username:
+    if not user_can(username, 'data.view_all') and \
+            not _is_customer_owner(cursor, cust_id, username, row['owner_id']):
         return jsonify({'code': 403, 'message': '权限不足，只能查看自己的客户', 'data': None})
 
-    customer = dict(row)
+    customer = _apply_owners(row)
     customer_company = customer.get('company') or ''
 
     # 2. 跟进记录

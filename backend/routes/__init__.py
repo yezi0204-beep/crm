@@ -33,6 +33,8 @@ market_tasks_bp = Blueprint('market_tasks', __name__)
 tender_bp = Blueprint('tender', __name__)
 receivables_bp = Blueprint('receivables', __name__)
 business_cost_bp = Blueprint('business_cost', __name__)
+sandbox_bp = Blueprint('sandbox', __name__)
+notifications_bp = Blueprint('notifications', __name__)
 
 # Phase1: 关键词管理 + 原始情报
 keywords_bp = Blueprint('keywords', __name__)
@@ -83,6 +85,8 @@ def register_blueprints(app):
     from .tender_analysis import register_routes as register_tender
     from .receivables import register_routes as register_receivables
     from .business_cost import register_routes as register_business_cost
+    from .sandbox import register_routes as register_sandbox
+    from .notifications import register_routes as register_notifications
 
     # Phase9: LLM Gateway（/api/ai/*）
     from llm_gateway import register_routes as register_ai_gateway
@@ -126,6 +130,8 @@ def register_blueprints(app):
     register_tender(app)
     register_receivables(app)
     register_business_cost(app)
+    register_sandbox(app)
+    register_notifications(app)
     register_ai_gateway(app)
 
     from .smart_import import smart_import_bp

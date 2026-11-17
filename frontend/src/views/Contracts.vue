@@ -19,6 +19,11 @@
       </div>
       
       <div class="header-right">
+        <el-select v-model="legacyFilter" style="width: 120px; margin-right: 10px;" size="default">
+          <el-option label="全部合同" value="all" />
+          <el-option label="正常合同" value="normal" />
+          <el-option label="历史合同" value="legacy" />
+        </el-select>
         <div class="search-wrapper">
           <el-input 
             v-model="searchKeyword" 
@@ -185,6 +190,7 @@
                   </span>
                 </template>
                 <span v-else>{{ scope.row.owner_name || '未分配' }}</span>
+                <el-tag v-if="Number(scope.row.is_legacy) === 1" type="warning" size="small" style="margin-left: 4px;">历史</el-tag>
               </template>
             </el-table-column>
 
@@ -259,7 +265,7 @@
             <el-form-item label="关联客户" prop="cust_id">
               <el-select
                 v-model="contractForm.cust_id"
-                placeholder="请选择客户（必填）"
+                :placeholder="contractForm.id ? '可选，选择关联客户' : '请选择客户（必填）'"
                 filterable
                 clearable
                 style="width: 100%;"
@@ -392,6 +398,13 @@
           <el-switch v-model="contractForm.is_framework" :active-value="1" :inactive-value="0" />
           <span style="color: #909399; font-size: 12px; margin-left: 12px;">
             框架合同按每月验收实际金额计入考核，非框架合同按合同总额一次性计入
+          </span>
+        </el-form-item>
+
+        <el-form-item v-if="isAdmin" label="历史合同">
+          <el-switch v-model="contractForm.is_legacy" :active-value="1" :inactive-value="0" />
+          <span style="color: #e6a23c; font-size: 12px; margin-left: 12px;">
+            历史合同（如负责人已离职的存量合同）不计入个人业绩，业绩报表中单列汇总
           </span>
         </el-form-item>
 
@@ -784,6 +797,7 @@ const users = ref([])
 const customers = ref([])
 const businessList = ref([])
 const searchKeyword = ref('')
+const legacyFilter = ref('all') // 历史合同筛选：all 全部 / normal 正常 / legacy 历史合同
 const showAddModal = ref(false)
 const showPreviewModal = ref(false)
 const showColumnSelector = ref(false)
@@ -835,9 +849,16 @@ const visibleColumnConfigs = computed(() => {
 })
 
 const filteredContracts = computed(() => {
-  if (!searchKeyword.value) return contracts.value
+  let list = contracts.value
+  // 历史合同筛选
+  if (legacyFilter.value === 'legacy') {
+    list = list.filter(r => Number(r.is_legacy) === 1)
+  } else if (legacyFilter.value === 'normal') {
+    list = list.filter(r => Number(r.is_legacy) !== 1)
+  }
+  if (!searchKeyword.value) return list
   const keyword = searchKeyword.value.toLowerCase()
-  return contracts.value.filter(record => 
+  return list.filter(record =>
     (record.contract_name && record.contract_name.toLowerCase().includes(keyword)) ||
     (record.contract_no && record.contract_no.toLowerCase().includes(keyword)) ||
     (record.project_order_no && record.project_order_no.toLowerCase().includes(keyword)) ||
@@ -1122,6 +1143,7 @@ const contractForm = reactive({
   contract_file_path: '',
   tech_agreement_file_path: '',
   is_framework: 0,
+  is_legacy: 0,
   estimated_hours: null,
   estimated_gross_profit: 0
 })
@@ -1174,15 +1196,16 @@ const validateContractNo = async () => {
   await validateContractNoRule({}, contractForm.contract_no, () => {})
 }
 
-const rules = {
+// 关联客户：编辑已有合同时非必填（历史合同客户信息可能缺失），新建时仍必填
+const rules = computed(() => ({
   contract_name: [{ required: true, message: '请输入合同名称', trigger: 'blur' }],
   contract_no: [
     { required: true, message: '请输入合同编号', trigger: 'blur' },
     { validator: validateContractNoRule, trigger: 'blur' }
   ],
   total_amt: [{ required: true, message: '请输入合同总额', trigger: 'blur' }],
-  cust_id: [{ required: true, message: '请选择关联客户', trigger: 'change' }]
-}
+  ...(contractForm.id ? {} : { cust_id: [{ required: true, message: '请选择关联客户', trigger: 'change' }] })
+}))
 
 const formatAmount = (value) => {
   // 按元展示，精确到分
@@ -1419,6 +1442,7 @@ const editContract = (row) => {
     'acceptance_nodes', 'payment_nodes', 'note', 'contract_file_path', 'tech_agreement_file_path']
   textFields.forEach(f => { if (contractForm[f] == null) contractForm[f] = '' })
   contractForm.is_framework = row.is_framework ? 1 : 0
+  contractForm.is_legacy = Number(row.is_legacy) === 1 ? 1 : 0
   contractFileList.value = []
   techFileList.value = []
   if (row.contract_file_path) {

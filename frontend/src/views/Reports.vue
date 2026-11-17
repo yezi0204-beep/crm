@@ -136,6 +136,28 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 历史合同单列汇总（不计入个人业绩） -->
+      <div v-if="teamData.legacy && teamData.legacy.count > 0" class="legacy-summary">
+        <el-divider content-position="left">
+          <span style="color: #e6a23c;">📁 历史合同（不计入个人业绩）</span>
+        </el-divider>
+        <div class="legacy-total">
+          共 <b>{{ teamData.legacy.count }}</b> 份，
+          合同总额 <b>{{ formatAmount(teamData.legacy.amount) }}</b> 元，
+          已回款 <b>{{ formatAmount(teamData.legacy.payment_amount) }}</b> 元
+        </div>
+        <el-table :data="teamData.legacy.by_owner" stripe size="small" style="margin-top: 8px;">
+          <el-table-column prop="owner_name" label="原负责人" width="120" />
+          <el-table-column prop="contract_count" label="合同数" width="100" align="center" />
+          <el-table-column label="合同金额(元)" align="right">
+            <template #default="scope">{{ formatAmount(scope.row.contract_amount) }}</template>
+          </el-table-column>
+          <el-table-column label="回款金额(元)" align="right">
+            <template #default="scope">{{ formatAmount(scope.row.payment_amount) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
     </el-card>
 
     <!-- 同比环比趋势 -->
@@ -858,6 +880,20 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.legacy-summary {
+  margin-top: 4px;
+}
+
+.legacy-total {
+  color: #606266;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.legacy-total b {
+  color: #e6a23c;
 }
 
 .toolbar-card {

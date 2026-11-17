@@ -229,6 +229,11 @@ const routes = [
         component: () => import('../views/MarketTasks.vue')
       },
       {
+        path: 'sandbox',
+        name: 'Sandbox',
+        component: () => import('../views/Sandbox.vue')
+      },
+      {
         path: 'tender-analysis',
         name: 'TenderAnalysis',
         component: () => import('../views/TenderAnalysis.vue')
@@ -288,7 +293,7 @@ router.beforeEach(async (to, from, next) => {
     const blocked = [
       // 销售管理
       '/dashboard', '/reports', '/customers', '/business', '/contracts', '/acceptances',
-      '/quotes', '/products', '/payments', '/visits', '/receivables',
+      '/quotes', '/products', '/payments', '/visits', '/receivables', '/sandbox',
       // 营销管理
       '/marketing',
       // AI情报中心

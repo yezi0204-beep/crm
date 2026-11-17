@@ -62,6 +62,7 @@ export default {
     products: '产品库存',
     payments: '回款管理',
     visits: '拜访排班',
+    sandbox: '营销作战沙盘',
     marketing: '营销活动',
     service: '服务工单',
     pool: '公海池',

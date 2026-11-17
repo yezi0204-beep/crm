@@ -217,7 +217,7 @@ def get_dashboard():
     cursor.execute("""
         SELECT u.name, u.role, COALESCE(SUM(c.total_amt), 0) as total_amount
         FROM users u
-        LEFT JOIN contracts c ON u.username = c.owner_id
+        LEFT JOIN contracts c ON u.username = c.owner_id AND COALESCE(c.is_legacy, 0) = 0
         GROUP BY u.username, u.name, u.role
         ORDER BY total_amount DESC
         LIMIT 5
