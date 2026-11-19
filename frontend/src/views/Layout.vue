@@ -165,6 +165,10 @@
             <span class="menu-icon">📨</span>
             <span>市场任务单</span>
           </el-menu-item>
+          <el-menu-item index="/rd-projects">
+            <span class="menu-icon">🧪</span>
+            <span>自研项目</span>
+          </el-menu-item>
           <el-menu-item index="/project-cost" v-if="!isRestrictedDirector && (has('workhour.view') || has('workhour.manage') || has('data.view_all') || has('cost.view') || has('cost.actual.manage'))">
             <span class="menu-icon">💰</span>
             <span>项目成本核算</span>

@@ -39,9 +39,50 @@ COST_SUM_SQL = ' + '.join(
     f"COALESCE(m.{f}, 0)" for f, _ in COST_FIELDS
 )
 
+# 统一「分配对象」：合同（contract）+ 自研项目（rd）
+# 自研项目的记录沿用在 dept_hour_allocations.contract_id 中存 rd_projects.id，
+# 由 ref_type 区分归属，避免改建外键与历史数据。
+TARGETS_SQL = """
+        SELECT 'contract' AS ref_type, c.id AS ref_id,
+               c.contract_name AS name, c.contract_no AS code, c.status,
+               c.total_amt AS amount, cu.company AS customer_name,
+               u.name AS owner_name, c.estimated_hours, c.sign_date AS start_date
+        FROM contracts c
+        LEFT JOIN customers cu ON c.cust_id = cu.id
+        LEFT JOIN users u ON c.owner_id = u.username
+        UNION ALL
+        SELECT 'rd' AS ref_type, r.id AS ref_id,
+               r.name AS name, r.code AS code, r.status,
+               r.budget AS amount, '' AS customer_name,
+               COALESCE(NULLIF(r.owner_name, ''), u.name) AS owner_name,
+               NULL AS estimated_hours, r.start_date AS start_date
+        FROM rd_projects r
+        LEFT JOIN users u ON r.owner_id = u.username
+"""
+
+TARGET_JOIN = "ON a.contract_id = t.ref_id AND a.ref_type = t.ref_type"
+
+
+def _ensure_alloc_schema(db):
+    """dept_hour_allocations 增加 ref_type（contract / rd）并重建唯一键。"""
+    cols = {r.get('Field') for r in db.execute("SHOW COLUMNS FROM dept_hour_allocations").fetchall()}
+    if 'ref_type' not in cols:
+        db.execute("ALTER TABLE dept_hour_allocations "
+                   "ADD COLUMN ref_type VARCHAR(16) NOT NULL DEFAULT 'contract'")
+    idx = {r.get('Key_name') for r in db.execute("SHOW INDEX FROM dept_hour_allocations").fetchall()}
+    for name in list(idx):
+        if name not in ('PRIMARY', 'uk_alloc_target'):
+            db.execute(f"ALTER TABLE dept_hour_allocations DROP INDEX `{name}`")
+    if 'uk_alloc_target' not in idx:
+        db.execute("ALTER TABLE dept_hour_allocations "
+                   "ADD UNIQUE KEY uk_alloc_target (cost_id, ref_type, contract_id)")
+    db.commit()
+
 
 def register_routes(app):
     app.register_blueprint(workcost_bp, url_prefix='/api/work-cost')
+    with app.app_context():
+        _ensure_alloc_schema(get_db())
 
 
 def _month_cost_with_stats(row, alloc_map):
@@ -213,9 +254,9 @@ def delete_month(cost_id):
 @workcost_bp.route('/months/<int:cost_id>/contracts', methods=['GET'])
 @require_permission(('workhour.view', 'workhour.manage'))
 def alloc_contracts(cost_id):
-    """分配工作台：月度信息 + 合同 + 已分配明细。
+    """分配工作台：月度信息 + 分配对象（合同 + 自研项目）+ 已分配明细。
 
-    默认返回所有执行中+已完成的合同，支持 status 参数筛选。
+    status=执行中/已完成 筛合同；筹备中/进行中 筛自研项目；空=全部。
     """
     db = get_db()
     mc = db.execute("SELECT * FROM dept_month_costs WHERE id=?", (cost_id,)).fetchone()
@@ -223,44 +264,68 @@ def alloc_contracts(cost_id):
         return jsonify({'code': 404, 'message': '月度记录不存在', 'data': None})
 
     status_filter = (request.args.get('status') or '').strip()
-    params = []
-    where = "WHERE c.status IN ('执行中', '已完成')"
-    if status_filter in ('执行中', '已完成'):
-        where = "WHERE c.status = ?"
-        params.append(status_filter)
+    contract_states = ['执行中', '已完成']
+    rd_states = ['筹备中', '进行中']
+    if status_filter in contract_states:
+        contract_states, rd_states = [status_filter], []
+    elif status_filter in rd_states:
+        rd_states, contract_states = [status_filter], []
 
-    contracts = db.execute("""
-        SELECT c.id, c.contract_name, c.contract_no, c.total_amt, c.status,
-               c.sign_date, c.estimated_hours,
-               u.name as owner_name, cu.company as customer_name,
-               (SELECT COALESCE(SUM(a2.hours),0) FROM dept_hour_allocations a2 WHERE a2.contract_id=c.id) as total_allocated_hours
+    c_ph = ','.join('?' * len(contract_states)) or "''"
+    r_ph = ','.join('?' * len(rd_states)) or "''"
+    params = contract_states + rd_states
+
+    targets = db.execute(f"""
+        SELECT 'contract' AS ref_type, c.id AS ref_id, c.contract_name AS contract_name,
+               c.contract_no, c.total_amt, c.status, c.sign_date, c.estimated_hours,
+               u.name AS owner_name, cu.company AS customer_name,
+               (SELECT COALESCE(SUM(a2.hours),0) FROM dept_hour_allocations a2
+                 WHERE a2.ref_type='contract' AND a2.contract_id=c.id) AS total_allocated_hours
         FROM contracts c
         LEFT JOIN users u ON c.owner_id = u.username
         LEFT JOIN customers cu ON c.cust_id = cu.id
-        """ + where + """
-        ORDER BY (c.status='执行中') DESC, c.sign_date DESC
+        WHERE c.status IN ({c_ph})
+        UNION ALL
+        SELECT 'rd' AS ref_type, r.id AS ref_id, r.name AS contract_name,
+               r.code AS contract_no, r.budget AS total_amt, r.status, r.start_date AS sign_date,
+               NULL AS estimated_hours,
+               COALESCE(NULLIF(r.owner_name,''), u.name) AS owner_name, '' AS customer_name,
+               (SELECT COALESCE(SUM(a2.hours),0) FROM dept_hour_allocations a2
+                 WHERE a2.ref_type='rd' AND a2.contract_id=r.id) AS total_allocated_hours
+        FROM rd_projects r
+        LEFT JOIN users u ON r.owner_id = u.username
+        WHERE r.status IN ({r_ph})
     """, params).fetchall()
 
     allocs = db.execute("""
-        SELECT a.id, a.contract_id, a.hours, a.note
+        SELECT a.id, a.ref_type, a.contract_id, a.hours, a.note
         FROM dept_hour_allocations a WHERE a.cost_id=?
     """, (cost_id,)).fetchall()
-    alloc_by_contract = {a['contract_id']: dict(a) for a in allocs}
+    alloc_by_key = {(a['ref_type'], a['contract_id']): dict(a) for a in allocs}
 
     data = []
-    for c in contracts:
+    for c in targets:
         item = dict(c)
-        a = alloc_by_contract.get(c['id'])
+        a = alloc_by_key.get((c['ref_type'], c['ref_id']))
+        item['id'] = c['ref_id']
         item['alloc_id'] = a['id'] if a else None
         item['alloc_hours'] = a['hours'] if a else 0
         item['alloc_note'] = a['note'] if a else ''
         data.append(item)
+
+    # 合同在前（执行中优先），自研项目在后（进行中优先）
+    data.sort(key=lambda x: (
+        0 if x['ref_type'] == 'contract' else 1,
+        0 if x['status'] in ('执行中', '进行中') else 1,
+        -(int(x['ref_id']) or 0),
+    ))
 
     alloc_map = _alloc_map_by_cost(db, [cost_id])
     return jsonify({
         'code': 200, 'message': 'success',
         'data': {
             'month_cost': _month_cost_with_stats(mc, alloc_map),
+            'targets': data,
             'contracts': data,
         },
     })
@@ -271,8 +336,9 @@ def alloc_contracts(cost_id):
 def allocate(cost_id):
     """保存分配明细（覆盖式：以本次提交为准）。
 
-    body: {items: [{contract_id, hours, note}]}
-    校验：合同必须是执行中；hours≥0；合计不得超过月度总工时。
+    body: {items: [{ref_type, ref_id/contract_id, hours, note}]}
+    ref_type: contract（默认）| rd（自研项目）
+    校验：对象必须存在且在有效状态；hours≥0；合计不得超过月度总工时。
     """
     payload = request.current_user
     body = request.get_json(silent=True) or {}
@@ -285,29 +351,41 @@ def allocate(cost_id):
 
     total_hours = float(mc['total_hours'] or 0)
     valid_ids = {
-        r['id'] for r in db.execute(
-            "SELECT id FROM contracts WHERE status IN ('执行中', '已完成')"
-        ).fetchall()
+        'contract': {
+            r['id'] for r in db.execute(
+                "SELECT id FROM contracts WHERE status IN ('执行中', '已完成')"
+            ).fetchall()
+        },
+        'rd': {
+            r['id'] for r in db.execute(
+                "SELECT id FROM rd_projects WHERE status IN ('筹备中', '进行中')"
+            ).fetchall()
+        },
     }
 
     cleaned = []
     seen = set()
     for it in items:
+        ref_type = (it.get('ref_type') or 'contract').strip()
+        if ref_type not in ('contract', 'rd'):
+            return jsonify({'code': 400, 'message': '分配对象类型不合法', 'data': None})
         try:
-            cid = int(it.get('contract_id'))
+            cid = int(it.get('ref_id') or it.get('contract_id'))
             h = float(it.get('hours') or 0)
         except (TypeError, ValueError):
             return jsonify({'code': 400, 'message': '分配数据格式错误', 'data': None})
-        if cid in seen:
-            return jsonify({'code': 400, 'message': '存在重复合同行', 'data': None})
-        seen.add(cid)
+        if (ref_type, cid) in seen:
+            return jsonify({'code': 400, 'message': '存在重复分配行', 'data': None})
+        seen.add((ref_type, cid))
         if h < 0:
             return jsonify({'code': 400, 'message': '分配工时不能为负数', 'data': None})
         if h == 0:
-            continue  # 0 工时 = 清除该合同分配
-        if cid not in valid_ids:
-            return jsonify({'code': 400, 'message': '只能分配到执行中或已完成的合同', 'data': None})
-        cleaned.append({'contract_id': cid, 'hours': round(h, 2),
+            continue  # 0 工时 = 清除该对象分配
+        if cid not in valid_ids[ref_type]:
+            label = '执行中或已完成的合同' if ref_type == 'contract' else '筹备中或进行中的自研项目'
+            return jsonify({'code': 400, 'message': f'只能分配到{label}', 'data': None})
+        cleaned.append({'ref_type': ref_type, 'contract_id': cid,
+                        'hours': round(h, 2),
                         'note': (it.get('note') or '').strip()})
 
     sum_hours = round(sum(x['hours'] for x in cleaned), 2)
@@ -322,23 +400,26 @@ def allocate(cost_id):
     db.execute("DELETE FROM dept_hour_allocations WHERE cost_id=?", (cost_id,))
     for x in cleaned:
         db.execute(
-            "INSERT INTO dept_hour_allocations (cost_id, contract_id, hours, note, created_by, created_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (cost_id, x['contract_id'], x['hours'], x['note'], payload['username'], now)
+            "INSERT INTO dept_hour_allocations "
+            "(cost_id, ref_type, contract_id, hours, note, created_by, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (cost_id, x['ref_type'], x['contract_id'], x['hours'], x['note'],
+             payload['username'], now)
         )
     db.commit()
 
     unit_cost = round(
         sum(float(mc[f] or 0) for f, _ in COST_FIELDS) / total_hours, 4
     ) if total_hours > 0 else 0
+    rd_count = len([x for x in cleaned if x['ref_type'] == 'rd'])
     record_operation_log(
         payload['username'], '分配', '工时分摊',
-        f'{mc["dept"]} {mc["month"]}：分配 {len(cleaned)} 个合同共 {sum_hours} 工时'
-        f'（单工时成本 {unit_cost} 元）'
+        f'{mc["dept"]} {mc["month"]}：分配 {len(cleaned)} 个项目共 {sum_hours} 工时'
+        f'（其中自研项目 {rd_count} 个，单工时成本 {unit_cost} 元）'
     )
     return jsonify({
         'code': 200,
-        'message': f'已保存分配：{len(cleaned)} 个合同 / {sum_hours} 工时',
+        'message': f'已保存分配：{len(cleaned)} 个项目 / {sum_hours} 工时',
         'data': {'sum_hours': sum_hours, 'unit_cost': unit_cost,
                  'allocated_cost': round(sum_hours * unit_cost, 2)},
     })
@@ -356,16 +437,15 @@ def summary():
     dept = request.args.get('dept', '').strip()
 
     sql = f"""
-        SELECT c.id as contract_id, c.contract_name, c.contract_no, c.status,
-               cu.company as customer_name, u.name as owner_name,
+        SELECT t.ref_type, t.ref_id as contract_id, t.name as contract_name,
+               t.code as contract_no, t.status,
+               t.customer_name, t.owner_name,
                COALESCE(SUM(a.hours), 0) as total_hours,
                COALESCE(SUM(a.hours * ({COST_SUM_SQL}) / NULLIF(m.total_hours, 0)), 0) as total_cost,
                COUNT(DISTINCT m.month) as month_count
         FROM dept_hour_allocations a
         JOIN dept_month_costs m ON a.cost_id = m.id
-        JOIN contracts c ON a.contract_id = c.id
-        LEFT JOIN customers cu ON c.cust_id = cu.id
-        LEFT JOIN users u ON c.owner_id = u.username
+        JOIN ({TARGETS_SQL}) t {TARGET_JOIN}
         WHERE 1=1
     """
     params = []
@@ -375,7 +455,8 @@ def summary():
     if dept:
         sql += " AND m.dept=?"
         params.append(dept)
-    sql += " GROUP BY c.id ORDER BY total_cost DESC"
+    sql += " GROUP BY t.ref_type, t.ref_id, t.name, t.code, t.status, t.customer_name, t.owner_name"
+    sql += " ORDER BY total_cost DESC"
 
     rows = [dict(r) for r in db.execute(sql, params).fetchall()]
     for r in rows:
@@ -405,14 +486,13 @@ def detail():
     sql = f"""
         SELECT m.id as cost_id, m.month, m.dept, m.total_hours,
                ({COST_SUM_SQL}) as month_total_cost,
-               c.id as contract_id, c.contract_name, c.contract_no, c.status,
-               cu.company as customer_name, u.name as owner_name,
+               t.ref_type, t.ref_id as contract_id, t.name as contract_name,
+               t.code as contract_no, t.status,
+               t.customer_name, t.owner_name,
                a.hours, a.note
         FROM dept_hour_allocations a
         JOIN dept_month_costs m ON a.cost_id = m.id
-        JOIN contracts c ON a.contract_id = c.id
-        LEFT JOIN customers cu ON c.cust_id = cu.id
-        LEFT JOIN users u ON c.owner_id = u.username
+        JOIN ({TARGETS_SQL}) t {TARGET_JOIN}
         WHERE 1=1
     """
     params = []
@@ -531,17 +611,16 @@ def analysis():
 
     # ---------- 3. 项目（合同）工时成本 ----------
     psql = f"""
-        SELECT c.id as contract_id, c.contract_name, c.contract_no, c.status,
-               c.total_amt, c.estimated_hours,
-               cu.company as customer_name, u.name as owner_name,
+        SELECT t.ref_type, t.ref_id as contract_id, t.name as contract_name,
+               t.code as contract_no, t.status,
+               t.amount as total_amt, t.estimated_hours,
+               t.customer_name, t.owner_name,
                COALESCE(SUM(a.hours), 0) as total_hours,
                COALESCE(SUM(a.hours * ({COST_SUM_SQL}) / NULLIF(m.total_hours, 0)), 0) as total_cost,
                COUNT(DISTINCT m.month) as month_count
         FROM dept_hour_allocations a
         JOIN dept_month_costs m ON a.cost_id = m.id
-        JOIN contracts c ON a.contract_id = c.id
-        LEFT JOIN customers cu ON c.cust_id = cu.id
-        LEFT JOIN users u ON c.owner_id = u.username
+        JOIN ({TARGETS_SQL}) t {TARGET_JOIN}
         WHERE 1=1
     """
     pparams = []
@@ -551,7 +630,8 @@ def analysis():
     if dept:
         psql += " AND m.dept = ?"
         pparams.append(dept)
-    psql += " GROUP BY c.id ORDER BY total_cost DESC"
+    psql += (" GROUP BY t.ref_type, t.ref_id, t.name, t.code, t.status, t.amount,"
+             " t.estimated_hours, t.customer_name, t.owner_name ORDER BY total_cost DESC")
 
     project_costs = []
     for r in db.execute(psql, pparams).fetchall():
@@ -565,6 +645,7 @@ def analysis():
         except (TypeError, ValueError):
             est_f = None
         project_costs.append({
+            'ref_type': r['ref_type'],
             'contract_id': r['contract_id'], 'contract_name': r['contract_name'],
             'contract_no': r['contract_no'] or '', 'status': r['status'] or '',
             'customer_name': r['customer_name'] or '', 'owner_name': r['owner_name'] or '',
@@ -676,10 +757,10 @@ def export_summary():
 
     wb = Workbook()
 
-    # Sheet1 按合同汇总
+    # Sheet1 按项目汇总
     ws = wb.active
-    ws.title = '分摊汇总(按合同)'
-    headers = ['合同名称', '合同编号', '客户', '负责人', '合同状态',
+    ws.title = '分摊汇总(按项目)'
+    headers = ['类型', '项目名称', '编号', '客户', '负责人', '状态',
                '累计分配工时', '累计分摊成本(元)', '涉及月份数']
     ws.append(headers)
     head_fill = PatternFill('solid', fgColor='1F4E79')
@@ -689,16 +770,14 @@ def export_summary():
         cell.alignment = Alignment(horizontal='center')
 
     sql = f"""
-        SELECT c.contract_name, c.contract_no, cu.company as customer_name,
-               u.name as owner_name, c.status,
+        SELECT t.ref_type, t.name as contract_name, t.code as contract_no,
+               t.customer_name, t.owner_name, t.status,
                COALESCE(SUM(a.hours),0) as total_hours,
                COALESCE(SUM(a.hours * ({COST_SUM_SQL}) / NULLIF(m.total_hours,0)),0) as total_cost,
                COUNT(DISTINCT m.month) as month_count
         FROM dept_hour_allocations a
         JOIN dept_month_costs m ON a.cost_id = m.id
-        JOIN contracts c ON a.contract_id = c.id
-        LEFT JOIN customers cu ON c.cust_id = cu.id
-        LEFT JOIN users u ON c.owner_id = u.username
+        JOIN ({TARGETS_SQL}) t {TARGET_JOIN}
         WHERE 1=1
     """
     params = []
@@ -708,28 +787,30 @@ def export_summary():
     if dept:
         sql += " AND m.dept=?"
         params.append(dept)
-    sql += " GROUP BY c.id ORDER BY total_cost DESC"
+    sql += (" GROUP BY t.ref_type, t.name, t.code, t.customer_name, t.owner_name, t.status"
+            " ORDER BY total_cost DESC")
     rows = db.execute(sql, params).fetchall()
 
     total_cost_all = 0.0
     for r in rows:
         cost = round(float(r['total_cost']), 2)
         total_cost_all += cost
-        ws.append([r['contract_name'], r['contract_no'] or '', r['customer_name'] or '',
+        ws.append(['自研项目' if r['ref_type'] == 'rd' else '合同',
+                   r['contract_name'], r['contract_no'] or '', r['customer_name'] or '',
                    r['owner_name'] or '', r['status'] or '',
                    round(float(r['total_hours']), 2), cost, r['month_count']])
     # 合计行
-    sum_row = ['合计', '', '', '', '', '', round(total_cost_all, 2), '']
+    sum_row = ['合计', '', '', '', '', '', '', round(total_cost_all, 2), '']
     ws.append(sum_row)
     for cell in ws[ws.max_row]:
         cell.font = Font(bold=True)
-    for i, width in enumerate([38, 18, 24, 10, 10, 14, 18, 12], 1):
+    for i, width in enumerate([10, 38, 18, 24, 10, 10, 14, 18, 12], 1):
         ws.column_dimensions[get_column_letter(i)].width = width
 
     # Sheet2 按部门月份明细
     ws2 = wb.create_sheet('月度分配明细')
     ws2.append(['部门', '月份', '总工时', '人力成本合计(元)', '单工时成本(元)',
-                '分配合同', '分配工时', '分摊成本(元)', '备注'])
+                '分配项目', '分配工时', '分摊成本(元)', '备注'])
     for cell in ws2[1]:
         cell.font = Font(bold=True, color='FFFFFF')
         cell.fill = head_fill
@@ -737,10 +818,10 @@ def export_summary():
 
     sql2 = f"""
         SELECT m.dept, m.month, m.total_hours, ({COST_SUM_SQL}) as total_cost,
-               c.contract_name, a.hours, a.note
+               t.name as contract_name, a.hours, a.note
         FROM dept_hour_allocations a
         JOIN dept_month_costs m ON a.cost_id = m.id
-        JOIN contracts c ON a.contract_id = c.id
+        JOIN ({TARGETS_SQL}) t {TARGET_JOIN}
         WHERE 1=1
     """
     params2 = []

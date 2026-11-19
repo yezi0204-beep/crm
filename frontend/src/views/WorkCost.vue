@@ -79,8 +79,13 @@
         <el-table v-if="summaryMode === 'contract'" :data="summaryItems" v-loading="summaryLoading" border
                   show-summary :summary-method="summaryTotal">
           <el-table-column type="index" label="#" width="55" align="center" />
-          <el-table-column prop="contract_name" label="合同名称" min-width="260" show-overflow-tooltip />
-          <el-table-column prop="contract_no" label="合同编号" width="150" show-overflow-tooltip>
+          <el-table-column prop="contract_name" label="项目名称" min-width="260" show-overflow-tooltip>
+            <template #default="{ row }">
+              <el-tag v-if="row.ref_type === 'rd'" type="warning" size="small" style="margin-right: 6px">自研</el-tag>
+              {{ row.contract_name }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="contract_no" label="编号" width="150" show-overflow-tooltip>
             <template #default="{ row }">{{ row.contract_no || '-' }}</template>
           </el-table-column>
           <el-table-column prop="customer_name" label="客户" width="180" show-overflow-tooltip>
@@ -114,7 +119,12 @@
               <el-tag :type="row.dept === '应用中心' ? 'primary' : 'warning'" size="small">{{ row.dept }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="contract_name" label="合同名称" min-width="250" show-overflow-tooltip />
+          <el-table-column prop="contract_name" label="项目名称" min-width="250" show-overflow-tooltip>
+            <template #default="{ row }">
+              <el-tag v-if="row.ref_type === 'rd'" type="warning" size="small" style="margin-right: 6px">自研</el-tag>
+              {{ row.contract_name }}
+            </template>
+          </el-table-column>
           <el-table-column prop="customer_name" label="客户" width="170" show-overflow-tooltip>
             <template #default="{ row }">{{ row.customer_name || '-' }}</template>
           </el-table-column>
@@ -239,7 +249,12 @@
           <el-table :data="anaProjects" border size="small" max-height="420"
                     show-summary :summary-method="anaProjectSummary">
             <el-table-column type="index" label="#" width="50" align="center" />
-            <el-table-column prop="contract_name" label="项目/合同名称" min-width="230" show-overflow-tooltip />
+            <el-table-column prop="contract_name" label="项目/合同名称" min-width="230" show-overflow-tooltip>
+              <template #default="{ row }">
+                <el-tag v-if="row.ref_type === 'rd'" type="warning" size="small" style="margin-right: 6px">自研</el-tag>
+                {{ row.contract_name }}
+              </template>
+            </el-table-column>
             <el-table-column prop="customer_name" label="客户" width="160" show-overflow-tooltip>
               <template #default="{ row }">{{ row.customer_name || '-' }}</template>
             </el-table-column>
@@ -251,7 +266,7 @@
                 <el-tag :type="row.status === '执行中' ? 'success' : 'info'" size="small">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="total_amt" label="合同额(元)" width="130" align="right" sortable>
+            <el-table-column prop="total_amt" label="合同额/预算(元)" width="140" align="right" sortable>
               <template #default="{ row }">{{ fmt2(row.total_amt) }}</template>
             </el-table-column>
             <el-table-column prop="total_hours" label="累计工时" width="100" align="right" sortable>
@@ -338,15 +353,23 @@
       </div>
 
       <div class="alloc-toolbar">
+        <el-select v-model="allocTypeFilter" placeholder="全部类型" clearable style="width: 120px"
+                   @change="onFilterChange">
+          <el-option label="全部" value="" />
+          <el-option label="合同" value="contract" />
+          <el-option label="自研项目" value="rd" />
+        </el-select>
         <el-select v-model="allocStatusFilter" placeholder="全部状态" clearable style="width: 120px"
                    @change="onFilterChange">
           <el-option label="全部" value="" />
           <el-option label="执行中" value="执行中" />
           <el-option label="已完成" value="已完成" />
+          <el-option label="进行中" value="进行中" />
+          <el-option label="筹备中" value="筹备中" />
         </el-select>
-        <el-input v-model="allocSearch" placeholder="搜索合同名称 / 编号 / 客户" clearable style="width: 260px"
+        <el-input v-model="allocSearch" placeholder="搜索项目名称 / 编号 / 客户" clearable style="width: 260px"
                   :prefix-icon="Search" @input="onFilterChange" @clear="onFilterChange" />
-        <span class="alloc-hint">默认展示所有执行中+已完成合同，可按状态筛选</span>
+        <span class="alloc-hint">默认展示执行中+已完成合同，以及筹备中+进行中的自研项目</span>
         <span class="alloc-sum">
           本次已填：{{ fmt2(allocSum) }} / {{ fmt2(allocMonth.total_hours) }} 工时
           <el-tag :type="allocOver ? 'danger' : 'success'" size="small" style="margin-left: 8px">
@@ -360,8 +383,9 @@
 
       <el-table :data="filteredAllocContracts" v-loading="allocLoading" border max-height="520" size="small">
         <el-table-column type="index" label="#" width="50" align="center" />
-        <el-table-column prop="contract_name" label="合同名称" min-width="240" show-overflow-tooltip>
+        <el-table-column prop="contract_name" label="项目名称" min-width="240" show-overflow-tooltip>
           <template #default="{ row }">
+            <el-tag v-if="row.ref_type === 'rd'" type="warning" size="small" style="margin-right: 6px">自研</el-tag>
             {{ row.contract_name }}
             <el-tag v-if="row.status === '已完成'" type="info" size="small" style="margin-left: 6px">已完成</el-tag>
           </template>
@@ -375,7 +399,7 @@
         <el-table-column prop="owner_name" label="负责人" width="85" align="center">
           <template #default="{ row }">{{ row.owner_name || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="total_amt" label="合同额(元)" width="120" align="right">
+        <el-table-column prop="total_amt" label="合同额/预算(元)" width="140" align="right">
           <template #default="{ row }">{{ fmt2(row.total_amt) }}</template>
         </el-table-column>
         <el-table-column prop="estimated_hours" label="预计工时" width="100" align="center">
@@ -472,6 +496,7 @@ const allocMonth = ref({})
 const allocContracts = ref([])
 const allocSearch = ref('')
 const allocStatusFilter = ref('')
+const allocTypeFilter = ref('')
 
 // ---------- 数据挖掘分析 ----------
 const anaLoading = ref(false)
@@ -586,14 +611,16 @@ async function openAlloc(row) {
   allocLoading.value = true
   allocSearch.value = ''
   allocStatusFilter.value = ''
+  allocTypeFilter.value = ''
   try {
     const res = await api.get(`/work-cost/months/${row.id}/contracts`)
     allocMonth.value = res.data.month_cost
-    allocContracts.value = (res.data.contracts || []).map(c => ({
+    const list = res.data.targets || res.data.contracts || []
+    allocContracts.value = list.map(c => ({
       ...c, edit_hours: Number(c.alloc_hours) || 0, edit_note: c.alloc_note || '',
     }))
   } catch (e) {
-    ElMessage.error('加载合同列表失败')
+    ElMessage.error('加载分配对象列表失败')
   } finally {
     allocLoading.value = false
   }
@@ -605,6 +632,9 @@ function onFilterChange() {
 
 const filteredAllocContracts = computed(() => {
   let list = allocContracts.value
+  if (allocTypeFilter.value) {
+    list = list.filter(c => (c.ref_type || 'contract') === allocTypeFilter.value)
+  }
   if (allocStatusFilter.value) {
     list = list.filter(c => c.status === allocStatusFilter.value)
   }
@@ -624,7 +654,7 @@ const allocOver = computed(() => allocSum.value > (Number(allocMonth.value.total
 async function saveAlloc() {
   const items = allocContracts.value
     .filter(c => Number(c.edit_hours) > 0)
-    .map(c => ({ contract_id: c.id, hours: c.edit_hours, note: c.edit_note }))
+    .map(c => ({ ref_type: c.ref_type || 'contract', ref_id: c.id, hours: c.edit_hours, note: c.edit_note }))
   if (allocOver.value) { ElMessage.error('分配工时合计超过本月总工时'); return }
   allocSaving.value = true
   try {

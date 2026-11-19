@@ -50,6 +50,11 @@ def _can_approve(username, project_type, project_id):
             "SELECT owner_id FROM contracts WHERE id=?", (project_id,)
         ).fetchone()
         return bool(row and row['owner_id'] and row['owner_id'] == username)
+    if project_type == 'rd':
+        row = db.execute(
+            "SELECT owner_id FROM rd_projects WHERE id=?", (project_id,)
+        ).fetchone()
+        return bool(row and row['owner_id'] and row['owner_id'] == username)
     # 默认 business 类型
     row = db.execute(
         "SELECT project_manager, owner_id FROM business WHERE id=?", (project_id,)
@@ -108,6 +113,28 @@ def _user_can_access_contract(username, contract_id):
         (contract_id, username)
     ).fetchone()
     return assigned is not None
+
+
+def _user_can_access_rd(username, rd_id):
+    """判断普通用户是否可填报某自研项目的工时。
+
+    管理员（workhour.manage）恒为 True；普通用户需为项目负责人或项目成员。
+    """
+    if user_can(username, 'workhour.manage'):
+        return True
+    db = get_db()
+    row = db.execute(
+        "SELECT owner_id FROM rd_projects WHERE id=?", (rd_id,)
+    ).fetchone()
+    if not row:
+        return False
+    if row['owner_id'] == username:
+        return True
+    member = db.execute(
+        "SELECT id FROM rd_project_members WHERE project_id=? AND username=? LIMIT 1",
+        (rd_id, username)
+    ).fetchone()
+    return member is not None
 
 
 def _row_to_dict(row):
@@ -198,6 +225,30 @@ def list_projects():
     ctr_rows = [dict(r) for r in db.execute(ctr_sql, ctr_params).fetchall()]
 
     rows = biz_rows + ctr_rows
+
+    # ---- 自研项目部分 ----
+    rd_sql = """
+        SELECT DISTINCT rp.id AS ref_id, rp.name AS name, rp.status AS stage,
+               rp.owner_name AS customer_name, 'rd' AS ref_type
+        FROM rd_projects rp
+    """
+    rd_params = []
+    if not is_admin:
+        rd_sql += """
+            LEFT JOIN rd_project_members rpm
+              ON rpm.project_id = rp.id AND rpm.username = ?
+        """
+        rd_params.append(payload['username'])
+    rd_sql += " WHERE rp.status IN ('筹备中', '进行中')"
+    if not is_admin:
+        rd_sql += " AND (rpm.id IS NOT NULL OR rp.owner_id = ?)"
+        rd_params.append(payload['username'])
+    if kw:
+        rd_sql += " AND rp.name LIKE ?"
+        rd_params.append(kw)
+    rd_sql += " ORDER BY rp.id DESC LIMIT 100"
+    rows += [dict(r) for r in db.execute(rd_sql, rd_params).fetchall()]
+
     return jsonify({'code': 200, 'message': 'success', 'data': rows})
 
 
@@ -219,11 +270,12 @@ def list_mine():
                wh.work_date, wh.hours, wh.overtime_hours,
                wh.description, wh.status, wh.submit_time, wh.approve_time,
                wh.approver_id, wh.reject_reason,
-               COALESCE(b.title, c.contract_name) AS project_name,
+               COALESCE(b.title, c.contract_name, rp.name) AS project_name,
                ua.name AS approver_name
         FROM work_hours wh
         LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
         LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+        LEFT JOIN rd_projects rp ON wh.project_type='rd' AND wh.project_id = rp.id
         LEFT JOIN users ua ON wh.approver_id = ua.username
         WHERE wh.user_id = ?
     """
@@ -276,11 +328,12 @@ def list_all():
                wh.user_id, wh.work_date, wh.hours,
                wh.overtime_hours, wh.description, wh.status, wh.submit_time,
                wh.approve_time, wh.approver_id, wh.reject_reason,
-               COALESCE(b.title, c.contract_name) AS project_name,
+               COALESCE(b.title, c.contract_name, rp.name) AS project_name,
                uu.name AS user_name, ua.name AS approver_name
         FROM work_hours wh
         LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
         LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+        LEFT JOIN rd_projects rp ON wh.project_type='rd' AND wh.project_id = rp.id
         LEFT JOIN users uu ON wh.user_id = uu.username
         LEFT JOIN users ua ON wh.approver_id = ua.username
         WHERE 1=1
@@ -381,7 +434,7 @@ def submit():
         ref_id = int(ref_id)
     except (TypeError, ValueError):
         return jsonify({'code': 400, 'message': '请选择项目', 'data': None})
-    if ref_type not in ('business', 'contract'):
+    if ref_type not in ('business', 'contract', 'rd'):
         return jsonify({'code': 400, 'message': '项目类型错误', 'data': None})
     if not work_date:
         return jsonify({'code': 400, 'message': '请选择工作日期', 'data': None})
@@ -412,6 +465,17 @@ def submit():
         if not _user_can_access_contract(payload['username'], ref_id):
             return jsonify({'code': 403, 'message': '您未被分配到该合同，无法填报工时', 'data': None})
         business_id = ctr['b_id'] or None
+        project_id = ref_id
+    elif ref_type == 'rd':
+        rd = db.execute(
+            "SELECT id, name FROM rd_projects WHERE id=? AND status IN ('筹备中','进行中')",
+            (ref_id,)
+        ).fetchone()
+        if not rd:
+            return jsonify({'code': 400, 'message': '所选自研项目不存在或已结项', 'data': None})
+        if not _user_can_access_rd(payload['username'], ref_id):
+            return jsonify({'code': 403, 'message': '您不是该项目成员，无法填报工时', 'data': None})
+        business_id = None
         project_id = ref_id
     else:
         biz = db.execute("SELECT id FROM business WHERE id=? AND status='active'",
@@ -466,7 +530,7 @@ def update(wh_id):
         ref_id = int(ref_id)
     except (TypeError, ValueError):
         return jsonify({'code': 400, 'message': '请选择项目', 'data': None})
-    if ref_type not in ('business', 'contract'):
+    if ref_type not in ('business', 'contract', 'rd'):
         return jsonify({'code': 400, 'message': '项目类型错误', 'data': None})
     if not work_date:
         return jsonify({'code': 400, 'message': '请选择工作日期', 'data': None})
@@ -495,6 +559,17 @@ def update(wh_id):
         if not _user_can_access_contract(payload['username'], ref_id):
             return jsonify({'code': 403, 'message': '您未被分配到该合同，无法填报工时', 'data': None})
         business_id = ctr['b_id'] or None
+        project_id = ref_id
+    elif ref_type == 'rd':
+        rd = db.execute(
+            "SELECT id FROM rd_projects WHERE id=? AND status IN ('筹备中','进行中')",
+            (ref_id,)
+        ).fetchone()
+        if not rd:
+            return jsonify({'code': 400, 'message': '所选自研项目不存在或已结项', 'data': None})
+        if not _user_can_access_rd(payload['username'], ref_id):
+            return jsonify({'code': 403, 'message': '您不是该项目成员，无法填报工时', 'data': None})
+        business_id = None
         project_id = ref_id
     else:
         biz = db.execute("SELECT id FROM business WHERE id=? AND status='active'",
@@ -564,11 +639,12 @@ def list_pending():
             SELECT wh.id, wh.business_id, wh.project_type, wh.project_id,
                    wh.user_id, wh.work_date, wh.hours,
                    wh.overtime_hours, wh.description, wh.status, wh.submit_time,
-                   COALESCE(b.title, c.contract_name) AS project_name,
+                   COALESCE(b.title, c.contract_name, rp.name) AS project_name,
                    uu.name AS user_name
             FROM work_hours wh
             LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
             LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+        LEFT JOIN rd_projects rp ON wh.project_type='rd' AND wh.project_id = rp.id
             LEFT JOIN users uu ON wh.user_id = uu.username
             WHERE wh.status = 'pending'
             ORDER BY wh.submit_time ASC
@@ -579,18 +655,20 @@ def list_pending():
             SELECT wh.id, wh.business_id, wh.project_type, wh.project_id,
                    wh.user_id, wh.work_date, wh.hours,
                    wh.overtime_hours, wh.description, wh.status, wh.submit_time,
-                   COALESCE(b.title, c.contract_name) AS project_name,
+                   COALESCE(b.title, c.contract_name, rp.name) AS project_name,
                    uu.name AS user_name
             FROM work_hours wh
             LEFT JOIN business b ON wh.project_type='business' AND wh.project_id = b.id
             LEFT JOIN contracts c ON wh.project_type='contract' AND wh.project_id = c.id
+        LEFT JOIN rd_projects rp ON wh.project_type='rd' AND wh.project_id = rp.id
             LEFT JOIN users uu ON wh.user_id = uu.username
             WHERE wh.status = 'pending' AND (
                 (wh.project_type='business' AND (b.project_manager=? OR b.owner_id=?))
                 OR (wh.project_type='contract' AND c.owner_id=?)
+                OR (wh.project_type='rd' AND rp.owner_id=?)
             )
             ORDER BY wh.submit_time ASC
-        """, (username, username, username)).fetchall()
+        """, (username, username, username, username)).fetchall()
     data = [_row_to_dict(r) for r in rows]
     return jsonify({'code': 200, 'message': 'success',
                     'data': {'items': data, 'count': len(data)}})
@@ -901,7 +979,7 @@ def _can_manage_assignment(username, ref_type, ref_id):
 def list_assignments(ref_id):
     """获取某项目（商机/合同）的已分配成员列表。"""
     ref_type = request.args.get('ref_type', 'business').strip()
-    if ref_type not in ('business', 'contract'):
+    if ref_type not in ('business', 'contract', 'rd'):
         return jsonify({'code': 400, 'message': 'ref_type 错误', 'data': None})
     db = get_db()
     rows = db.execute("""
@@ -924,7 +1002,7 @@ def add_assignments(ref_id):
     body = request.get_json(silent=True) or {}
     ref_type = body.get('ref_type', 'business')
     user_ids = body.get('user_ids') or []
-    if ref_type not in ('business', 'contract'):
+    if ref_type not in ('business', 'contract', 'rd'):
         return jsonify({'code': 400, 'message': 'ref_type 错误', 'data': None})
     if not _can_manage_assignment(payload['username'], ref_type, ref_id):
         return jsonify({'code': 403, 'message': '无权分配该项目成员', 'data': None})
@@ -961,7 +1039,7 @@ def remove_assignment(ref_id, user_id):
     """移除项目中的某个成员。"""
     payload = request.current_user
     ref_type = request.args.get('ref_type', 'business').strip()
-    if ref_type not in ('business', 'contract'):
+    if ref_type not in ('business', 'contract', 'rd'):
         return jsonify({'code': 400, 'message': 'ref_type 错误', 'data': None})
     if not _can_manage_assignment(payload['username'], ref_type, ref_id):
         return jsonify({'code': 403, 'message': '无权操作', 'data': None})

@@ -229,6 +229,11 @@ const routes = [
         component: () => import('../views/MarketTasks.vue')
       },
       {
+        path: 'rd-projects',
+        name: 'RdProjects',
+        component: () => import('../views/RdProjects.vue')
+      },
+      {
         path: 'sandbox',
         name: 'Sandbox',
         component: () => import('../views/Sandbox.vue')

@@ -35,6 +35,7 @@ receivables_bp = Blueprint('receivables', __name__)
 business_cost_bp = Blueprint('business_cost', __name__)
 sandbox_bp = Blueprint('sandbox', __name__)
 notifications_bp = Blueprint('notifications', __name__)
+rd_projects_bp = Blueprint('rd_projects', __name__)
 
 # Phase1: 关键词管理 + 原始情报
 keywords_bp = Blueprint('keywords', __name__)
@@ -87,6 +88,7 @@ def register_blueprints(app):
     from .business_cost import register_routes as register_business_cost
     from .sandbox import register_routes as register_sandbox
     from .notifications import register_routes as register_notifications
+    from .rd_projects import register_routes as register_rd_projects
 
     # Phase9: LLM Gateway（/api/ai/*）
     from llm_gateway import register_routes as register_ai_gateway
@@ -132,6 +134,7 @@ def register_blueprints(app):
     register_business_cost(app)
     register_sandbox(app)
     register_notifications(app)
+    register_rd_projects(app)
     register_ai_gateway(app)
 
     from .smart_import import smart_import_bp

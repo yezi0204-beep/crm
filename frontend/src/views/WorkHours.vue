@@ -98,9 +98,9 @@
               <el-option v-for="u in reporterOptions" :key="u.username" :label="u.name" :value="u.username" />
             </el-select>
             <el-select v-model="allFilter.business_id" placeholder="项目" filterable clearable style="width:220px" @change="fetchAll">
-              <el-option v-for="p in allProjectOptions" :key="p.ref_id" :label="p.name" :value="p.ref_id">
+              <el-option v-for="p in allProjectOptions" :key="p.ref_type + '-' + p.ref_id" :label="p.name" :value="p.ref_id">
                 {{ p.name }}
-                <el-tag size="small" style="margin-left:6px">{{ p.ref_type === 'contract' ? '合同' : '商机' }}</el-tag>
+                <el-tag size="small" style="margin-left:6px">{{ refTypeLabel(p.ref_type) }}</el-tag>
               </el-option>
             </el-select>
             <el-select v-model="allFilter.status" placeholder="状态" clearable style="width:130px" @change="fetchAll">
@@ -156,11 +156,11 @@
     <el-dialog v-model="formVisible" :title="editId ? '编辑工时' : '填报工时'" width="520px">
       <el-form :model="form" :rules="rules" ref="formRef" label-width="80px">
         <el-form-item label="项目" prop="ref_id">
-          <el-select v-model="form.ref_id" filterable remote :remote-method="searchProjects"
+          <el-select v-model="form.ref_key" filterable remote :remote-method="searchProjects"
             :loading="projectLoading" placeholder="搜索并选择项目" style="width:100%" @change="onProjectChange">
-            <el-option v-for="p in projectOptions" :key="p.ref_id" :label="p.name" :value="p.ref_id">
+            <el-option v-for="p in projectOptions" :key="p.ref_type + '-' + p.ref_id" :label="p.name" :value="p.ref_type + ':' + p.ref_id">
               <span>{{ p.name }}</span>
-              <el-tag size="small" style="margin-left:6px">{{ p.ref_type === 'contract' ? '合同' : '商机' }}</el-tag>
+              <el-tag size="small" style="margin-left:6px">{{ refTypeLabel(p.ref_type) }}</el-tag>
               <span style="float:right;color:#999;font-size:12px">{{ p.customer_name || '' }}</span>
             </el-option>
           </el-select>
@@ -237,9 +237,9 @@ const allProjectOptions = ref([])
 const formVisible = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
-const form = ref({ ref_id: null, ref_type: 'business', work_date: '', hours: 8, overtime_hours: 0, description: '' })
+const form = ref({ ref_key: null, ref_id: null, ref_type: 'business', work_date: '', hours: 8, overtime_hours: 0, description: '' })
 const rules = {
-  ref_id: [{ required: true, message: '请选择项目', trigger: 'change' }],
+  ref_key: [{ required: true, message: '请选择项目', trigger: 'change' }],
   work_date: [{ required: true, message: '请选择日期', trigger: 'change' }],
   hours: [{ required: true, message: '请填写工时', trigger: 'blur' }],
   description: [{ required: true, message: '请填写工作事项', trigger: 'blur' }],
@@ -251,6 +251,8 @@ const projectLoading = ref(false)
 const rejectVisible = ref(false)
 const rejectRow = ref(null)
 const rejectReason = ref('')
+
+const refTypeLabel = (t) => ({ contract: '合同', rd: '自研' }[t] || '商机')
 
 const statusType = (s) => ({ pending: 'warning', approved: 'success', rejected: 'danger' }[s] || 'info')
 const statusText = (s) => ({ pending: '待审核', approved: '已通过', rejected: '已退回' }[s] || s)
@@ -338,6 +340,7 @@ const openForm = (row) => {
     // 编辑：回填 ref_id（优先用 project_id）和 ref_type
     const refId = row.project_id || row.business_id
     form.value = {
+      ref_key: `${row.project_type || 'business'}:${refId}`,
       ref_id: refId,
       ref_type: row.project_type || 'business',
       work_date: row.date || row.work_date,
@@ -348,21 +351,24 @@ const openForm = (row) => {
     // 预加载项目选项
     searchProjects('')
   } else {
-    form.value = { ref_id: null, ref_type: 'business', work_date: '', hours: 8, overtime_hours: 0, description: '' }
+    form.value = { ref_key: null, ref_id: null, ref_type: 'business', work_date: '', hours: 8, overtime_hours: 0, description: '' }
     projectOptions.value = []
   }
   formVisible.value = true
 }
 
-// 选择项目时同步 ref_type
-const onProjectChange = (val) => {
-  const p = projectOptions.value.find(x => x.ref_id === val)
-  if (p) form.value.ref_type = p.ref_type
+// 选择项目时同步 ref_type（ref_key 形如 'rd:12'，避免不同类型 ID 冲突）
+const onProjectChange = (key) => {
+  if (!key) return
+  const [t, id] = String(key).split(':')
+  form.value.ref_type = t
+  form.value.ref_id = Number(id)
 }
 
 const submitForm = async () => {
   await formRef.value.validate()
-  const payload = { ...form.value }
+  const { ref_key, ...rest } = form.value
+  const payload = { ...rest }
   let res
   if (editId.value) {
     res = await api.put(`/work-hours/${editId.value}`, payload)

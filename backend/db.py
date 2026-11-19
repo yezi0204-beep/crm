@@ -17,8 +17,9 @@ import pymysql
 from flask import g
 
 # MySQL 连接参数（.env 注入的环境变量）
-MYSQL_HOST = os.environ.get('MYSQL_HOST', '127.0.0.1')
-MYSQL_PORT = int(os.environ.get('MYSQL_PORT', '3306'))
+# 默认指向远端实例 10.200.100.108:3308，本地库已停用（密码必须由 .env 提供）
+MYSQL_HOST = os.environ.get('MYSQL_HOST', '10.200.100.108')
+MYSQL_PORT = int(os.environ.get('MYSQL_PORT', '3308'))
 MYSQL_USER = os.environ.get('MYSQL_USER', 'crm')
 MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD', '')
 MYSQL_DATABASE = os.environ.get('MYSQL_DATABASE', 'crm')
